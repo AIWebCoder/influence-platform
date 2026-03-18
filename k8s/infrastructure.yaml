@@ -1,0 +1,115 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: influence-secrets
+type: Opaque
+stringData:
+  DATABASE_URL: "postgresql://ipuser:changeme@postgres:5432/influence_platform"
+  REDIS_URL: "redis://redis:6379"
+  JWT_SECRET: "changeme_very_long_random_string"
+  ADMIN_USERNAME: "admin"
+  ADMIN_PASSWORD: "changeme_secure_password"
+  CLAUDE_API_KEY: ""
+  DALLE_API_KEY: ""
+  SENTRY_DSN: ""
+  NEXT_PUBLIC_CONTENT_API_URL: "http://content-factory:8000"
+  NEXT_PUBLIC_DISTRIBUTION_API_URL: "http://distribution-engine:3001"
+  ENVIRONMENT: "production"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: ipuser
+            - name: POSTGRES_PASSWORD
+              value: changeme
+            - name: POSTGRES_DB
+              value: influence_platform
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  clusterIP: None
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          command: ["redis-server", "--appendonly", "yes"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+  type: ClusterIP

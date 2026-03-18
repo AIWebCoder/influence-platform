@@ -1,0 +1,219 @@
+services:
+  # ─────────────────────────────────────────
+  # INFRASTRUCTURE
+  # ─────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: ip_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ipuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ippassword}
+      POSTGRES_DB: ${POSTGRES_DB:-influence_platform}
+      POSTGRES_HOST_AUTH_METHOD: md5
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ipuser}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: ip_pgbouncer
+    restart: unless-stopped
+    ports:
+      - "6432:6432"
+    volumes:
+      - ./infra/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini
+      - ./infra/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ipuser}:${POSTGRES_PASSWORD:-ippassword}@postgres:5432/${POSTGRES_DB:-influence_platform}
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 100
+      DEFAULT_POOL_SIZE: 20
+      MIN_POOL_SIZE: 5
+      LISTEN_PORT: 6432
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 6432 -U ${POSTGRES_USER:-ipuser}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: ip_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # CONTENT FACTORY (Python FastAPI)
+  # ─────────────────────────────────────────
+  content-factory:
+    build:
+      context: ./content-factory
+      dockerfile: Dockerfile
+    container_name: ip_content_factory
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ipuser}:${POSTGRES_PASSWORD:-ippassword}@pgbouncer:6432/${POSTGRES_DB:-influence_platform}
+      REDIS_URL: redis://redis:6379
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:-changeme_in_production}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./content-factory/src:/app/src
+      - ./content-factory/alembic:/app/alembic
+      - ./content-factory/alembic.ini:/app/alembic.ini
+      - ./content-factory/tests:/app/tests
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────
+  # DISTRIBUTION ENGINE (Node.js)
+  # ─────────────────────────────────────────
+  distribution-engine:
+    build:
+      context: ./distribution-engine
+      dockerfile: Dockerfile
+    container_name: ip_distribution_engine
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ipuser}:${POSTGRES_PASSWORD:-ippassword}@pgbouncer:6432/${POSTGRES_DB:-influence_platform}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-changeme_in_production}
+      PROXY_PROVIDER: ${PROXY_PROVIDER:-brightdata}
+      PROXY_USERNAME: ${PROXY_USERNAME}
+      PROXY_PASSWORD: ${PROXY_PASSWORD}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      MAX_CONCURRENT_WORKERS: ${MAX_CONCURRENT_WORKERS:-3}
+      CAMPAIGN_CYCLE_HOURS: ${CAMPAIGN_CYCLE_HOURS:-6}
+      CHROMIUM_PATH: /usr/bin/chromium-browser
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./distribution-engine/src:/app/src
+      - ./distribution-engine/tests:/app/tests
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ─────────────────────────────────────────
+  # DASHBOARD (Next.js)
+  # ─────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: ip_dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_CONTENT_API_URL: http://localhost:8000
+      NEXT_PUBLIC_DISTRIBUTION_API_URL: http://localhost:3001
+      NEXTAUTH_SECRET: ${JWT_SECRET:-changeme_in_production}
+      NEXTAUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    depends_on:
+      content-factory:
+        condition: service_healthy
+      distribution-engine:
+        condition: service_healthy
+    volumes:
+      - ./dashboard/src:/app/src
+      - ./dashboard/public:/app/public
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────
+  # MONITORING — Phase 4 — re-enable after MVP is stable
+  # ─────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.50.0
+    container_name: ip_prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=30d'
+    depends_on:
+      - content-factory
+      - distribution-engine
+
+  grafana:
+    image: grafana/grafana:10.3.1
+    container_name: ip_grafana
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  default:
+    name: influence_platform_network

@@ -1,0 +1,64 @@
+import { Inter, Montserrat } from "next/font/google"
+import "./globals.css"
+import type { Metadata } from "next"
+import { Providers } from "@/components/Providers"
+import { cn } from "@/lib/utils"
+import { LayoutClient } from "@/components/layout/LayoutClient"
+import Script from "next/script"
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+})
+
+const montserrat = Montserrat({
+  subsets: ["latin"],
+  variable: "--font-montserrat",
+})
+
+export const metadata: Metadata = {
+  title: "Influence Platform",
+  description: "Dashboard for Content Factory & Distribution Engine",
+}
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return (
+    <html
+      lang="en"
+      className={cn(inter.variable, montserrat.variable)}
+      suppressHydrationWarning
+    >
+      <body className="flex h-screen overflow-hidden font-sans antialiased text-foreground bg-background">
+        <Script id="theme-init" strategy="beforeInteractive">
+          {`(() => {
+  const storageKey = "theme";
+  const classNameDark = "dark";
+  const root = document.documentElement;
+
+  const getStoredTheme = () => {
+    try { return localStorage.getItem(storageKey); } catch { return null; }
+  };
+
+  const prefersDark = () => {
+    try { return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches; } catch { return false; }
+  };
+
+  const stored = getStoredTheme();
+  const theme = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+  const effectiveDark = theme === "dark" || (theme === "system" && prefersDark());
+
+  if (effectiveDark) root.classList.add(classNameDark);
+  else root.classList.remove(classNameDark);
+})();`}
+        </Script>
+        <Providers>
+          <LayoutClient>{children}</LayoutClient>
+        </Providers>
+      </body>
+    </html>
+  )
+}

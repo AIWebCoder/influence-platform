@@ -1,0 +1,129 @@
+name: CI — Influence Platform
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  test-content-factory:
+    name: 🐍 Content Factory Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: content-factory
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_pass
+          POSTGRES_DB: influence_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql://test_user:test_pass@localhost:5432/influence_test
+          JWT_SECRET: ci-test-secret-key
+          ADMIN_USERNAME: admin
+          ADMIN_PASSWORD: testpass123
+          ALLOWED_ORIGINS: http://localhost:3000
+          CLAUDE_API_KEY: sk-test-fake-key
+          OPENAI_API_KEY: sk-test-fake-key
+        run: pytest tests/ -v --tb=short
+
+  test-distribution-engine:
+    name: 📦 Distribution Engine Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: distribution-engine
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: distribution-engine/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql://test_user:test_pass@localhost:5432/influence_test
+          REDIS_URL: redis://localhost:6379
+        run: npm test -- --passWithNoTests
+
+  lint-dashboard:
+    name: 🖥️ Dashboard Build Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build (type check + lint)
+        env:
+          NEXT_PUBLIC_CONTENT_API_URL: http://localhost:8000
+          NEXT_PUBLIC_DISTRIBUTION_API_URL: http://localhost:3001
+        run: npm run build
+
+  docker-build:
+    name: 🐳 Docker Build Verification
+    needs: [test-content-factory, test-distribution-engine, lint-dashboard]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Content Factory image
+        run: docker build -t influence-content-factory:ci ./content-factory
+
+      - name: Build Distribution Engine image
+        run: docker build -t influence-distribution-engine:ci ./distribution-engine
+
+      - name: Build Dashboard image
+        run: docker build -t influence-dashboard:ci ./dashboard
+        continue-on-error: true

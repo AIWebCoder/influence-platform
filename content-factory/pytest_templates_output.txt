@@ -1,0 +1,709 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-8.1.0, pluggy-1.6.0
+rootdir: /app
+plugins: asyncio-0.23.5, anyio-4.12.1
+asyncio: mode=Mode.STRICT
+collected 4 items
+
+tests/test_templates.py .F                                               [ 50%]
+tests/test_content.py EE                                                 [100%]
+
+==================================== ERRORS ====================================
+_________________ ERROR at setup of test_generate_mock_content _________________
+
+self = <AdaptedConnection <asyncpg.connection.Connection object at 0x7c16828fa7a0>>
+
+    async def _start_transaction(self):
+        if self.isolation_level == "autocommit":
+            return
+    
+        try:
+            self._transaction = self._connection.transaction(
+                isolation=self.isolation_level,
+                readonly=self.readonly,
+                deferrable=self.deferrable,
+            )
+>           await self._transaction.start()
+
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:840: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.11/site-packages/asyncpg/transaction.py:146: in start
+    await self._connection.execute(query)
+/usr/local/lib/python3.11/site-packages/asyncpg/connection.py:350: in execute
+    result = await self._protocol.query(query, timeout)
+asyncpg/protocol/protocol.pyx:359: in query
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   ???
+E   asyncpg.exceptions._base.InterfaceError: cannot perform operation: another operation is in progress
+
+asyncpg/protocol/protocol.pyx:744: InterfaceError
+
+The above exception was the direct cause of the following exception:
+
+self = <sqlalchemy.engine.base.Connection object at 0x7c1680c37190>
+dialect = <sqlalchemy.dialects.postgresql.asyncpg.PGDialect_asyncpg object at 0x7c168466e0d0>
+context = <sqlalchemy.dialects.postgresql.asyncpg.PGExecutionContext_asyncpg object at 0x7c1680c37650>
+statement = <sqlalchemy.dialects.postgresql.asyncpg.PGCompiler_asyncpg object at 0x7c1680c37610>
+parameters = [()]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1970: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/default.py:924: in do_execute
+    cursor.execute(statement, parameters)
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:572: in execute
+    self._adapt_connection.await_(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:127: in await_only
+    return current.driver.switch(awaitable)  # type: ignore[no-any-return]
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:192: in greenlet_spawn
+    value = await result
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:508: in _prepare_and_execute
+    await adapt_connection._start_transaction()
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:842: in _start_transaction
+    self._handle_exception(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <AdaptedConnection <asyncpg.connection.Connection object at 0x7c16828fa7a0>>
+error = InterfaceError('cannot perform operation: another operation is in progress')
+
+    def _handle_exception(self, error):
+        if self._connection.is_closed():
+            self._transaction = None
+            self._started = False
+    
+        if not isinstance(error, AsyncAdapt_asyncpg_dbapi.Error):
+            exception_mapping = self.dbapi._asyncpg_error_translate
+    
+            for super_ in type(error).__mro__:
+                if super_ in exception_mapping:
+                    translated_error = exception_mapping[super_](
+                        "%s: %s" % (type(error), error)
+                    )
+                    translated_error.pgcode = translated_error.sqlstate = (
+                        getattr(error, "sqlstate", None)
+                    )
+>                   raise translated_error from error
+E                   sqlalchemy.dialects.postgresql.asyncpg.AsyncAdapt_asyncpg_dbapi.InterfaceError: <class 'asyncpg.exceptions._base.InterfaceError'>: cannot perform operation: another operation is in progress
+
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:789: InterfaceError
+
+The above exception was the direct cause of the following exception:
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def setup_db():
+        # Setup DB: just clean data before the test, assuming schema exists from init.sql
+        async with engine.begin() as conn:
+            for table in reversed(Base.metadata.sorted_tables):
+>               await conn.execute(text(f"TRUNCATE TABLE {table.name} CASCADE;"))
+
+tests/test_content.py:16: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.11/site-packages/sqlalchemy/ext/asyncio/engine.py:654: in execute
+    result = await greenlet_spawn(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:197: in greenlet_spawn
+    result = context.throw(*sys.exc_info())
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1421: in execute
+    return meth(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/sql/elements.py:514: in _execute_on_connection
+    return connection._execute_clauseelement(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1643: in _execute_clauseelement
+    ret = self._execute_context(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1849: in _execute_context
+    return self._exec_single_context(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1989: in _exec_single_context
+    self._handle_dbapi_exception(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:2356: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1970: in _exec_single_context
+    self.dialect.do_execute(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/default.py:924: in do_execute
+    cursor.execute(statement, parameters)
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:572: in execute
+    self._adapt_connection.await_(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:127: in await_only
+    return current.driver.switch(awaitable)  # type: ignore[no-any-return]
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:192: in greenlet_spawn
+    value = await result
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:508: in _prepare_and_execute
+    await adapt_connection._start_transaction()
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:842: in _start_transaction
+    self._handle_exception(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <AdaptedConnection <asyncpg.connection.Connection object at 0x7c16828fa7a0>>
+error = InterfaceError('cannot perform operation: another operation is in progress')
+
+    def _handle_exception(self, error):
+        if self._connection.is_closed():
+            self._transaction = None
+            self._started = False
+    
+        if not isinstance(error, AsyncAdapt_asyncpg_dbapi.Error):
+            exception_mapping = self.dbapi._asyncpg_error_translate
+    
+            for super_ in type(error).__mro__:
+                if super_ in exception_mapping:
+                    translated_error = exception_mapping[super_](
+                        "%s: %s" % (type(error), error)
+                    )
+                    translated_error.pgcode = translated_error.sqlstate = (
+                        getattr(error, "sqlstate", None)
+                    )
+>                   raise translated_error from error
+E                   sqlalchemy.exc.InterfaceError: (sqlalchemy.dialects.postgresql.asyncpg.InterfaceError) <class 'asyncpg.exceptions._base.InterfaceError'>: cannot perform operation: another operation is in progress
+E                   [SQL: TRUNCATE TABLE content_packets CASCADE;]
+E                   (Background on this error at: https://sqlalche.me/e/20/rvf5)
+
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:789: InterfaceError
+---------------------------- Captured stdout setup -----------------------------
+2026-03-11 10:43:19,708 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-11 10:43:19,708 INFO sqlalchemy.engine.Engine TRUNCATE TABLE content_packets CASCADE;
+2026-03-11 10:43:19,708 INFO sqlalchemy.engine.Engine [generated in 0.00010s] ()
+2026-03-11 10:43:19,709 INFO sqlalchemy.engine.Engine ROLLBACK
+------------------------------ Captured log setup ------------------------------
+INFO     sqlalchemy.engine.Engine:base.py:2702 BEGIN (implicit)
+INFO     sqlalchemy.engine.Engine:base.py:1849 TRUNCATE TABLE content_packets CASCADE;
+INFO     sqlalchemy.engine.Engine:base.py:1849 [generated in 0.00010s] ()
+INFO     sqlalchemy.engine.Engine:base.py:2705 ROLLBACK
+_____________________ ERROR at setup of test_list_contents _____________________
+
+self = <AdaptedConnection <asyncpg.connection.Connection object at 0x7c16828fa7a0>>
+
+    async def _start_transaction(self):
+        if self.isolation_level == "autocommit":
+            return
+    
+        try:
+            self._transaction = self._connection.transaction(
+                isolation=self.isolation_level,
+                readonly=self.readonly,
+                deferrable=self.deferrable,
+            )
+>           await self._transaction.start()
+
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:840: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.11/site-packages/asyncpg/transaction.py:146: in start
+    await self._connection.execute(query)
+/usr/local/lib/python3.11/site-packages/asyncpg/connection.py:350: in execute
+    result = await self._protocol.query(query, timeout)
+asyncpg/protocol/protocol.pyx:359: in query
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   ???
+E   asyncpg.exceptions._base.InterfaceError: cannot perform operation: another operation is in progress
+
+asyncpg/protocol/protocol.pyx:744: InterfaceError
+
+The above exception was the direct cause of the following exception:
+
+self = <sqlalchemy.engine.base.Connection object at 0x7c1681fcda10>
+dialect = <sqlalchemy.dialects.postgresql.asyncpg.PGDialect_asyncpg object at 0x7c168466e0d0>
+context = <sqlalchemy.dialects.postgresql.asyncpg.PGExecutionContext_asyncpg object at 0x7c1681fcc590>
+statement = <sqlalchemy.dialects.postgresql.asyncpg.PGCompiler_asyncpg object at 0x7c1680c37610>
+parameters = [()]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1970: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/default.py:924: in do_execute
+    cursor.execute(statement, parameters)
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:572: in execute
+    self._adapt_connection.await_(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:127: in await_only
+    return current.driver.switch(awaitable)  # type: ignore[no-any-return]
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:192: in greenlet_spawn
+    value = await result
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:508: in _prepare_and_execute
+    await adapt_connection._start_transaction()
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:842: in _start_transaction
+    self._handle_exception(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <AdaptedConnection <asyncpg.connection.Connection object at 0x7c16828fa7a0>>
+error = InterfaceError('cannot perform operation: another operation is in progress')
+
+    def _handle_exception(self, error):
+        if self._connection.is_closed():
+            self._transaction = None
+            self._started = False
+    
+        if not isinstance(error, AsyncAdapt_asyncpg_dbapi.Error):
+            exception_mapping = self.dbapi._asyncpg_error_translate
+    
+            for super_ in type(error).__mro__:
+                if super_ in exception_mapping:
+                    translated_error = exception_mapping[super_](
+                        "%s: %s" % (type(error), error)
+                    )
+                    translated_error.pgcode = translated_error.sqlstate = (
+                        getattr(error, "sqlstate", None)
+                    )
+>                   raise translated_error from error
+E                   sqlalchemy.dialects.postgresql.asyncpg.AsyncAdapt_asyncpg_dbapi.InterfaceError: <class 'asyncpg.exceptions._base.InterfaceError'>: cannot perform operation: another operation is in progress
+
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:789: InterfaceError
+
+The above exception was the direct cause of the following exception:
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def setup_db():
+        # Setup DB: just clean data before the test, assuming schema exists from init.sql
+        async with engine.begin() as conn:
+            for table in reversed(Base.metadata.sorted_tables):
+>               await conn.execute(text(f"TRUNCATE TABLE {table.name} CASCADE;"))
+
+tests/test_content.py:16: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.11/site-packages/sqlalchemy/ext/asyncio/engine.py:654: in execute
+    result = await greenlet_spawn(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:197: in greenlet_spawn
+    result = context.throw(*sys.exc_info())
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1421: in execute
+    return meth(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/sql/elements.py:514: in _execute_on_connection
+    return connection._execute_clauseelement(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1643: in _execute_clauseelement
+    ret = self._execute_context(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1849: in _execute_context
+    return self._exec_single_context(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1989: in _exec_single_context
+    self._handle_dbapi_exception(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:2356: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1970: in _exec_single_context
+    self.dialect.do_execute(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/default.py:924: in do_execute
+    cursor.execute(statement, parameters)
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:572: in execute
+    self._adapt_connection.await_(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:127: in await_only
+    return current.driver.switch(awaitable)  # type: ignore[no-any-return]
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:192: in greenlet_spawn
+    value = await result
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:508: in _prepare_and_execute
+    await adapt_connection._start_transaction()
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:842: in _start_transaction
+    self._handle_exception(error)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <AdaptedConnection <asyncpg.connection.Connection object at 0x7c16828fa7a0>>
+error = InterfaceError('cannot perform operation: another operation is in progress')
+
+    def _handle_exception(self, error):
+        if self._connection.is_closed():
+            self._transaction = None
+            self._started = False
+    
+        if not isinstance(error, AsyncAdapt_asyncpg_dbapi.Error):
+            exception_mapping = self.dbapi._asyncpg_error_translate
+    
+            for super_ in type(error).__mro__:
+                if super_ in exception_mapping:
+                    translated_error = exception_mapping[super_](
+                        "%s: %s" % (type(error), error)
+                    )
+                    translated_error.pgcode = translated_error.sqlstate = (
+                        getattr(error, "sqlstate", None)
+                    )
+>                   raise translated_error from error
+E                   sqlalchemy.exc.InterfaceError: (sqlalchemy.dialects.postgresql.asyncpg.InterfaceError) <class 'asyncpg.exceptions._base.InterfaceError'>: cannot perform operation: another operation is in progress
+E                   [SQL: TRUNCATE TABLE content_packets CASCADE;]
+E                   (Background on this error at: https://sqlalche.me/e/20/rvf5)
+
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:789: InterfaceError
+---------------------------- Captured stdout setup -----------------------------
+2026-03-11 10:43:19,941 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-11 10:43:19,942 INFO sqlalchemy.engine.Engine TRUNCATE TABLE content_packets CASCADE;
+2026-03-11 10:43:19,942 INFO sqlalchemy.engine.Engine [cached since 0.2334s ago] ()
+2026-03-11 10:43:19,942 INFO sqlalchemy.engine.Engine ROLLBACK
+------------------------------ Captured log setup ------------------------------
+INFO     sqlalchemy.engine.Engine:base.py:2702 BEGIN (implicit)
+INFO     sqlalchemy.engine.Engine:base.py:1849 TRUNCATE TABLE content_packets CASCADE;
+INFO     sqlalchemy.engine.Engine:base.py:1849 [cached since 0.2334s ago] ()
+INFO     sqlalchemy.engine.Engine:base.py:2705 ROLLBACK
+=================================== FAILURES ===================================
+______________________________ test_get_templates ______________________________
+
+ac = <httpx.AsyncClient object at 0x7c1682a3c810>
+
+    @pytest.mark.asyncio
+    async def test_get_templates(ac: AsyncClient):
+>       response = await ac.get("/templates/")
+
+tests/test_templates.py:30: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.11/site-packages/httpx/_client.py:1801: in get
+    return await self.request(
+/usr/local/lib/python3.11/site-packages/httpx/_client.py:1574: in request
+    return await self.send(request, auth=auth, follow_redirects=follow_redirects)
+/usr/local/lib/python3.11/site-packages/httpx/_client.py:1661: in send
+    response = await self._send_handling_auth(
+/usr/local/lib/python3.11/site-packages/httpx/_client.py:1689: in _send_handling_auth
+    response = await self._send_handling_redirects(
+/usr/local/lib/python3.11/site-packages/httpx/_client.py:1726: in _send_handling_redirects
+    response = await self._send_single_request(request)
+/usr/local/lib/python3.11/site-packages/httpx/_client.py:1763: in _send_single_request
+    response = await transport.handle_async_request(request)
+/usr/local/lib/python3.11/site-packages/httpx/_transports/asgi.py:164: in handle_async_request
+    await self.app(scope, receive, send)
+/usr/local/lib/python3.11/site-packages/fastapi/applications.py:1054: in __call__
+    await super().__call__(scope, receive, send)
+/usr/local/lib/python3.11/site-packages/starlette/applications.py:123: in __call__
+    await self.middleware_stack(scope, receive, send)
+/usr/local/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+/usr/local/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+/usr/local/lib/python3.11/site-packages/starlette/middleware/cors.py:83: in __call__
+    await self.app(scope, receive, send)
+/usr/local/lib/python3.11/site-packages/starlette/middleware/exceptions.py:62: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+/usr/local/lib/python3.11/site-packages/starlette/_exception_handler.py:64: in wrapped_app
+    raise exc
+/usr/local/lib/python3.11/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    await app(scope, receive, sender)
+/usr/local/lib/python3.11/site-packages/starlette/routing.py:758: in __call__
+    await self.middleware_stack(scope, receive, send)
+/usr/local/lib/python3.11/site-packages/starlette/routing.py:778: in app
+    await route.handle(scope, receive, send)
+/usr/local/lib/python3.11/site-packages/starlette/routing.py:299: in handle
+    await self.app(scope, receive, send)
+/usr/local/lib/python3.11/site-packages/starlette/routing.py:79: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+/usr/local/lib/python3.11/site-packages/starlette/_exception_handler.py:64: in wrapped_app
+    raise exc
+/usr/local/lib/python3.11/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    await app(scope, receive, sender)
+/usr/local/lib/python3.11/site-packages/starlette/routing.py:74: in app
+    response = await func(request)
+/usr/local/lib/python3.11/site-packages/fastapi/routing.py:278: in app
+    raw_response = await run_endpoint_function(
+/usr/local/lib/python3.11/site-packages/fastapi/routing.py:191: in run_endpoint_function
+    return await dependant.call(**values)
+src/api/templates.py:37: in list_templates
+    return await svc.get_all(skip=skip, limit=limit)
+src/services/template_service.py:13: in get_all
+    result = await self.db.execute(query)
+/usr/local/lib/python3.11/site-packages/sqlalchemy/ext/asyncio/session.py:452: in execute
+    result = await greenlet_spawn(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:197: in greenlet_spawn
+    result = context.throw(*sys.exc_info())
+/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/session.py:2306: in execute
+    return self._execute_internal(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/session.py:2191: in _execute_internal
+    result: Result[Any] = compile_state_cls.orm_execute_statement(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/context.py:293: in orm_execute_statement
+    result = conn.execute(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1421: in execute
+    return meth(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/sql/elements.py:514: in _execute_on_connection
+    return connection._execute_clauseelement(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1643: in _execute_clauseelement
+    ret = self._execute_context(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1849: in _execute_context
+    return self._exec_single_context(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1989: in _exec_single_context
+    self._handle_dbapi_exception(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:2359: in _handle_dbapi_exception
+    raise exc_info[1].with_traceback(exc_info[2])
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1970: in _exec_single_context
+    self.dialect.do_execute(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/default.py:924: in do_execute
+    cursor.execute(statement, parameters)
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:572: in execute
+    self._adapt_connection.await_(
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:127: in await_only
+    return current.driver.switch(awaitable)  # type: ignore[no-any-return]
+/usr/local/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:192: in greenlet_spawn
+    value = await result
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:508: in _prepare_and_execute
+    await adapt_connection._start_transaction()
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:842: in _start_transaction
+    self._handle_exception(error)
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:791: in _handle_exception
+    raise error
+/usr/local/lib/python3.11/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py:840: in _start_transaction
+    await self._transaction.start()
+/usr/local/lib/python3.11/site-packages/asyncpg/transaction.py:146: in start
+    await self._connection.execute(query)
+/usr/local/lib/python3.11/site-packages/asyncpg/connection.py:350: in execute
+    result = await self._protocol.query(query, timeout)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+>   ???
+E   RuntimeError: Task <Task pending name='Task-6' coro=<test_get_templates() running at /app/tests/test_templates.py:30> cb=[_run_until_complete_cb() at /usr/local/lib/python3.11/asyncio/base_events.py:181]> got Future <Future pending cb=[Protocol._on_waiter_completed()]> attached to a different loop
+
+asyncpg/protocol/protocol.pyx:374: RuntimeError
+----------------------------- Captured stdout call -----------------------------
+2026-03-11 10:43:19,162 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-11 10:43:19,162 INFO sqlalchemy.engine.Engine SELECT templates.id, templates.niche_id, templates.name, templates.caption_template, templates.visual_prompt, templates.hashtag_groups, templates.is_active, templates.created_at, templates.updated_at 
+FROM templates 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-11 10:43:19,162 INFO sqlalchemy.engine.Engine [generated in 0.00012s] (100, 0)
+2026-03-11 10:43:19,163 INFO sqlalchemy.engine.Engine ROLLBACK
+------------------------------ Captured log call -------------------------------
+INFO     sqlalchemy.engine.Engine:base.py:2702 BEGIN (implicit)
+INFO     sqlalchemy.engine.Engine:base.py:1849 SELECT templates.id, templates.niche_id, templates.name, templates.caption_template, templates.visual_prompt, templates.hashtag_groups, templates.is_active, templates.created_at, templates.updated_at 
+FROM templates 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+INFO     sqlalchemy.engine.Engine:base.py:1849 [generated in 0.00012s] (100, 0)
+INFO     sqlalchemy.engine.Engine:base.py:2705 ROLLBACK
+=============================== warnings summary ===============================
+../usr/local/lib/python3.11/site-packages/pydantic/_internal/_config.py:272
+  /usr/local/lib/python3.11/site-packages/pydantic/_internal/_config.py:272: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.6/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+../usr/local/lib/python3.11/site-packages/passlib/utils/__init__.py:854
+  /usr/local/lib/python3.11/site-packages/passlib/utils/__init__.py:854: DeprecationWarning: 'crypt' is deprecated and slated for removal in Python 3.13
+    from crypt import crypt as _crypt
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_templates.py::test_get_templates - RuntimeError: Task <Task...
+ERROR tests/test_content.py::test_generate_mock_content - sqlalchemy.exc.Inte...
+ERROR tests/test_content.py::test_list_contents - sqlalchemy.exc.InterfaceErr...
+============== 1 failed, 1 passed, 2 warnings, 2 errors in 2.25s ===============

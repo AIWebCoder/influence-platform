@@ -1,0 +1,190 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-8.1.0, pluggy-1.6.0
+rootdir: /app
+plugins: asyncio-0.23.5, anyio-4.12.1
+asyncio: mode=Mode.STRICT
+collected 2 items
+
+tests/test_content.py F.                                                 [100%]
+
+=================================== FAILURES ===================================
+__________________________ test_generate_mock_content __________________________
+
+    @pytest.mark.asyncio
+    async def test_generate_mock_content():
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.post(
+                "/content/generate",
+                json={"niche": "fitness", "target_accounts": ["acc1"]}
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["niche"] == "fitness"
+>       assert data["status"] == "queued"
+E       AssertionError: assert 'pending' == 'queued'
+E         
+E         - queued
+E         + pending
+
+tests/test_content.py:58: AssertionError
+---------------------------- Captured stdout setup -----------------------------
+2026-03-11 11:18:39,750 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-03-11 11:18:39,750 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-11 11:18:39,751 INFO sqlalchemy.engine.Engine select current_schema()
+2026-03-11 11:18:39,751 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-11 11:18:39,752 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-03-11 11:18:39,752 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-03-11 11:18:39,753 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-11 11:18:39,754 INFO sqlalchemy.engine.Engine TRUNCATE TABLE content_packets CASCADE;
+2026-03-11 11:18:39,754 INFO sqlalchemy.engine.Engine [generated in 0.00011s] ()
+2026-03-11 11:18:39,778 INFO sqlalchemy.engine.Engine TRUNCATE TABLE templates CASCADE;
+2026-03-11 11:18:39,778 INFO sqlalchemy.engine.Engine [generated in 0.00017s] ()
+2026-03-11 11:18:39,808 INFO sqlalchemy.engine.Engine TRUNCATE TABLE niches CASCADE;
+2026-03-11 11:18:39,808 INFO sqlalchemy.engine.Engine [generated in 0.00016s] ()
+2026-03-11 11:18:39,869 INFO sqlalchemy.engine.Engine COMMIT
+------------------------------ Captured log setup ------------------------------
+INFO     sqlalchemy.engine.Engine:base.py:1849 select pg_catalog.version()
+INFO     sqlalchemy.engine.Engine:base.py:1849 [raw sql] ()
+INFO     sqlalchemy.engine.Engine:base.py:1849 select current_schema()
+INFO     sqlalchemy.engine.Engine:base.py:1849 [raw sql] ()
+INFO     sqlalchemy.engine.Engine:base.py:1849 show standard_conforming_strings
+INFO     sqlalchemy.engine.Engine:base.py:1849 [raw sql] ()
+INFO     sqlalchemy.engine.Engine:base.py:2702 BEGIN (implicit)
+INFO     sqlalchemy.engine.Engine:base.py:1849 TRUNCATE TABLE content_packets CASCADE;
+INFO     sqlalchemy.engine.Engine:base.py:1849 [generated in 0.00011s] ()
+INFO     sqlalchemy.engine.Engine:base.py:1849 TRUNCATE TABLE templates CASCADE;
+INFO     sqlalchemy.engine.Engine:base.py:1849 [generated in 0.00017s] ()
+INFO     sqlalchemy.engine.Engine:base.py:1849 TRUNCATE TABLE niches CASCADE;
+INFO     sqlalchemy.engine.Engine:base.py:1849 [generated in 0.00016s] ()
+INFO     sqlalchemy.engine.Engine:base.py:2708 COMMIT
+----------------------------- Captured stdout call -----------------------------
+2026-03-11 11:18:39,884 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-11 11:18:39,887 INFO sqlalchemy.engine.Engine INSERT INTO content_packets (id, type, caption, visual_url, visual_urls, hashtags, target_accounts, scheduled_at, niche, status, metadata, template_id, created_at, updated_at) VALUES ($1::UUID, $2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::JSONB, $6::JSONB, $7::JSONB, $8::TIMESTAMP WITH TIME ZONE, $9::VARCHAR, $10::VARCHAR, $11::JSONB, $12::UUID, $13::TIMESTAMP WITH TIME ZONE, $14::TIMESTAMP WITH TIME ZONE)
+2026-03-11 11:18:39,887 INFO sqlalchemy.engine.Engine [generated in 0.00024s] ('3d9773f3-b2b0-4df7-bf56-0a83376344a2', 'post', 'Generation in progress...', None, '[]', '[]', '["acc1"]', None, 'fitness', 'pending', '{"template_id": null, "campaign_id": null, "variant": "original"}', None, datetime.datetime(2026, 3, 11, 11, 18, 39, 886967), datetime.datetime(2026, 3, 11, 11, 18, 39, 886969))
+2026-03-11 11:18:39,891 INFO sqlalchemy.engine.Engine SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+WHERE content_packets.id = $1::UUID
+2026-03-11 11:18:39,891 INFO sqlalchemy.engine.Engine [generated in 0.00018s] ('3d9773f3-b2b0-4df7-bf56-0a83376344a2',)
+2026-03-11 11:18:39,893 INFO sqlalchemy.engine.Engine COMMIT
+2026-03-11 11:18:39,894 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-11 11:18:39,895 INFO sqlalchemy.engine.Engine SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+WHERE content_packets.id = $1::UUID
+2026-03-11 11:18:39,895 INFO sqlalchemy.engine.Engine [generated in 0.00011s] ('3d9773f3-b2b0-4df7-bf56-0a83376344a2',)
+2026-03-11 11:18:39,912 INFO sqlalchemy.engine.Engine SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-11 11:18:39,913 INFO sqlalchemy.engine.Engine [generated in 0.00018s] (50, 0)
+2026-03-11 11:18:39,916 INFO sqlalchemy.engine.Engine UPDATE content_packets SET caption=$1::VARCHAR, visual_url=$2::VARCHAR, hashtags=$3::JSONB, status=$4::VARCHAR, updated_at=$5::TIMESTAMP WITH TIME ZONE WHERE content_packets.id = $6::UUID
+2026-03-11 11:18:39,916 INFO sqlalchemy.engine.Engine [generated in 0.00029s] ('Mocked AI caption', 'https://mocked.openai.url/image.jpg', '["#mockai"]', 'queued', datetime.datetime(2026, 3, 11, 11, 18, 39, 916227), UUID('3d9773f3-b2b0-4df7-bf56-0a83376344a2'))
+2026-03-11 11:18:39,918 INFO sqlalchemy.engine.Engine COMMIT
+2026-03-11 11:18:39,920 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-11 11:18:39,920 INFO sqlalchemy.engine.Engine SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+WHERE content_packets.id = $1::UUID
+2026-03-11 11:18:39,920 INFO sqlalchemy.engine.Engine [cached since 0.02942s ago] (UUID('3d9773f3-b2b0-4df7-bf56-0a83376344a2'),)
+2026-03-11 11:18:39,922 INFO sqlalchemy.engine.Engine SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-11 11:18:39,922 INFO sqlalchemy.engine.Engine [cached since 0.009406s ago] (50, 0)
+2026-03-11 11:18:39,923 INFO sqlalchemy.engine.Engine SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+2026-03-11 11:18:39,923 INFO sqlalchemy.engine.Engine [cached since 0.01036s ago] (50, 0)
+2026-03-11 11:18:39,924 INFO sqlalchemy.engine.Engine COMMIT
+2026-03-11 11:18:39,924 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-11 11:18:39,924 INFO sqlalchemy.engine.Engine SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+WHERE content_packets.id = $1::UUID
+2026-03-11 11:18:39,924 INFO sqlalchemy.engine.Engine [cached since 0.03346s ago] (UUID('3d9773f3-b2b0-4df7-bf56-0a83376344a2'),)
+2026-03-11 11:18:39,926 INFO sqlalchemy.engine.Engine UPDATE content_packets SET status=$1::VARCHAR, updated_at=$2::TIMESTAMP WITH TIME ZONE WHERE content_packets.id = $3::UUID
+2026-03-11 11:18:39,926 INFO sqlalchemy.engine.Engine [generated in 0.00013s] ('failed', datetime.datetime(2026, 3, 11, 11, 18, 39, 926027), UUID('3d9773f3-b2b0-4df7-bf56-0a83376344a2'))
+2026-03-11 11:18:39,926 INFO sqlalchemy.engine.Engine COMMIT
+------------------------------ Captured log call -------------------------------
+INFO     sqlalchemy.engine.Engine:base.py:2702 BEGIN (implicit)
+INFO     sqlalchemy.engine.Engine:base.py:1849 INSERT INTO content_packets (id, type, caption, visual_url, visual_urls, hashtags, target_accounts, scheduled_at, niche, status, metadata, template_id, created_at, updated_at) VALUES ($1::UUID, $2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::JSONB, $6::JSONB, $7::JSONB, $8::TIMESTAMP WITH TIME ZONE, $9::VARCHAR, $10::VARCHAR, $11::JSONB, $12::UUID, $13::TIMESTAMP WITH TIME ZONE, $14::TIMESTAMP WITH TIME ZONE)
+INFO     sqlalchemy.engine.Engine:base.py:1849 [generated in 0.00024s] ('3d9773f3-b2b0-4df7-bf56-0a83376344a2', 'post', 'Generation in progress...', None, '[]', '[]', '["acc1"]', None, 'fitness', 'pending', '{"template_id": null, "campaign_id": null, "variant": "original"}', None, datetime.datetime(2026, 3, 11, 11, 18, 39, 886967), datetime.datetime(2026, 3, 11, 11, 18, 39, 886969))
+INFO     sqlalchemy.engine.Engine:base.py:1849 SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+WHERE content_packets.id = $1::UUID
+INFO     sqlalchemy.engine.Engine:base.py:1849 [generated in 0.00018s] ('3d9773f3-b2b0-4df7-bf56-0a83376344a2',)
+INFO     sqlalchemy.engine.Engine:base.py:2708 COMMIT
+INFO     sqlalchemy.engine.Engine:base.py:2702 BEGIN (implicit)
+INFO     sqlalchemy.engine.Engine:base.py:1849 SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+WHERE content_packets.id = $1::UUID
+INFO     sqlalchemy.engine.Engine:base.py:1849 [generated in 0.00011s] ('3d9773f3-b2b0-4df7-bf56-0a83376344a2',)
+INFO     sqlalchemy.engine.Engine:base.py:1849 SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+INFO     sqlalchemy.engine.Engine:base.py:1849 [generated in 0.00018s] (50, 0)
+INFO     sqlalchemy.engine.Engine:base.py:1849 UPDATE content_packets SET caption=$1::VARCHAR, visual_url=$2::VARCHAR, hashtags=$3::JSONB, status=$4::VARCHAR, updated_at=$5::TIMESTAMP WITH TIME ZONE WHERE content_packets.id = $6::UUID
+INFO     sqlalchemy.engine.Engine:base.py:1849 [generated in 0.00029s] ('Mocked AI caption', 'https://mocked.openai.url/image.jpg', '["#mockai"]', 'queued', datetime.datetime(2026, 3, 11, 11, 18, 39, 916227), UUID('3d9773f3-b2b0-4df7-bf56-0a83376344a2'))
+INFO     sqlalchemy.engine.Engine:base.py:2708 COMMIT
+INFO     sqlalchemy.engine.Engine:base.py:2702 BEGIN (implicit)
+INFO     sqlalchemy.engine.Engine:base.py:1849 SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+WHERE content_packets.id = $1::UUID
+INFO     sqlalchemy.engine.Engine:base.py:1849 [cached since 0.02942s ago] (UUID('3d9773f3-b2b0-4df7-bf56-0a83376344a2'),)
+INFO     sqlalchemy.engine.Engine:base.py:1849 SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+INFO     sqlalchemy.engine.Engine:base.py:1849 [cached since 0.009406s ago] (50, 0)
+INFO     sqlalchemy.engine.Engine:base.py:1849 SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+ LIMIT $1::INTEGER OFFSET $2::INTEGER
+INFO     sqlalchemy.engine.Engine:base.py:1849 [cached since 0.01036s ago] (50, 0)
+INFO     sqlalchemy.engine.Engine:base.py:2708 COMMIT
+INFO     sqlalchemy.engine.Engine:base.py:2702 BEGIN (implicit)
+INFO     sqlalchemy.engine.Engine:base.py:1849 SELECT content_packets.id, content_packets.type, content_packets.caption, content_packets.visual_url, content_packets.visual_urls, content_packets.hashtags, content_packets.target_accounts, content_packets.scheduled_at, content_packets.niche, content_packets.status, content_packets.metadata, content_packets.template_id, content_packets.created_at, content_packets.updated_at 
+FROM content_packets 
+WHERE content_packets.id = $1::UUID
+INFO     sqlalchemy.engine.Engine:base.py:1849 [cached since 0.03346s ago] (UUID('3d9773f3-b2b0-4df7-bf56-0a83376344a2'),)
+INFO     sqlalchemy.engine.Engine:base.py:1849 UPDATE content_packets SET status=$1::VARCHAR, updated_at=$2::TIMESTAMP WITH TIME ZONE WHERE content_packets.id = $3::UUID
+INFO     sqlalchemy.engine.Engine:base.py:1849 [generated in 0.00013s] ('failed', datetime.datetime(2026, 3, 11, 11, 18, 39, 926027), UUID('3d9773f3-b2b0-4df7-bf56-0a83376344a2'))
+INFO     sqlalchemy.engine.Engine:base.py:2708 COMMIT
+--------------------------- Captured stdout teardown ---------------------------
+2026-03-11 11:18:40,059 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-03-11 11:18:40,059 INFO sqlalchemy.engine.Engine TRUNCATE TABLE content_packets CASCADE;
+2026-03-11 11:18:40,059 INFO sqlalchemy.engine.Engine [cached since 0.3054s ago] ()
+2026-03-11 11:18:40,096 INFO sqlalchemy.engine.Engine TRUNCATE TABLE templates CASCADE;
+2026-03-11 11:18:40,096 INFO sqlalchemy.engine.Engine [cached since 0.3186s ago] ()
+2026-03-11 11:18:40,128 INFO sqlalchemy.engine.Engine TRUNCATE TABLE niches CASCADE;
+2026-03-11 11:18:40,128 INFO sqlalchemy.engine.Engine [cached since 0.3202s ago] ()
+2026-03-11 11:18:40,249 INFO sqlalchemy.engine.Engine COMMIT
+---------------------------- Captured log teardown -----------------------------
+INFO     sqlalchemy.engine.Engine:base.py:2702 BEGIN (implicit)
+INFO     sqlalchemy.engine.Engine:base.py:1849 TRUNCATE TABLE content_packets CASCADE;
+INFO     sqlalchemy.engine.Engine:base.py:1849 [cached since 0.3054s ago] ()
+INFO     sqlalchemy.engine.Engine:base.py:1849 TRUNCATE TABLE templates CASCADE;
+INFO     sqlalchemy.engine.Engine:base.py:1849 [cached since 0.3186s ago] ()
+INFO     sqlalchemy.engine.Engine:base.py:1849 TRUNCATE TABLE niches CASCADE;
+INFO     sqlalchemy.engine.Engine:base.py:1849 [cached since 0.3202s ago] ()
+INFO     sqlalchemy.engine.Engine:base.py:2708 COMMIT
+=============================== warnings summary ===============================
+../usr/local/lib/python3.11/site-packages/pydantic/_internal/_config.py:272
+../usr/local/lib/python3.11/site-packages/pydantic/_internal/_config.py:272
+  /usr/local/lib/python3.11/site-packages/pydantic/_internal/_config.py:272: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.6/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+../usr/local/lib/python3.11/site-packages/passlib/utils/__init__.py:854
+  /usr/local/lib/python3.11/site-packages/passlib/utils/__init__.py:854: DeprecationWarning: 'crypt' is deprecated and slated for removal in Python 3.13
+    from crypt import crypt as _crypt
+
+tests/test_content.py::test_generate_mock_content
+  /usr/local/lib/python3.11/site-packages/pytest_asyncio/plugin.py:769: DeprecationWarning: The event_loop fixture provided by pytest-asyncio has been redefined in
+  /app/tests/conftest.py:4
+  Replacing the event_loop fixture with a custom implementation is deprecated
+  and will lead to errors in the future.
+  If you want to request an asyncio event loop with a scope other than function
+  scope, use the "scope" argument to the asyncio mark when marking the tests.
+  If you want to return different types of event loops, use the event_loop_policy
+  fixture.
+  
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_content.py::test_generate_mock_content - AssertionError: as...
+=================== 1 failed, 1 passed, 4 warnings in 2.37s ====================

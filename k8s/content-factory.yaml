@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: content-factory
+  labels:
+    app: content-factory
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: content-factory
+  template:
+    metadata:
+      labels:
+        app: content-factory
+    spec:
+      containers:
+        - name: content-factory
+          image: influence-content-factory:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: influence-secrets
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: content-factory
+spec:
+  selector:
+    app: content-factory
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP
