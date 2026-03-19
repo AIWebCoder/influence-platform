@@ -20,6 +20,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { useLocale } from "@/components/i18n/LocaleProvider";
 
 type PublicationStatus =
   | "published"
@@ -203,6 +204,7 @@ function truncate(str: string | null, len: number) {
 }
 
 export default function PublicationsPage() {
+  const { text } = useLocale();
   const [publications, setPublications] = useState<Publication[]>([]);
   const [stats, setStats] = useState<PubStats | null>(null);
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
@@ -262,10 +264,10 @@ export default function PublicationsPage() {
         <div>
           <h2 className="page-title flex items-center gap-4 text-zinc-900 dark:text-zinc-50">
             <BookOpen className="w-10 h-10 text-indigo-500" />
-            Publications
+            {text.publications.title}
           </h2>
           <p className="page-subtitle">
-            Monitor autonomous publishing operations, retries, and distribution queue health.
+            {text.publications.subtitle}
           </p>
         </div>
         <PrimaryButton
@@ -276,7 +278,7 @@ export default function PublicationsPage() {
           <RefreshCw
             className={`w-4 h-4 ${loading ? "animate-spin" : ""}`}
           />
-          Sync Status
+          {text.publications.syncStatus}
         </PrimaryButton>
       </div>
 

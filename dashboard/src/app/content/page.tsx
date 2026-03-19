@@ -21,6 +21,7 @@ import { InstagramPreview } from "@/components/content/InstagramPreview";
 import { ContentEditor } from "@/components/content/ContentEditor";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { useLocale } from "@/components/i18n/LocaleProvider";
 
 type Niche = "fitness" | "food" | "travel" | "business" | "lifestyle";
 type ContentType = "post" | "story" | "reel" | "carousel";
@@ -38,6 +39,7 @@ interface ContentPacket {
 }
 
 export default function ContentPlannerPage() {
+  const { text } = useLocale();
   const niches: Niche[] = ["fitness", "food", "travel", "business", "lifestyle"];
   const types: ContentType[] = ["post", "story", "reel", "carousel"];
 
@@ -87,13 +89,13 @@ export default function ContentPlannerPage() {
 
   const handleGenerate = async () => {
     if (!isOnline) {
-      showToast("L'API Content Factory est hors ligne.", "error");
+      showToast(text.content.apiOffline, "error");
       return;
     }
 
     const tAccounts = accounts.split(",").map(a => a.trim()).filter(a => a);
     if (tAccounts.length === 0) {
-      showToast("Veuillez saisir au moins un compte cible.", "error");
+      showToast(text.content.needAccounts, "error");
       return;
     }
 
@@ -109,11 +111,11 @@ export default function ContentPlannerPage() {
       setFeed(prev => [res, ...prev]);
       setSelectedId(res.id);
       setPanelMode("preview");
-      showToast("Contenu généré et mis en file d'attente !", "success");
+      showToast(text.content.generated, "success");
       fetchStatus();
     } catch (err: any) {
       console.error(err);
-      showToast("Erreur lors de la génération.", "error");
+      showToast(text.content.generateError, "error");
     } finally {
       setLoading(false);
     }
@@ -121,13 +123,13 @@ export default function ContentPlannerPage() {
 
   const handleBulk = async () => {
     if (!isOnline) {
-      showToast("L'API Content Factory est hors ligne.", "error");
+      showToast(text.content.apiOffline, "error");
       return;
     }
 
     const tAccounts = accounts.split(",").map(a => a.trim()).filter(a => a);
     if (tAccounts.length === 0) {
-      showToast("Veuillez saisir au moins un compte cible.", "error");
+      showToast(text.content.needAccounts, "error");
       return;
     }
 
@@ -143,11 +145,11 @@ export default function ContentPlannerPage() {
         });
         setFeed(prev => [res, ...prev]);
       }
-      showToast("Bulk Generation de 3 contenus réussie !", "success");
+      showToast(text.content.bulkSuccess, "success");
       fetchStatus();
     } catch (err: any) {
       console.error(err);
-      showToast("Erreur lors du traitement Bulk.", "error");
+      showToast(text.content.bulkError, "error");
     } finally {
       setBulkLoading(false);
     }
@@ -158,10 +160,10 @@ export default function ContentPlannerPage() {
       const updated = await api.content.patchContentPacket(id, { caption, hashtags });
       setFeed(prev => prev.map(item => item.id === id ? { ...item, caption: updated.caption, hashtags: updated.hashtags } : item));
       setPanelMode("preview");
-      showToast("Contenu mis à jour !", "success");
+      showToast(text.content.updated, "success");
     } catch (err: any) {
       console.error(err);
-      showToast("Erreur lors de la sauvegarde.", "error");
+      showToast(text.content.saveError, "error");
     }
   };
 
@@ -182,10 +184,10 @@ export default function ContentPlannerPage() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
         <div>
           <h2 className="page-title flex items-center gap-4 text-zinc-900 dark:text-zinc-50">
-            Content Planner
+            {text.content.title}
           </h2>
           <p className="page-subtitle">
-            Autonomous generation, high-fidelity distribution, and real-time queue orchestration.
+            {text.content.subtitle}
           </p>
         </div>
         <div className="flex items-center gap-6 bg-white dark:bg-zinc-900 px-6 py-3 rounded-2xl shadow-sm border border-zinc-200 dark:border-zinc-800">
@@ -288,7 +290,7 @@ export default function ContentPlannerPage() {
               className="w-full flex items-center justify-center gap-3"
             >
               {bulkLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5 text-indigo-500" />}
-              Bulk Synthesis (x3 Niches)
+              {text.content.bulk}
             </PrimaryButton>
           </div>
 

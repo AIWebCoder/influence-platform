@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Bell, X, ShieldAlert, AlertTriangle, Info } from "lucide-react";
+import { useLocale } from "@/components/i18n/LocaleProvider";
 
 interface Alert {
   id: string;
@@ -15,22 +16,20 @@ interface Alert {
 const CONTENT_API = process.env.NEXT_PUBLIC_CONTENT_API_URL || "http://localhost:8000";
 
 export function AlertBell() {
+  const { t } = useLocale();
   const [unreadCount, setUnreadCount] = useState(0);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [hasBanAlert, setHasBanAlert] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Fetch unread count every 60 seconds
   useEffect(() => {
     const fetchUnreadCount = async () => {
       try {
         const res = await fetch(`${CONTENT_API}/alerts/unread/count`);
         const data = await res.json();
         setUnreadCount(data.unread_count || 0);
-      } catch {
-        // silently fail
-      }
+      } catch {}
     };
 
     fetchUnreadCount();
@@ -38,7 +37,6 @@ export function AlertBell() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch alerts when dropdown opens
   useEffect(() => {
     if (!isOpen) return;
 
@@ -56,7 +54,6 @@ export function AlertBell() {
     fetchAlerts();
   }, [isOpen]);
 
-  // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
@@ -72,9 +69,7 @@ export function AlertBell() {
       await fetch(`${CONTENT_API}/alerts/read/${alertId}`, { method: "POST" });
       setAlerts((prev) => prev.map((a) => (a.id === alertId ? { ...a, is_read: true } : a)));
       setUnreadCount((prev) => Math.max(0, prev - 1));
-    } catch {
-      // silently fail
-    }
+    } catch {}
   };
 
   const getIcon = (type: string) => {
@@ -93,27 +88,25 @@ export function AlertBell() {
     const d = new Date(iso);
     const now = new Date();
     const diffMin = Math.floor((now.getTime() - d.getTime()) / 60000);
-    if (diffMin < 1) return "just now";
-    if (diffMin < 60) return `${diffMin}m ago`;
+    if (diffMin < 1) return t("alerts.justNow");
+    if (diffMin < 60) return t("alerts.minutesAgo", { count: diffMin });
     const diffH = Math.floor(diffMin / 60);
-    if (diffH < 24) return `${diffH}h ago`;
-    return `${Math.floor(diffH / 24)}d ago`;
+    if (diffH < 24) return t("alerts.hoursAgo", { count: diffH });
+    return t("alerts.daysAgo", { count: Math.floor(diffH / 24) });
   };
 
   return (
     <div className="relative" ref={dropdownRef}>
-      {/* Ban banner */}
       {hasBanAlert && (
         <div className="absolute -top-10 right-0 left-0 rounded-md bg-red-600 px-3 py-1 text-xs font-medium text-white shadow-lg whitespace-nowrap">
-          ⚠ Active ban detected — check alerts
+          {t("alerts.banner")}
         </div>
       )}
 
-      {/* Bell button */}
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="relative rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
-        aria-label="Alerts"
+        aria-label={t("alerts.ariaLabel")}
       >
         <Bell className="h-5 w-5" />
         {unreadCount > 0 && (
@@ -123,11 +116,10 @@ export function AlertBell() {
         )}
       </button>
 
-      {/* Dropdown */}
       {isOpen && (
         <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-lg border bg-background shadow-xl">
           <div className="flex items-center justify-between border-b px-4 py-2.5">
-            <h3 className="text-sm font-semibold">Alerts</h3>
+            <h3 className="text-sm font-semibold">{t("alerts.title")}</h3>
             <button onClick={() => setIsOpen(false)} className="text-muted-foreground hover:text-foreground">
               <X className="h-4 w-4" />
             </button>
@@ -135,7 +127,7 @@ export function AlertBell() {
 
           <div className="max-h-80 overflow-y-auto">
             {alerts.length === 0 ? (
-              <div className="px-4 py-8 text-center text-sm text-muted-foreground">No alerts</div>
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t("alerts.none")}</div>
             ) : (
               alerts.map((alert) => (
                 <div
@@ -161,7 +153,7 @@ export function AlertBell() {
                       onClick={() => markAsRead(alert.id)}
                       className="mt-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/50"
                     >
-                      Read
+                      {t("alerts.read")}
                     </button>
                   )}
                 </div>

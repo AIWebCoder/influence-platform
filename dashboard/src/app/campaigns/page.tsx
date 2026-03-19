@@ -23,6 +23,7 @@ import { cn } from '@/lib/utils';
 import { toast } from 'react-hot-toast';
 import { format } from 'date-fns';
 import { PrimaryButton } from '@/components/ui/PrimaryButton';
+import { useLocale } from '@/components/i18n/LocaleProvider';
 import {
   UnifiedModal,
   ModalInput,
@@ -34,6 +35,7 @@ import {
 } from "@/components/ui/UnifiedModal";
 
 export default function CampaignsPage() {
+  const { text } = useLocale();
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -59,7 +61,7 @@ export default function CampaignsPage() {
       const data = await api.distribution.getCampaigns();
       setCampaigns(data);
     } catch (error) {
-      toast.error('Failed to load campaigns');
+      toast.error(text.campaigns.loadError);
     } finally {
       setLoading(false);
     }
@@ -83,11 +85,11 @@ export default function CampaignsPage() {
         settings: { er_threshold: newCampaign.er_threshold }
       };
       await api.distribution.createCampaign(payload);
-      toast.success('Campaign launched successfully');
+      toast.success(text.campaigns.launchSuccess);
       setShowCreate(false);
       loadCampaigns();
     } catch (error) {
-      toast.error('Failed to launch campaign');
+      toast.error(text.campaigns.launchError);
     }
   };
 
@@ -95,10 +97,10 @@ export default function CampaignsPage() {
     try {
       const newStatus = currentStatus === 'active' ? 'paused' : 'active';
       await api.distribution.updateCampaignStatus(id, newStatus);
-      toast.success(`Campaign ${newStatus}`);
+      toast.success(newStatus === 'active' ? text.campaigns.resumed : text.campaigns.paused);
       loadCampaigns();
     } catch (error) {
-      toast.error('Failed to update status');
+      toast.error(text.campaigns.statusUpdateError);
     }
   };
 
@@ -108,10 +110,10 @@ export default function CampaignsPage() {
         <div className="space-y-1">
           <div className="flex items-center gap-2 mb-1">
             <Rocket className="w-4 h-4 text-indigo-500" />
-            <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-[0.2em]">Autonomous Engine</span>
+            <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-[0.2em]">{text.campaigns.engineBadge}</span>
           </div>
-          <h1 className="page-title text-zinc-900 dark:text-zinc-50 font-display">Campaigns</h1>
-          <p className="page-subtitle">Orchestrate autonomous growth and content strategies via AI.</p>
+          <h1 className="page-title text-zinc-900 dark:text-zinc-50 font-display">{text.campaigns.title}</h1>
+          <p className="page-subtitle">{text.campaigns.subtitle}</p>
         </div>
 
         <PrimaryButton 
@@ -119,7 +121,7 @@ export default function CampaignsPage() {
           className="flex items-center gap-2 group"
         >
           <Plus className="w-5 h-5 group-hover:rotate-90 transition-transform" />
-          Launch Campaign
+          {text.campaigns.launch}
         </PrimaryButton>
       </div>
 

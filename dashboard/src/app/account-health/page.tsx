@@ -19,6 +19,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { useLocale } from "@/components/i18n/LocaleProvider";
 
 interface AccountSummary {
   id: string;
@@ -87,6 +88,7 @@ function getRisk(score: number) {
 }
 
 export default function AccountHealthPage() {
+  const { text } = useLocale();
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [details, setDetails] = useState<HealthDetails | null>(null);
@@ -142,10 +144,10 @@ export default function AccountHealthPage() {
       <div className="p-10 pb-6 shrink-0">
         <h2 className="page-title flex items-center gap-4 text-zinc-900 dark:text-zinc-50">
           <ShieldCheck className="w-10 h-10 text-emerald-500" />
-          Account Health
+          {text.accountHealth.title}
         </h2>
         <p className="page-subtitle">
-          Monitor safety status, analyze detection risks, and manage action limits.
+          {text.accountHealth.subtitle}
         </p>
       </div>
 
@@ -156,7 +158,7 @@ export default function AccountHealthPage() {
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
             <input
               type="text"
-              placeholder="Search accounts..."
+              placeholder={text.accountHealth.search}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-11 pr-4 py-4 text-sm font-bold rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/10 placeholder:text-zinc-400 transition-all"
@@ -170,7 +172,7 @@ export default function AccountHealthPage() {
               </div>
             ) : filteredAccounts.length === 0 ? (
               <div className="text-center p-8 text-zinc-400 text-sm font-medium">
-                No accounts found.
+                {text.accountHealth.noAccounts}
               </div>
             ) : (
               <div className="divide-y border-zinc-100 dark:border-zinc-900">
@@ -213,7 +215,7 @@ export default function AccountHealthPage() {
           {!selectedId ? (
             <div className="h-full flex flex-col items-center justify-center text-zinc-400 space-y-6 border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-premium bg-zinc-50/50 dark:bg-zinc-900/20">
               <Shield className="w-20 h-20 opacity-10" />
-              <p className="text-xl font-bold font-display uppercase tracking-widest text-zinc-300 dark:text-zinc-700">Select an account</p>
+              <p className="text-xl font-bold font-display uppercase tracking-widest text-zinc-300 dark:text-zinc-700">{text.accountHealth.selectAccount}</p>
             </div>
           ) : detailsLoading || !details ? (
             <div className="h-full flex items-center justify-center">
@@ -252,7 +254,7 @@ export default function AccountHealthPage() {
                     </svg>
                     <div className="absolute inset-0 flex flex-col items-center justify-center">
                       <span className="text-5xl font-black font-display text-zinc-900 dark:text-zinc-50">{details.account.health_score}</span>
-                      <span className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mt-1">Score</span>
+                      <span className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mt-1">{text.accountHealth.score}</span>
                     </div>
                   </div>
 

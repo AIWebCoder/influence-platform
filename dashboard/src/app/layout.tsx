@@ -28,7 +28,7 @@ export default function RootLayout({
 }) {
   return (
     <html
-      lang="en"
+      lang="fr"
       className={cn(inter.variable, montserrat.variable)}
       suppressHydrationWarning
     >

@@ -18,6 +18,7 @@ import {
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
+import { useLocale } from "@/components/i18n/LocaleProvider";
 
 interface Proxy {
   id: string;
@@ -57,6 +58,7 @@ function StatsCard({ title, value, icon: Icon, accent, subtitle }: any) {
 }
 
 export default function ProxyDashboard() {
+  const { text } = useLocale();
   const [proxies, setProxies] = useState<Proxy[]>([]);
   const [stats, setStats] = useState<ProxyStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -108,10 +110,10 @@ export default function ProxyDashboard() {
         <div>
           <h2 className="page-title flex items-center gap-4 text-zinc-900 dark:text-zinc-50">
             <Globe className="w-10 h-10 text-blue-500" />
-            Marketplace
+            {text.proxies.title}
           </h2>
           <p className="page-subtitle">
-            Manage your rotating proxy pool, monitor latency, and track provider performance.
+            {text.proxies.subtitle}
           </p>
         </div>
         <PrimaryButton
@@ -120,7 +122,7 @@ export default function ProxyDashboard() {
           className="flex items-center gap-3"
         >
           <RefreshCw className={cn("w-4 h-4", refreshing && "animate-spin")} />
-          Pool Health
+          {text.proxies.poolHealth}
         </PrimaryButton>
       </div>
 

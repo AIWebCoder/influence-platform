@@ -17,8 +17,10 @@ import {
 import { api } from '@/lib/api';
 import { toast } from 'react-hot-toast';
 import { PrimaryButton } from '@/components/ui/PrimaryButton';
+import { useLocale } from '@/components/i18n/LocaleProvider';
 
 export default function ABTestingPage() {
+  const { text, t } = useLocale();
   const [tests, setTests] = useState<any[]>([]);
   const [selectedTest, setSelectedTest] = useState<any>(null);
   const [performance, setPerformance] = useState<any>(null);
@@ -37,7 +39,7 @@ export default function ABTestingPage() {
       setTests(data);
     } catch (error) {
       console.error('Failed to load AB tests:', error);
-      toast.error('Failed to fetch A/B tests');
+      toast.error(text.abTests.fetchError);
     } finally {
       setLoading(false);
     }
@@ -49,7 +51,7 @@ export default function ABTestingPage() {
       const data = await api.distribution.getABTestPerformance(id);
       setPerformance(data);
     } catch (error) {
-      toast.error('Failed to load performance metrics');
+      toast.error(text.abTests.perfError);
     }
   };
 
@@ -58,14 +60,14 @@ export default function ABTestingPage() {
     try {
       const result = await api.distribution.evaluateABTest(id);
       if (result.winner !== 'pending') {
-        toast.success(`Winner declared: Variant ${result.winner}!`);
+        toast.success(t("abTests.winnerDeclared", { winner: result.winner }));
         loadTests();
         loadPerformance(id);
       } else {
-        toast.success('Analyzing experiment data...');
+        toast.success(text.abTests.analyzing);
       }
     } catch (error) {
-      toast.error('Evaluation failed');
+      toast.error(text.abTests.evaluationFailed);
     } finally {
       setEvaluating(false);
     }
@@ -81,9 +83,9 @@ export default function ABTestingPage() {
       <div className="flex justify-between items-end">
         <div>
           <h1 className="page-title bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-500 font-display">
-            A/B Content Lab
+            {text.abTests.title}
           </h1>
-          <p className="page-subtitle">Optimize engagement by pitting AI styles against each other.</p>
+          <p className="page-subtitle">{text.abTests.subtitle}</p>
         </div>
         <button 
           onClick={loadTests}
@@ -100,7 +102,7 @@ export default function ABTestingPage() {
             <Search className="absolute left-3 top-3 w-4 h-4 text-zinc-500" />
             <input
               type="text"
-              placeholder="Search experiments..."
+              placeholder={text.abTests.search}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-10 pr-4 py-2 bg-zinc-50 dark:bg-zinc-950/50 border border-zinc-200 dark:border-zinc-800 rounded-xl text-zinc-900 dark:text-zinc-50 focus:outline-none focus:ring-2 focus:ring-purple-500/20 transition-colors"
@@ -145,7 +147,7 @@ export default function ABTestingPage() {
             {filteredTests.length === 0 && !loading && (
               <div className="text-center py-12 text-muted-foreground/30">
                 <FlaskConical className="w-12 h-12 mx-auto mb-4 opacity-10" />
-                <p>No experiments found</p>
+                <p>{text.abTests.noExperiments}</p>
               </div>
             )}
           </div>

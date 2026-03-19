@@ -5,10 +5,11 @@ import axios from "axios";
 import { PerformanceChart } from "@/components/analytics/PerformanceChart";
 import { TopContent } from "@/components/analytics/TopContent";
 import { Recommendations } from "@/components/analytics/Recommendations";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, LayoutList, Activity } from "lucide-react";
+import { useLocale } from "@/components/i18n/LocaleProvider";
 
 export default function AnalyticsDashboard() {
+  const { text } = useLocale();
   const [accountCount, setAccountCount] = useState(0);
   const [queueSize, setQueueSize] = useState("0");
   const [avgHealth, setAvgHealth] = useState(0);
@@ -19,18 +20,18 @@ export default function AnalyticsDashboard() {
       try {
         const [accRes, queueRes] = await Promise.all([
           axios.get("http://localhost:3001/accounts"),
-          axios.get("http://localhost:8000/content/queue/size").catch(() => ({ data: { size: '0' } }))
+          axios.get("http://localhost:8000/content/queue/size").catch(() => ({ data: { size: "0" } })),
         ]);
-        
+
         const accounts = accRes.data;
         const qSize = queueRes.data.size;
-        
+
         setAccountCount(accounts.length);
         setQueueSize(qSize);
-        
+
         let totalHealth = 0;
         accounts.forEach((acc: any) => {
-          totalHealth += (acc.health_score || 0);
+          totalHealth += acc.health_score || 0;
         });
         setAvgHealth(accounts.length > 0 ? Math.round(totalHealth / accounts.length) : 0);
 
@@ -44,8 +45,8 @@ export default function AnalyticsDashboard() {
           { day: "30" },
         ].map((point, index) => {
           const row: any = { day: point.day };
-          accounts.forEach((acc: any, i: number) => {
-             row[`acc_${acc.username}`] = Math.floor(Math.random() * 500) + 100 * index + (acc.health_score || 50);
+          accounts.forEach((acc: any) => {
+            row[`acc_${acc.username}`] = Math.floor(Math.random() * 500) + 100 * index + (acc.health_score || 50);
           });
           return row;
         });
@@ -53,7 +54,6 @@ export default function AnalyticsDashboard() {
         if (accounts.length > 0) {
           setChartData(newChartData);
         }
-
       } catch (err) {
         console.error("Error loading analytics data", err);
       }
@@ -65,12 +65,8 @@ export default function AnalyticsDashboard() {
     <div className="flex-1 space-y-8 p-8 pt-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="page-title flex items-center gap-4 text-zinc-900 dark:text-zinc-50">
-            System Intelligence
-          </h2>
-          <p className="page-subtitle">
-            Real-time telemetry and predictive distribution metrics across your account nodes.
-          </p>
+          <h2 className="page-title flex items-center gap-4 text-zinc-900 dark:text-zinc-50">{text.home.title}</h2>
+          <p className="page-subtitle">{text.home.subtitle}</p>
         </div>
       </div>
 
@@ -78,9 +74,9 @@ export default function AnalyticsDashboard() {
         <div className="rounded-premium border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">Active Nodes</p>
+              <p className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">{text.home.activeNodes}</p>
               <p className="text-3xl font-black mt-2 font-display text-zinc-900 dark:text-zinc-50">{accountCount}</p>
-              <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-2 font-medium">Distribution clusters</p>
+              <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-2 font-medium">{text.home.activeNodesSubtitle}</p>
             </div>
             <div className="p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-500/10">
               <Users className="w-6 h-6 text-indigo-500" />
@@ -91,9 +87,9 @@ export default function AnalyticsDashboard() {
         <div className="rounded-premium border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">Generation Queue</p>
+              <p className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">{text.home.generationQueue}</p>
               <p className="text-3xl font-black mt-2 font-display text-zinc-900 dark:text-zinc-50">{queueSize}</p>
-              <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-2 font-medium">Pending content packets</p>
+              <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-2 font-medium">{text.home.generationQueueSubtitle}</p>
             </div>
             <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-500/10">
               <LayoutList className="w-6 h-6 text-emerald-500" />
@@ -104,9 +100,9 @@ export default function AnalyticsDashboard() {
         <div className="rounded-premium border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">Fleet Health</p>
+              <p className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">{text.home.fleetHealth}</p>
               <p className="text-3xl font-black mt-2 font-display text-zinc-900 dark:text-zinc-50">{avgHealth}%</p>
-              <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-2 font-medium">Average across accounts</p>
+              <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-2 font-medium">{text.home.fleetHealthSubtitle}</p>
             </div>
             <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-500/10">
               <Activity className="w-6 h-6 text-amber-500" />
@@ -114,16 +110,15 @@ export default function AnalyticsDashboard() {
           </div>
         </div>
       </div>
-      
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
         <PerformanceChart data={chartData} />
         <TopContent />
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-         <Recommendations />
+        <Recommendations />
       </div>
-
     </div>
   );
 }
