@@ -10,7 +10,7 @@ const statusBadgeVariants = cva(
         success: "bg-[#EAF3DE] text-[#3B6D11] border-[#C0DD97]",
         warning: "bg-[#FAEEDA] text-[#854F0B] border-[#FAC775]",
         danger: "bg-[#FCEBEB] text-[#A32D2D] border-[#F7C1C1]",
-        neutral: "bg-[#F1EFE8] text-[#5F5E5A] border-[#D3D1C7]",
+        neutral: "bg-[#F1EFE8] text-[#5F5E5A] border-[#D3D1C7] dark:bg-zinc-700 dark:text-zinc-200 dark:border-zinc-600",
       },
     },
     defaultVariants: {

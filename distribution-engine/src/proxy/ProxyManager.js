@@ -75,25 +75,124 @@ class ProxyManager {
 
   /**
    * Records proxy success/failure and updates usage metrics
+   * Enhanced with scoring system (Priority 4)
    * @param {string} proxyId 
    * @param {boolean} success 
+   * @param {number} responseTime - Response time in ms (optional)
    */
-  async recordProxyUsage(proxyId, success) {
+  async recordProxyUsage(proxyId, success, responseTime = null) {
     const pool = getPool();
     try {
-      await pool.query(`
-        UPDATE proxies 
-        SET 
-          total_requests = total_requests + 1,
-          failure_count = CASE WHEN $2 = false THEN failure_count + 1 ELSE 0 END,
-          is_active = CASE WHEN failure_count >= 5 THEN false ELSE is_active END,
-          success_rate = ((total_requests * success_rate) + (CASE WHEN $2 = true THEN 100 ELSE 0 END)) / (total_requests + 1),
-          last_checked_at = NOW()
-        WHERE id = $1
-      `, [proxyId, success]);
+      if (success && responseTime) {
+        await pool.query(`
+          UPDATE proxies 
+          SET 
+            total_requests = total_requests + 1,
+            success_count = success_count + 1,
+            total_response_time = COALESCE(total_response_time, 0) + $3,
+            response_time = total_response_time / NULLIF(success_count, 0),
+            success_rate = (success_count::float / total_requests::float) * 100,
+            last_checked_at = NOW(),
+            last_success_at = NOW()
+          WHERE id = $1
+        `, [proxyId, success, responseTime]);
+      } else {
+        await pool.query(`
+          UPDATE proxies 
+          SET 
+            total_requests = total_requests + 1,
+            failure_count = failure_count + 1,
+            success_rate = CASE 
+              WHEN total_requests > 0 THEN (success_count::float / total_requests::float) * 100 
+              ELSE 0 
+            END,
+            last_checked_at = NOW(),
+            is_active = CASE 
+              WHEN failure_count >= 5 THEN false 
+              ELSE is_active 
+            END
+          WHERE id = $1
+        `, [proxyId]);
+      }
     } catch (err) {
       console.error('[ProxyManager] Error recording proxy usage:', err.message);
     }
+  }
+
+  /**
+   * Get proxy score for ranking (Priority 4.1)
+   * Higher score = better proxy
+   */
+  async getProxyScore(proxyId) {
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT 
+        is_active,
+        success_rate,
+        response_time,
+        total_requests,
+        failure_count,
+        last_checked_at,
+        EXTRACT(EPOCH FROM (NOW() - last_checked_at)) as seconds_since_check
+      FROM proxies WHERE id = $1`,
+      [proxyId]
+    );
+    
+    if (result.rows.length === 0) return 0;
+    
+    const p = result.rows[0];
+    let score = 0;
+    
+    if (!p.is_active) return 0;
+    
+    score += Math.min(p.success_rate || 0, 50);
+    
+    if (p.response_time && p.response_time < 1000) {
+      score += 30 * (1 - p.response_time / 1000);
+    }
+    
+    if (p.seconds_since_check < 300) {
+      score += 20;
+    } else if (p.seconds_since_check < 600) {
+      score += 10;
+    }
+    
+    if (p.total_requests > 10) {
+      score += Math.min(10, p.total_requests / 50);
+    }
+    
+    return Math.round(score);
+  }
+
+  /**
+   * Auto-disable proxies with low scores (Priority 4.2)
+   */
+  async autoDisablePoorProxies() {
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT id, host, port, success_rate, response_time, failure_count
+       FROM proxies 
+       WHERE is_active = true`
+    );
+    
+    let disabled = 0;
+    for (const proxy of result.rows) {
+      const score = await this.getProxyScore(proxy.id);
+      if (score < 30 || proxy.failure_count >= 10) {
+        await pool.query(
+          'UPDATE proxies SET is_active = false WHERE id = $1',
+          [proxy.id]
+        );
+        console.log(`[ProxyManager] Auto-disabled proxy ${proxy.host}:${proxy.port} (score: ${score})`);
+        disabled++;
+      }
+    }
+    
+    if (disabled > 0) {
+      console.log(`[ProxyManager] Auto-disabled ${disabled} poor performing proxies`);
+    }
+    
+    return disabled;
   }
 
   /**

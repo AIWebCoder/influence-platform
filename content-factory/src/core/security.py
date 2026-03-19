@@ -25,6 +25,11 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
+def hash_password(password: str) -> str:
+    """Alias for get_password_hash for consistency."""
+    return pwd_context.hash(password)
+
+
 # Password policy configuration
 PASSWORD_POLICY = {
     "min_length": 8,

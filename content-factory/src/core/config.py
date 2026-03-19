@@ -28,6 +28,21 @@ class Settings(BaseSettings):
     
     # CORS — comma-separated list of allowed origins
     ALLOWED_ORIGINS: str = "http://localhost:3000"
+    
+    # SMS Provider Configuration (Twilio/MessageBird/Vonage)
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_FROM_NUMBER: str = ""
+    MESSAGEBIRD_API_KEY: str = ""
+    MESSAGEBIRD_ORIGINATOR: str = ""
+    VONAGE_API_KEY: str = ""
+    VONAGE_API_SECRET: str = ""
+    VONAGE_FROM_NUMBER: str = ""
+    
+    # OTP Configuration
+    OTP_EXPIRE_MINUTES: int = 10
+    OTP_MAX_ATTEMPTS: int = 3
+    OTP_COOLDOWN_SECONDS: int = 60
 
     class Config:
         env_file = ".env"

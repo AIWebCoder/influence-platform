@@ -406,8 +406,8 @@ export default function ContentPlannerPage() {
               )}
             </>
           ) : (
-            <div className="flex flex-col items-center justify-center h-64 border-2 border-dashed border-neutral-300 dark:border-neutral-700 rounded-2xl text-neutral-400">
-              <Eye className="w-10 h-10 mb-3 opacity-20" />
+            <div className="flex flex-col items-center justify-center h-64 border-2 border-dashed border-zinc-300 dark:border-zinc-600 rounded-2xl text-zinc-400 dark:text-zinc-500">
+              <Eye className="w-10 h-10 mb-3 opacity-40" />
               <p className="text-sm font-medium">Sélectionnez un contenu pour voir l&apos;aperçu</p>
             </div>
           )}

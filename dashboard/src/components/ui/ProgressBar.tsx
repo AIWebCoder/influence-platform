@@ -25,7 +25,7 @@ export function ProgressBar({ value, max = 100, className, showLabel = false }: 
       <div
         className={cn(
           "h-[var(--bar-height)] rounded-full overflow-hidden",
-          "bg-[#F1EFE8]"
+          "bg-zinc-200 dark:bg-zinc-700/50"
         )}
       >
         <div

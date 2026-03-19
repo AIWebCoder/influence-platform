@@ -5,8 +5,11 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.database import get_db
 from src.services.template_service import TemplateService
+from src.services.cache_service import cache_service
 
 router = APIRouter()
+
+CACHE_TTL = 600  # 10 minutes
 
 class TemplateBase(BaseModel):
     name: str
@@ -33,8 +36,17 @@ class TemplateResponse(TemplateBase):
 
 @router.get("/", response_model=List[TemplateResponse])
 async def list_templates(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
+    cache_key = f"templates:list:{skip}:{limit}"
+    
+    cached = await cache_service.get(cache_key)
+    if cached:
+        return cached
+    
     svc = TemplateService(db)
-    return await svc.get_all(skip=skip, limit=limit)
+    result = await svc.get_all(skip=skip, limit=limit)
+    
+    await cache_service.set(cache_key, [t.model_dump() for t in result], CACHE_TTL)
+    return result
 
 @router.get("/{template_id}", response_model=TemplateResponse)
 async def get_template(template_id: uuid.UUID, db: AsyncSession = Depends(get_db)):

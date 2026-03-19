@@ -149,7 +149,7 @@ export default function ProxyDashboard() {
         />
         <StatsCard 
           title="Pool Capacity" 
-          value={stats ? `${Math.round((stats.active / stats.total) * 100)}%` : "—"} 
+          value={stats && stats.total > 0 ? `${Math.round((stats.active / stats.total) * 100)}%` : "—"} 
           icon={Activity} 
           accent="text-blue-600" 
           subtitle="Health availability"

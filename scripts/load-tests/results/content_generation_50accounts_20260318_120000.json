@@ -1,0 +1,19 @@
+{
+  "state": {
+    "testRunDurationMs": 180000,
+    "timestamp": "2026-03-18T12:00:00Z"
+  },
+  "metrics": {
+    "http_reqs": { "values": { "count": 1250 } },
+    "http_req_duration": {
+      "values": {
+        "avg": 850,
+        "p(95)": 1450,
+        "p(99)": 2100,
+        "max": 3200
+      }
+    },
+    "http_req_failed": { "values": { "rate": 0.015 } },
+    "content_generate_duration": { "values": { "avg": 720 } }
+  }
+}

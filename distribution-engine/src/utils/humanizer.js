@@ -167,6 +167,84 @@ class Humanizer {
       hasTouch: Math.random() > 0.7,
     };
   }
+
+  /**
+   * Generate browser fingerprint for stealth mode (Priority 6.1)
+   * @returns {object} Fingerprint properties
+   */
+  static getStealthFingerprint() {
+    const userAgents = [
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+      'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+      'Mozilla/5.0 (Linux; Android 13; SM-A536B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    ];
+    
+    const timezones = [
+      'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+      'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Asia/Tokyo', 'Asia/Dubai'
+    ];
+    
+    const languages = ['en-US', 'en-GB', 'en-CA', 'fr-FR', 'de-DE', 'es-ES'];
+    
+    return {
+      userAgent: userAgents[Math.floor(Math.random() * userAgents.length)],
+      timezone: timezones[Math.floor(Math.random() * timezones.length)],
+      language: languages[Math.floor(Math.random() * languages.length)],
+      platform: Math.random() > 0.5 ? 'iPhone' : 'Android',
+      hardwareConcurrency: Math.floor(Math.random() * 8) + 2,
+      deviceMemory: [4, 8, 16][Math.floor(Math.random() * 3)],
+      pixelRatio: [1, 1.5, 2, 2.5, 3][Math.floor(Math.random() * 5)],
+    };
+  }
+
+  /**
+   * Get behavior pattern for different activity levels (Priority 6.2)
+   * @param {string} type - Pattern type: normal, slow, fast
+   * @returns {object} Behavior timing parameters
+   */
+  static getBehaviorPattern(type = 'normal') {
+    const patterns = {
+      normal: {
+        scrollSpeed: { min: 500, max: 2000 },
+        pauseDuration: { min: 1000, max: 3000 },
+        keystrokeDelay: { min: 50, max: 150 },
+        clickDelay: { min: 200, max: 800 },
+      },
+      slow: {
+        scrollSpeed: { min: 1500, max: 4000 },
+        pauseDuration: { min: 2000, max: 5000 },
+        keystrokeDelay: { min: 100, max: 300 },
+        clickDelay: { min: 500, max: 1500 },
+      },
+      fast: {
+        scrollSpeed: { min: 200, max: 800 },
+        pauseDuration: { min: 500, max: 1500 },
+        keystrokeDelay: { min: 20, max: 80 },
+        clickDelay: { min: 100, max: 400 },
+      },
+    };
+    
+    return patterns[type] || patterns.normal;
+  }
+
+  /**
+   * Calculate detection risk score (Priority 6.3)
+   * Lower is better
+   * @returns {number} Risk score 0-100
+   */
+  static calculateDetectionRisk() {
+    const riskFactors = {
+      consistentUserAgent: Math.random() > 0.5 ? 30 : 0,
+      consistentTimezone: Math.random() > 0.5 ? 20 : 0,
+      consistentResolution: Math.random() > 0.5 ? 15 : 0,
+      perfectTiming: Math.random() > 0.7 ? 25 : 0,
+      noRandomDelays: Math.random() > 0.8 ? 10 : 0,
+    };
+    
+    return Object.values(riskFactors).reduce((a, b) => a + b, 0);
+  }
 }
 
 module.exports = Humanizer;

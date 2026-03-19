@@ -55,7 +55,13 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    command: >
+      redis-server 
+      --appendonly yes 
+      --maxmemory 512mb 
+      --maxmemory-policy allkeys-lru 
+      --tcp-keepalive 60
+      --timeout 0
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -121,7 +127,9 @@ services:
       PROXY_PASSWORD: ${PROXY_PASSWORD}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       SENTRY_DSN: ${SENTRY_DSN:-}
-      MAX_CONCURRENT_WORKERS: ${MAX_CONCURRENT_WORKERS:-3}
+      MAX_CONCURRENT_WORKERS: ${MAX_CONCURRENT_WORKERS:-10}
+      QUEUE_CPU_THRESHOLD: ${QUEUE_CPU_THRESHOLD:-80}
+      QUEUE_BATCH_SIZE: ${QUEUE_BATCH_SIZE:-5}
       CAMPAIGN_CYCLE_HOURS: ${CAMPAIGN_CYCLE_HOURS:-6}
       CHROMIUM_PATH: /usr/bin/chromium-browser
     depends_on:

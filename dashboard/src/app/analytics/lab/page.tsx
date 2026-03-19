@@ -18,6 +18,13 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { toast } from 'react-hot-toast';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export default function OptimizationLabPage() {
   const [caption, setCaption] = useState('');
@@ -104,15 +111,18 @@ export default function OptimizationLabPage() {
 
         <div className="flex items-center gap-4 bg-white dark:bg-zinc-900 p-2 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
           <Target className="w-5 h-5 text-zinc-400 ml-2" />
-          <select 
-            value={selectedAccount}
-            onChange={(e) => { setSelectedAccount(e.target.value); loadStrategy(e.target.value); }}
-            className="bg-transparent border-none text-zinc-900 dark:text-zinc-100 focus:ring-0 text-sm pr-8 font-bold appearance-none cursor-pointer"
-          >
-            {accounts.map(acc => (
-              <option key={acc.id} value={acc.id}>{acc.username}</option>
-            ))}
-          </select>
+          <Select value={selectedAccount} onValueChange={(value) => { setSelectedAccount(value); loadStrategy(value); }}>
+            <SelectTrigger className="w-[180px] border-none shadow-none bg-transparent font-bold text-sm">
+              <SelectValue placeholder="Select account" />
+            </SelectTrigger>
+            <SelectContent>
+              {accounts.map((acc) => (
+                <SelectItem key={acc.id} value={acc.id}>
+                  {acc.username}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 

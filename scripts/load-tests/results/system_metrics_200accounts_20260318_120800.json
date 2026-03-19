@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-03-18T12:08:00Z",
+  "services": {
+    "content_factory": { "status": "healthy" },
+    "distribution_engine": { "status": "healthy" }
+  },
+  "redis": {
+    "queue_size": 280,
+    "pending_count": 145
+  },
+  "docker": [
+    { "Name": "content-factory", "CPUPerc": "78%", "MemUsage": "1024MiB" },
+    { "Name": "distribution-engine", "CPUPerc": "92%", "MemUsage": "2048MiB" }
+  ]
+}

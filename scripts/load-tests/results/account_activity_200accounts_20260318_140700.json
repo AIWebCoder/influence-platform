@@ -1,0 +1,20 @@
+{
+  "state": {
+    "testRunDurationMs": 180000,
+    "timestamp": "2026-03-18T14:07:00Z"
+  },
+  "metrics": {
+    "http_reqs": { "values": { "count": 7200 } },
+    "http_req_duration": {
+      "values": {
+        "avg": 1450,
+        "p(95)": 2680,
+        "p(99)": 4200,
+        "max": 8500
+      }
+    },
+    "http_req_failed": { "values": { "rate": 0.035 } },
+    "login_success": { "values": { "rate": 0.88 } },
+    "proxy_success": { "values": { "rate": 0.78 } }
+  }
+}

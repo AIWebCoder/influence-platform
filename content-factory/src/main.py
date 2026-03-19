@@ -12,7 +12,8 @@ from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
 from src.core.database import init_db
 from src.core.redis import init_redis
-from src.api import content, templates, niches, health, auth, scheduling, hashtags, alerts, users, reports, analytics
+from src.services.cache_service import init_cache
+from src.api import content, templates, niches, health, auth, scheduling, hashtags, alerts, users, reports, analytics, billing
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -60,6 +61,7 @@ async def lifespan(app: FastAPI):
     # Startup
     await init_db()
     await init_redis()
+    await init_cache(os.getenv("REDIS_URL", "redis://localhost:6379"))
     print("✅ Content Factory démarré")
     yield
     # Shutdown
@@ -114,6 +116,7 @@ app.include_router(alerts.router, prefix="/alerts", tags=["Alerts"])
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(reports.router, prefix="/reports", tags=["Reports"])
 app.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
+app.include_router(billing.router, prefix="/billing", tags=["Billing"])
 
 
 @app.get("/")

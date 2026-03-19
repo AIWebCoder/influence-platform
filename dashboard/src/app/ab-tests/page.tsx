@@ -155,8 +155,8 @@ export default function ABTestingPage() {
         <div className="lg:col-span-8 space-y-6">
           {!selectedTest ? (
             <div className="h-full flex flex-col items-center justify-center border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-premium p-12 text-center bg-zinc-50/50 dark:bg-zinc-900/20">
-              <div className="p-6 bg-zinc-100 dark:bg-zinc-800 rounded-premium mb-6">
-                <Split className="w-12 h-12 text-zinc-300 dark:text-zinc-700" />
+              <div className="p-6 bg-zinc-100 dark:bg-zinc-800/80 rounded-premium mb-6">
+                <Split className="w-12 h-12 text-zinc-400 dark:text-zinc-300" />
               </div>
               <h2 className="text-2xl font-black text-zinc-900 dark:text-zinc-50 font-display">Select an Experiment</h2>
               <p className="text-muted-foreground max-w-xs mt-2 font-medium">Explore performance data and declare winners for your content variants.</p>

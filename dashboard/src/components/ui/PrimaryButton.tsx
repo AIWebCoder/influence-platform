@@ -9,7 +9,7 @@ const primaryButtonVariants = cva(
       variant: {
         default: "bg-[var(--color-primary)] text-white hover:bg-[#1a1a1a] active:scale-[0.98]",
         destructive: "bg-[#E24B4A] text-white hover:bg-[#d43d3b] active:scale-[0.98]",
-        ghost: "bg-transparent border border-[var(--color-primary)] text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white",
+        ghost: "border border-zinc-300 bg-white text-zinc-900 shadow-sm hover:border-zinc-900 hover:bg-zinc-900 hover:text-white dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-500 dark:hover:bg-zinc-800",
       },
       size: {
         default: "px-6 py-3",

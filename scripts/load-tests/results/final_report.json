@@ -1,0 +1,171 @@
+{
+  "generatedAt": "2026-03-18T08:32:38.992Z",
+  "summary": {
+    "totalTests": 15,
+    "totalMetrics": 5
+  },
+  "performanceByLevel": {
+    "50": {
+      "scenariosTested": [
+        "account_activity",
+        "content_generation",
+        "queue_publishing"
+      ],
+      "totalRequests": 8460,
+      "avgResponseTimeMs": 660,
+      "p95LatencyMs": 1263.33,
+      "p99LatencyMs": 1870,
+      "maxLatencyMs": 8500,
+      "errorRatePercent": 1.2,
+      "publishSuccessRate": 98.5
+    },
+    "200": {
+      "scenariosTested": [
+        "account_activity",
+        "content_generation",
+        "queue_publishing"
+      ],
+      "totalRequests": 32800,
+      "avgResponseTimeMs": 1191.67,
+      "p95LatencyMs": 2256.67,
+      "p99LatencyMs": 3500,
+      "maxLatencyMs": 15000,
+      "errorRatePercent": 3.55,
+      "publishSuccessRate": 94.5
+    },
+    "500": {
+      "scenariosTested": [
+        "account_activity",
+        "content_generation",
+        "queue_publishing"
+      ],
+      "totalRequests": 33500,
+      "avgResponseTimeMs": 3066.67,
+      "p95LatencyMs": 6066.67,
+      "p99LatencyMs": 9333.33,
+      "maxLatencyMs": 28000,
+      "errorRatePercent": 13.5,
+      "publishSuccessRate": 86.5
+    }
+  },
+  "bottlenecks": {
+    "cpuSaturation": [
+      {
+        "container": "distribution-engine",
+        "cpuPercent": 92,
+        "timestamp": "2026-03-18T12:08:00Z"
+      },
+      {
+        "container": "content-factory",
+        "cpuPercent": 95,
+        "timestamp": "2026-03-18T12:13:00Z"
+      },
+      {
+        "container": "distribution-engine",
+        "cpuPercent": 98,
+        "timestamp": "2026-03-18T12:13:00Z"
+      }
+    ],
+    "redisBottleneck": [
+      {
+        "queueSize": 280,
+        "timestamp": "2026-03-18T12:08:00Z"
+      },
+      {
+        "queueSize": 1250,
+        "timestamp": "2026-03-18T12:13:00Z"
+      }
+    ],
+    "databaseLimits": [],
+    "proxyFailures": [],
+    "apiDegradation": [
+      {
+        "scenario": "account_activity",
+        "accounts": 200,
+        "p95Ms": 4800
+      },
+      {
+        "scenario": "account_activity",
+        "accounts": 200,
+        "errorRate": 0.068
+      },
+      {
+        "scenario": "account_activity",
+        "accounts": 200,
+        "p95Ms": 2680
+      },
+      {
+        "scenario": "account_activity",
+        "accounts": 500,
+        "p95Ms": 9200
+      },
+      {
+        "scenario": "account_activity",
+        "accounts": 500,
+        "errorRate": 0.185
+      },
+      {
+        "scenario": "account_activity",
+        "accounts": 50,
+        "p95Ms": 2800
+      },
+      {
+        "scenario": "content_generation",
+        "accounts": 200,
+        "p95Ms": 2400
+      },
+      {
+        "scenario": "content_generation",
+        "accounts": 500,
+        "p95Ms": 5200
+      },
+      {
+        "scenario": "content_generation",
+        "accounts": 500,
+        "errorRate": 0.125
+      },
+      {
+        "scenario": "queue_publishing",
+        "accounts": 500,
+        "p95Ms": 3800
+      },
+      {
+        "scenario": "queue_publishing",
+        "accounts": 500,
+        "errorRate": 0.095
+      }
+    ]
+  },
+  "systemCapacity": {
+    "maxStableAccounts": 50,
+    "maxDegradedAccounts": 200,
+    "breakingPoint": 500,
+    "recommendedLimit": 30
+  },
+  "recommendations": [
+    {
+      "category": "CPU",
+      "issue": "High CPU usage detected on containers",
+      "action": "Increase worker count or scale horizontally",
+      "impact": "high"
+    },
+    {
+      "category": "Redis",
+      "issue": "Queue backlog detected",
+      "action": "Increase consumer workers, optimize batching",
+      "impact": "high"
+    },
+    {
+      "category": "Scaling",
+      "issue": "System stable at 50 accounts",
+      "action": "Add PgBouncer, optimize DB connections",
+      "impact": "critical"
+    },
+    {
+      "category": "API",
+      "issue": "High latency in account_activity",
+      "action": "Add caching, optimize queries",
+      "impact": "medium"
+    }
+  ]
+}

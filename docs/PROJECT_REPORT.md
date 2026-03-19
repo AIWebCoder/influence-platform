@@ -1,8 +1,8 @@
 # Influence Platform — Project Report
 
 **Prepared by:** HAVET DIGITAL  
-**Date:** March 16, 2026  
-**Version:** 3.1.1  
+**Date:** March 18, 2026  
+**Version:** 3.1.2  
 **Status:** ✅ ALL PHASES COMPLETE  
 **Confidentiality:** Confidential — For Internal Use Only
 
@@ -34,7 +34,25 @@
 
 ---
 
-## 0. Recent Updates (March 16, 2026)
+## 0. Recent Updates (March 18, 2026)
+
+- **Content Factory**: Fixed Pydantic v2 compatibility - changed `regex` to `pattern` in auth.py (RegisterWithPhoneRequest).
+- **Database Schema**: Added missing columns to `publications` table: `failure_type`, `last_retry_at`, `max_retries`.
+- **Database Schema**: Added missing columns to `proxies` table: `response_time`, `success_rate`, `total_requests`, `failure_count`.
+- **API Fixes**: `/publications` and `/publications/stats` endpoints now functional.
+- **API Fixes**: `/proxies` endpoint now functional.
+
+---
+
+## 0.1 Previous Updates (March 16, 2026)
+
+- **Dashboard**: Added Light/Dark/System theme support with persisted preference, a sidebar toggle, and a pre-hydration script to prevent theme flash.
+- **Content Factory**: Weekly export endpoint is available at `GET /reports/weekly?format=json|pdf|excel` (authenticated). PDF/Excel formats require `reportlab` / `openpyxl`.
+- **Docs**: Added implementation notes in `docs/DARK_MODE_IMPLEMENTATION.md`.
+
+---
+
+## 0.1 Previous Updates (March 16, 2026)
 
 - **Dashboard**: Added Light/Dark/System theme support with persisted preference, a sidebar toggle, and a pre-hydration script to prevent theme flash.
 - **Content Factory**: Weekly export endpoint is available at `GET /reports/weekly?format=json|pdf|excel` (authenticated). PDF/Excel formats require `reportlab` / `openpyxl`.
@@ -568,5 +586,5 @@ K8s manifests available in `k8s/`:
 ---
 
 *End of Report*
-*Version 3.1.1 - Complete Platform*
-*Generated: March 16, 2026*
+*Version 3.1.2 - Database Schema Fixes*
+*Generated: March 18, 2026*
