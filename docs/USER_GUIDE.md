@@ -609,8 +609,8 @@ Tu postes les deux et tu vois lequel obtient plus de likes ! C'est ça le test A
 **Le tableau montre :**
 | Colonne | Signification |
 |---------|---------------|
-| Nom | Nom du test |
-| Statut | En cours ou terminé |
+| Nom     | Nom du test |
+| Statut  | En cours ou terminé |
 | Gagnant | Quelle version est la meilleure |
 | Amélioration | Combien le gagnant est meilleur ? |
 
