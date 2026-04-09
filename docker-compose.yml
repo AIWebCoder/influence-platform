@@ -122,6 +122,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ipuser}:${POSTGRES_PASSWORD:-ippassword}@pgbouncer:6432/${POSTGRES_DB:-influence_platform}
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:-changeme_in_production}
+      DISTRIBUTION_API_USERNAME: ${DISTRIBUTION_API_USERNAME}
+      DISTRIBUTION_API_PASSWORD: ${DISTRIBUTION_API_PASSWORD}
+      PROXY_CREDENTIALS_KEY: ${PROXY_CREDENTIALS_KEY:-}
       PROXY_PROVIDER: ${PROXY_PROVIDER:-brightdata}
       PROXY_USERNAME: ${PROXY_USERNAME}
       PROXY_PASSWORD: ${PROXY_PASSWORD}
@@ -148,6 +151,61 @@ services:
       start_period: 20s
 
   # ─────────────────────────────────────────
+  # EMULATOR CONTROLLER (Python + Appium)
+  # ─────────────────────────────────────────
+  emulator-controller:
+    build:
+      context: ./emulator-controller
+      dockerfile: Dockerfile
+    container_name: ip_emulator_controller
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DISTRIBUTION_ENGINE_BASE_URL: http://distribution-engine:3001
+      DISTRIBUTION_API_USERNAME: ${DISTRIBUTION_API_USERNAME}
+      DISTRIBUTION_API_PASSWORD: ${DISTRIBUTION_API_PASSWORD}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ipuser}:${POSTGRES_PASSWORD:-ippassword}@pgbouncer:6432/${POSTGRES_DB:-influence_platform}
+      REDIS_URL: redis://redis:6379
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-3-5-sonnet-20241022}
+      APPIUM_SERVER_URL: ${APPIUM_SERVER_URL:-http://host.docker.internal:4723}
+      ANDROID_APP_PACKAGE: ${ANDROID_APP_PACKAGE:-com.instagram.android}
+      ANDROID_APP_ACTIVITY: ${ANDROID_APP_ACTIVITY:-com.instagram.mainactivity.MainActivity}
+      ADB_PATH: ${ADB_PATH:-adb}
+      ADB_HOST: ${ADB_HOST:-host.docker.internal}
+      ADB_PORT: ${ADB_PORT:-5037}
+      MAX_PARALLEL_EMULATORS: ${MAX_PARALLEL_EMULATORS:-5}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-30}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-15}
+      IDLE_POLL_INTERVAL_SECONDS: ${IDLE_POLL_INTERVAL_SECONDS:-300}
+      MIN_HUMAN_DELAY_SECONDS: ${MIN_HUMAN_DELAY_SECONDS:-1.2}
+      MAX_HUMAN_DELAY_SECONDS: ${MAX_HUMAN_DELAY_SECONDS:-4.5}
+      METRICS_PORT: ${METRICS_PORT:-9101}
+      SCREENSHOT_SERVER_PORT: ${SCREENSHOT_SERVER_PORT:-9102}
+      SCREENSHOT_ONLY_IF_MISSING_AI: ${SCREENSHOT_ONLY_IF_MISSING_AI:-true}
+      PROXY_BRIDGE_LISTEN_HOST: ${PROXY_BRIDGE_LISTEN_HOST:-0.0.0.0}
+      PROXY_BRIDGE_PUBLIC_HOST: ${PROXY_BRIDGE_PUBLIC_HOST:-10.0.2.2}
+      PROXY_BRIDGE_PORT_START: ${PROXY_BRIDGE_PORT_START:-19100}
+      PROXY_BRIDGE_PORT_END: ${PROXY_BRIDGE_PORT_END:-19199}
+      LOG_DIR: /app/logs
+      DEFAULT_MAX_POSTS_PER_DAY: ${DEFAULT_MAX_POSTS_PER_DAY:-3}
+      DEFAULT_MAX_LIKES_PER_HOUR: ${DEFAULT_MAX_LIKES_PER_HOUR:-20}
+      DEFAULT_MAX_FOLLOWS_PER_DAY: ${DEFAULT_MAX_FOLLOWS_PER_DAY:-15}
+    ports:
+      - "9101:9101"
+      - "9102:9102"
+      - "19100-19199:19100-19199"
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      distribution-engine:
+        condition: service_healthy
+    volumes:
+      - ./emulator-controller:/app
+      - ./emulator-controller/logs:/app/logs
+
+  # ─────────────────────────────────────────
   # DASHBOARD (Next.js)
   # ─────────────────────────────────────────
   dashboard:
@@ -159,10 +217,12 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_CONTENT_API_URL: http://localhost:8000
-      NEXT_PUBLIC_DISTRIBUTION_API_URL: http://localhost:3001
+      NEXT_PUBLIC_CONTENT_API_URL: ${NEXT_PUBLIC_CONTENT_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_DISTRIBUTION_API_URL: ${NEXT_PUBLIC_DISTRIBUTION_API_URL:-http://localhost:3001}
+      NEXT_PUBLIC_EMULATOR_CONTROLLER_URL: ${NEXT_PUBLIC_EMULATOR_CONTROLLER_URL:-http://localhost:9102}
+      EMULATOR_CONTROLLER_URL: http://emulator-controller:9102
       NEXTAUTH_SECRET: ${JWT_SECRET:-changeme_in_production}
-      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
       NEXT_PUBLIC_SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_DSN: ${SENTRY_DSN:-}
     depends_on:
@@ -170,6 +230,8 @@ services:
         condition: service_healthy
       distribution-engine:
         condition: service_healthy
+      emulator-controller:
+        condition: service_started
     volumes:
       - ./dashboard/src:/app/src
       - ./dashboard/public:/app/public
@@ -199,6 +261,7 @@ services:
     depends_on:
       - content-factory
       - distribution-engine
+      - emulator-controller
 
   grafana:
     image: grafana/grafana:10.3.1
