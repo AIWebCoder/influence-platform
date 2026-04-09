@@ -15,6 +15,8 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const { initRedis, consumeQueue } = require('./core/redis');
 const { initDB } = require('./core/database');
+const authMiddleware = require('./middleware/auth');
+const authRouter = require('./managers/authRouter');
 const accountsRouter = require('./managers/accountsRouter');
 const healthRouter = require('./health/healthRouter');
 
@@ -24,9 +26,9 @@ app.use(express.json());
 
 // CORS — Must be before limiter to ensure 429s have CORS headers
 app.use(cors({
-  origin: '*', 
-  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: process.env.ALLOWED_ORIGINS?.split(',').map((o) => o.trim()) || ['http://localhost:3000'],
+  methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 // Rate Limiting — 5000 requests per 15 minutes per IP
@@ -41,6 +43,8 @@ app.use(limiter);
 
 // Routes
 app.use('/health', healthRouter);
+app.use('/auth', authRouter);
+app.use(authMiddleware);
 app.use('/accounts', accountsRouter);
 
 const publicationsRouter = require('./managers/publicationsRouter');
