@@ -16,6 +16,7 @@ import {
   Split,
   Users,
   ChevronRight,
+  Smartphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AlertBell } from "./AlertBell";
@@ -56,6 +57,7 @@ export function Sidebar() {
         { name: text.nav.publications, href: "/publications", icon: BookOpen },
         { name: text.nav.proxies, href: "/proxies", icon: Globe },
         { name: text.nav.campaigns, href: "/campaigns", icon: Activity },
+        { name: "Emulators", href: "/emulators", icon: Smartphone },
       ],
     },
     {
