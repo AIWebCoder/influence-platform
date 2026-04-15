@@ -75,21 +75,21 @@ In short:
 
 ## Section-by-Section Delivery Estimate
 
-| Area | PDF Expectation | Current State | Estimated Completion |
-|------|------------------|---------------|----------------------|
-| Core architecture | Modular platform with dashboard, generation, distribution, infra | Implemented | 85-90% |
-| Dashboard UI | Operational control interface across product modules | Implemented | 80-85% |
-| Content generation | AI generation workflows, queueing, variants, planning | Mostly implemented | 75-85% |
-| Database model | Broad schema supporting accounts, content, publications, analytics | Implemented with some inconsistencies | 75-85% |
-| Publication pipeline | Automated publishing workflow with worker model | Partially implemented | 50-65% |
-| Account creation lifecycle | Provisioning / creation / onboarding of accounts | Largely missing as automation | 20-30% |
-| Warm-up logic | Progressive account warm-up with safety rules | Partial safeguards only | 30-40% |
-| Automated interactions | Likes / follows / comments / DMs with risk controls | Mostly scaffolding | 20-35% |
-| Intelligent scheduling | Data-driven scheduling optimization | Partial / mixed with hardcoded UI | 35-50% |
-| Analytics and optimization | Real metrics collection and optimization feedback loop | Partial, some simulated | 35-50% |
-| Proxy and safety systems | Isolation, limits, proxy assignment, account safety | Present as foundation | 60-75% |
-| Multi-platform support | Instagram + TikTok + Twitter/X execution | Mostly incomplete beyond Instagram scaffolding | 15-30% |
-| Monitoring / observability | Alerts, health checks, infra visibility | Implemented at foundation level | 65-75% |
+|            Area            |                          PDF Expectation                           |                 Current State                  | Estimated Completion |
+| :------------------------: | :----------------------------------------------------------------: | :--------------------------------------------: | :------------------: |
+|     Core architecture      |  Modular platform with dashboard, generation, distribution, infra  |                  Implemented                   |        85-90%        |
+|        Dashboard UI        |        Operational control interface across product modules        |                  Implemented                   |        80-85%        |
+|     Content generation     |       AI generation workflows, queueing, variants, planning        |               Mostly implemented               |        75-85%        |
+|       Database model       | Broad schema supporting accounts, content, publications, analytics |     Implemented with some inconsistencies      |        75-85%        |
+|    Publication pipeline    |          Automated publishing workflow with worker model           |             Partially implemented              |        50-65%        |
+| Account creation lifecycle |          Provisioning / creation / onboarding of accounts          |         Largely missing as automation          |        20-30%        |
+|       Warm-up logic        |           Progressive account warm-up with safety rules            |            Partial safeguards only             |        30-40%        |
+|   Automated interactions   |        Likes / follows / comments / DMs with risk controls         |               Mostly scaffolding               |        20-35%        |
+|   Intelligent scheduling   |                Data-driven scheduling optimization                 |       Partial / mixed with hardcoded UI        |        35-50%        |
+| Analytics and optimization |       Real metrics collection and optimization feedback loop       |            Partial, some simulated             |        35-50%        |
+|  Proxy and safety systems  |        Isolation, limits, proxy assignment, account safety         |             Present as foundation              |        60-75%        |
+|   Multi-platform support   |              Instagram + TikTok + Twitter/X execution              | Mostly incomplete beyond Instagram scaffolding |        15-30%        |
+| Monitoring / observability |              Alerts, health checks, infra visibility               |        Implemented at foundation level         |        65-75%        |
 
 ---
 

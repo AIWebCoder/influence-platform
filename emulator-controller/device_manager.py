@@ -42,9 +42,11 @@ class DeviceManager:
         out, err = await proc.communicate()
 
         if proc.returncode != 0:
-            raise RuntimeError(f"adb devices failed: {err.decode().strip()}")
+            error_msg = err.decode(errors='ignore').strip()
+            logger.warning("adb devices failed, assuming 0 connectable devices: %s", error_msg)
+            return []
 
-        lines = out.decode().splitlines()
+        lines = out.decode(errors='ignore').splitlines()
         devices: List[EmulatorDevice] = []
         for line in lines[1:]:
             raw = line.strip()

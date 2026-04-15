@@ -82,8 +82,11 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ipuser}:${POSTGRES_PASSWORD:-ippassword}@pgbouncer:6432/${POSTGRES_DB:-influence_platform}
       REDIS_URL: redis://redis:6379
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      KIE_API_KEY: ${KIE_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-changeme_in_production}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}

@@ -16,12 +16,12 @@ Both backend services expose Prometheus-compatible metrics:
 ## 3. Alerts
 We recommend setting up the following alerts in Grafana/Alertmanager:
 
-| Alert Name | Condition | Severity |
-|------------|-----------|----------|
-| **QueueBacklog** | `queue_size > 50` for 5m | Warning |
-| **HighFailureRate** | `pub_failure_rate > 10%` | Critical |
-| **ServiceDown** | `up == 0` | Critical |
-| **RateLimitSpike** | `http_requests_status{code="429"} > 50` | Warning |
+|     Alert Name      |                Condition                | Severity |
+| :-----------------: | :-------------------------------------: | :------: |
+|  **QueueBacklog**   |        `queue_size > 50` for 5m         | Warning  |
+| **HighFailureRate** |        `pub_failure_rate > 10%`         | Critical |
+|   **ServiceDown**   |                `up == 0`                | Critical |
+| **RateLimitSpike**  | `http_requests_status{code="429"} > 50` | Warning  |
 
 ## 4. Grafana Dashboard
 Import the standard "Node.js" and "FastAPI" dashboards from Grafana Labs and add a custom panel for the Redis queue size using the provided metrics endpoint.

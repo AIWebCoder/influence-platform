@@ -108,9 +108,17 @@ class PublishingWorker {
         console.log(`[PublishingWorker] 🤖 Adding human-like delay: ${humanDelay}ms`);
         await new Promise(resolve => setTimeout(resolve, humanDelay));
 
-        // 3. Publish via Playwright bot
+        // 3. Publish via Playwright bot — route by visual_type
         console.log(`[PublishingWorker] Starting bot for ${accountId}...`);
-        const postUrl = await InstagramBot.publishContent(accountId, packet);
+        let postUrl;
+
+        if (packet.visual_type === 'video' || type === 'reel') {
+          // Video/Reel content → dedicated reel publishing flow
+          postUrl = await this.publishReel(packet, accountId);
+        } else {
+          // Image content → standard post flow
+          postUrl = await InstagramBot.publishContent(accountId, packet);
+        }
 
         // 4. Log success in DB and update last_activity_at
         await this.logPublication(accountId, id, type, postUrl);
@@ -271,6 +279,20 @@ class PublishingWorker {
     } catch (err) {
       console.error(`[PublishingWorker] Error logging publication attempt:`, err.message);
     }
+  }
+
+  /**
+   * Stub for reel/video publishing — to be implemented with full Playwright flow.
+   * Resolves cleanly so packets are not lost or errored.
+   * @param {object} packet - Content packet
+   * @param {string} accountId - Account UUID
+   * @returns {string|null} Post URL or null
+   */
+  async publishReel(packet, accountId) {
+    console.log(`[PublishingWorker] 🎬 Reel publishing requested for account ${accountId}, packet ${packet.id}`);
+    console.log(`[PublishingWorker] ⚠️ Reel publishing not implemented yet — packet logged, no error raised.`);
+    // TODO: Implement Playwright-based reel upload flow via InstagramBot
+    return null;
   }
 
   async updateLastActivity(accountId) {

@@ -28,7 +28,15 @@ redis_data/
 # Logs
 *.log
 logs/
+*.txt
+!docs/**/*.txt
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Temp / Debug
+nul
+opencode.json
+.playwright-mcp/
+.editorconfig

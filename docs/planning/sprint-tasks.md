@@ -6,12 +6,12 @@
 
 ## Vue d'ensemble
 
-| Phase | Jours | Focus | Statut |
-|-------|-------|-------|--------|
-| Phase 0 — Setup & Contrat | J1 → J3 | Infrastructure + Contrat JSON | ✅ Terminé |
-| Phase 1 — Développement | J4 → J18 | 3 tracks parallèles | ⏳ À venir |
-| Phase 2 — Intégration | J19 → J22 | Tests E2E & Branchement | ⏳ À venir |
-| Phase 3 — Livraison | J23 → J25 | Stabilisation & Démo MVP | ⏳ À venir |
+|           Phase           |   Jours   |             Focus             |   Statut    |
+| :-----------------------: | :-------: | :---------------------------: | :--------:  |
+| Phase 0 — Setup & Contrat |  J1 → J3  | Infrastructure + Contrat JSON | ✅ Terminé  | 
+| Phase 1 — Développement   | J4 → J18  |      3 tracks parallèles      | ⏳ À venir  |
+| Phase 2 — Intégration     | J19 → J22 |    Tests E2E & Branchement    | ⏳ À venir  |
+| Phase 3 — Livraison       | J23 → J25 |   Stabilisation & Démo MVP    | ⏳ À venir  |
 
 ---
 
