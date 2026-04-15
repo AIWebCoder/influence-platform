@@ -29,8 +29,8 @@ def mock_redis():
         yield mock
 
 @pytest.fixture(autouse=True)
-def mock_anthropic():
-    with patch('src.services.generation_task.AnthropicService.generate_caption', new_callable=AsyncMock) as mock:
+def mock_gemini():
+    with patch('src.services.generation_task.GeminiService.generate_caption', new_callable=AsyncMock) as mock:
         mock.return_value = {
             "caption": "Mocked AI caption",
             "hashtags": ["#mockai"]

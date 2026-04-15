@@ -16,4 +16,5 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# No --reload in Docker: bind-mounted src triggers the reloader and drops in-flight requests (ERR_EMPTY_RESPONSE).
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

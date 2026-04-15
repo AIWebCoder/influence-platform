@@ -9,7 +9,7 @@ from src.core.config import settings
 from src.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.services.content_service import ContentService
-from src.services.anthropic_service import AnthropicService
+from src.services.gemini_service import GeminiService
 from src.services.openai_service import OpenAIService
 from src.models.content import ContentPacket as DBContentPacket
 
@@ -34,6 +34,7 @@ class ContentPacket(BaseModel):
     type: str
     caption: str
     visual_url: Optional[str] = None
+    visual_type: Optional[str] = None
     hashtags: list[str]
     target_accounts: list[str]
     scheduled_at: str
@@ -63,6 +64,9 @@ async def generate_content(
 ):
     """
     Génère un packet de contenu via IA (Claude + DALL-E) en arrière-plan.
+
+    Deprecated for new integrations: prefer `POST /generation-jobs` for orchestrated,
+    step-tracked generation with scene-level retries.
     """
     from src.services.generation_task import generate_single_content
     
@@ -231,6 +235,7 @@ async def list_contents(skip: int = 0, limit: int = 100, db: AsyncSession = Depe
             type=p.type,
             caption=p.caption,
             visual_url=p.visual_url,
+            visual_type=p.visual_type,
             hashtags=p.hashtags,
             target_accounts=p.target_accounts,
             scheduled_at=p.scheduled_at.isoformat() if p.scheduled_at else "",
@@ -255,6 +260,7 @@ async def get_content(content_id: str, db: AsyncSession = Depends(get_db)):
         type=p.type,
         caption=p.caption,
         visual_url=p.visual_url,
+        visual_type=p.visual_type,
         hashtags=p.hashtags,
         target_accounts=p.target_accounts,
         scheduled_at=p.scheduled_at.isoformat() if p.scheduled_at else "",
@@ -287,6 +293,7 @@ async def update_content(content_id: str, request: ContentGenerateRequest, db: A
         type=p.type,
         caption=p.caption,
         visual_url=p.visual_url,
+        visual_type=p.visual_type,
         hashtags=p.hashtags,
         target_accounts=p.target_accounts,
         scheduled_at=p.scheduled_at.isoformat() if p.scheduled_at else "",
@@ -321,6 +328,7 @@ async def patch_content(content_id: str, request: ContentEditRequest, db: AsyncS
         type=p.type,
         caption=p.caption,
         visual_url=p.visual_url,
+        visual_type=p.visual_type,
         hashtags=p.hashtags,
         target_accounts=p.target_accounts,
         scheduled_at=p.scheduled_at.isoformat() if p.scheduled_at else "",

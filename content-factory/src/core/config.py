@@ -10,14 +10,20 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379"
     CLAUDE_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = "default_key_override_in_env_file"
-    CLAUDE_MODEL: str = "claude-3-haiku-20240307"
+    CLAUDE_MODEL: str = "claude-3-5-haiku-20241022"
+    GEMINI_API_KEY: str = ""
     DALLE_API_KEY: str = ""
     OPENAI_API_KEY: str = "default_key_override_in_env_file"
+    KIE_API_KEY: str = ""
     JWT_SECRET: str = "changeme"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 1440  # 24h
     ENVIRONMENT: str = "development"
     CONTENT_QUEUE_NAME: str = "content:ready"
+
+    # Rough cost model for UI estimates (abstract credits; tune per provider)
+    GENERATION_CREDITS_PER_IMAGE: float = 1.0
+    GENERATION_CREDITS_PER_VIDEO: float = 4.0
     
     # Admin credentials - MUST be set in production
     ADMIN_USERNAME: str = "admin"
@@ -46,6 +52,13 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+
+    def resolved_anthropic_api_key(self) -> str:
+        """Prefer ANTHROPIC_API_KEY; fall back to CLAUDE_API_KEY when unset or placeholder."""
+        k = (self.ANTHROPIC_API_KEY or "").strip()
+        if k and k != "default_key_override_in_env_file":
+            return k
+        return (self.CLAUDE_API_KEY or "").strip()
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

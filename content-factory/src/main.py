@@ -1,5 +1,7 @@
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
 import os
 import logging
@@ -13,7 +15,7 @@ from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from src.core.database import init_db
 from src.core.redis import init_redis
 from src.services.cache_service import init_cache
-from src.api import content, templates, niches, health, auth, scheduling, hashtags, alerts, users, reports, analytics, billing
+from src.api import content, templates, niches, health, auth, scheduling, hashtags, alerts, users, reports, analytics, billing, generation_jobs
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -87,6 +89,9 @@ async def recovery_and_logging_middleware(request, call_next):
         logger.info(f"Method: {request.method} Path: {request.url.path} Status: {response.status_code} Duration: {process_time}s")
         return response
     except Exception as exc:
+        # Let FastAPI / Starlette return proper status + detail (422, 404, etc.)
+        if isinstance(exc, (StarletteHTTPException, RequestValidationError)):
+            raise exc
         logger.error(f"FATAL ERROR on {request.url.path}: {str(exc)}", exc_info=True)
         from fastapi.responses import JSONResponse
         return JSONResponse(
@@ -110,6 +115,7 @@ app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(niches.router, prefix="/niches", tags=["Niches"])
 app.include_router(templates.router, prefix="/templates", tags=["Templates"])
 app.include_router(content.router, prefix="/content", tags=["Content"])
+app.include_router(generation_jobs.router, prefix="/generation-jobs", tags=["Generation Jobs"])
 app.include_router(scheduling.router, prefix="/scheduling", tags=["Scheduling"])
 app.include_router(hashtags.router, prefix="/hashtags", tags=["Hashtags"])
 app.include_router(alerts.router, prefix="/alerts", tags=["Alerts"])

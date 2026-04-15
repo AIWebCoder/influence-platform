@@ -45,6 +45,7 @@ class ContentPacket(Base):
     caption = Column(Text)
     visual_url = Column(Text)
     visual_urls = Column(JSONB, default=list)
+    visual_type = Column(String(10), nullable=True)  # "image" or "video"
     hashtags = Column(JSONB, default=list)
     target_accounts = Column(JSONB, default=list)
     scheduled_at = Column(DateTime(timezone=True), index=True)

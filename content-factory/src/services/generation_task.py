@@ -10,8 +10,8 @@ from src.core.database import AsyncSessionLocal
 from src.core.config import settings
 from src.core.redis import push_to_queue
 
-from src.services.anthropic_service import AnthropicService
-from src.services.openai_service import OpenAIService
+from src.services.gemini_service import GeminiService
+from src.services.kie_service import KieService
 from src.services.content_service import ContentService
 from src.models.content import ContentPacket as DBContentPacket
 from src.api.content import ContentGenerateRequest, ContentPacket
@@ -39,37 +39,46 @@ async def generate_single_content(request: ContentGenerateRequest, db_packet_id:
         if not packet:
             return
             
-        anthropic = AnthropicService()
-        openai_svc = OpenAIService()
+        gemini = GeminiService()
+        kie_svc = KieService()
 
         max_attempts = 3
         for attempt in range(max_attempts):
             try:
                 # 1. Text Generation
                 variant_style = packet.metadata_json.get("variant_style") if packet.metadata_json else None
-                generated_data = await anthropic.generate_caption(request.niche, variant_style=variant_style)
+                generated_data = await gemini.generate_caption(request.niche, variant_style=variant_style)
                 
                 # Deduplication check
                 is_duplicate = await check_duplication(generated_data["caption"], request.niche, db)
                 if is_duplicate and attempt < max_attempts - 1:
                     continue # Try generating again
                 
-                # 2. Visual Generation (graceful fallback — don't block caption)
+                # 2. Visual Generation via kie.ai (image or video based on content type)
                 visual_url = None
-                if settings.OPENAI_API_KEY and settings.OPENAI_API_KEY not in ("", "default_key_override_in_env_file", "sk-..."):
+                visual_type = "image"  # default
+                if settings.KIE_API_KEY and settings.KIE_API_KEY not in ("",):
                     try:
                         visual_prompt = f"A high quality aesthetic instagram image for the '{request.niche}' niche. The topic matches: {generated_data['caption'][:50]}..."
-                        visual_url = await openai_svc.generate_image(visual_prompt)
+                        if request.type == "reel":
+                            visual_url = await kie_svc.generate_video(visual_prompt, duration=15)
+                            visual_type = "video"
+                        else:
+                            # story → 9:16, post/carousel → 1:1
+                            aspect_ratio = "9:16" if request.type == "story" else "1:1"
+                            visual_url = await kie_svc.generate_image(visual_prompt, aspect_ratio=aspect_ratio)
+                            visual_type = "image"
                     except Exception as img_err:
-                        print(f"⚠️ DALL-E image generation failed (non-blocking): {img_err}")
+                        print(f"⚠️ kie.ai visual generation failed (non-blocking): {img_err}")
                         visual_url = None
                 else:
-                    print("ℹ️ OPENAI_API_KEY not configured — skipping image generation")
+                    print("ℹ️ KIE_API_KEY not configured — skipping visual generation")
                 
                 # Update Packet
                 packet.caption = generated_data["caption"]
                 packet.hashtags = generated_data["hashtags"]
                 packet.visual_url = visual_url
+                packet.visual_type = visual_type
                 packet.status = "queued" # ready for distribution
                 
                 await db.commit()
@@ -81,6 +90,7 @@ async def generate_single_content(request: ContentGenerateRequest, db_packet_id:
                     type=packet.type,
                     caption=packet.caption,
                     visual_url=packet.visual_url,
+                    visual_type=packet.visual_type,
                     hashtags=packet.hashtags,
                     target_accounts=packet.target_accounts,
                     scheduled_at=packet.scheduled_at.isoformat() if packet.scheduled_at else datetime.now(timezone.utc).isoformat(),

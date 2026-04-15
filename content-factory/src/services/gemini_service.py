@@ -2,8 +2,10 @@ import json
 import logging
 import random
 from typing import Optional
-from anthropic import AsyncAnthropic, APIError, APITimeoutError, RateLimitError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+import google.generativeai as genai
+from google.api_core.exceptions import GoogleAPIError, RetryError
 
 from src.core.config import settings
 
@@ -12,16 +14,19 @@ logger = logging.getLogger(__name__)
 class ContentGenerationError(Exception):
     pass
 
-class AnthropicService:
+class GeminiService:
     def __init__(self):
-        key = settings.resolved_anthropic_api_key()
-        self.client = AsyncAnthropic(api_key=key)
-        self.model = settings.CLAUDE_MODEL
+        key = (settings.GEMINI_API_KEY or "").strip()
+        if not key:
+            # We don't raise here to allow instantiation, but generation will fail if unconfigured.
+            pass
+        genai.configure(api_key=key)
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((APITimeoutError, RateLimitError, APIError)),
+        retry=retry_if_exception_type((GoogleAPIError, RetryError)),
         reraise=True
     )
     async def generate_caption(
@@ -31,10 +36,8 @@ class AnthropicService:
         topic: Optional[str] = None,
     ) -> dict:
         """
-        Generates an Instagram caption and hashtags based on the provided niche using Claude.
-        Optional variant_style allows for specific A/B testing instructions (e.g., 'educational', 'promotional').
-        Optional topic narrows the creative direction.
-        Retries up to 3 times on transient network/API errors.
+        Generates an Instagram caption and hashtags based on the provided niche using Gemini.
+        Returns JSON dict with 'caption' and 'hashtags'.
         """
         system_prompt = (
             "You are an expert social media manager and copywriter specializing in Instagram growth. "
@@ -52,21 +55,19 @@ class AnthropicService:
         )
 
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=1000,
-                temperature=0.7,
-                system=system_prompt,
-                messages=[
-                    {"role": "user", "content": user_prompt}
-                ]
+            response = await self.model.generate_content_async(
+                contents=[
+                    {"role": "user", "parts": [system_prompt, user_prompt]}
+                ],
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.7,
+                    response_mime_type="application/json",
+                )
             )
 
-            # Extract the response text
-            content_text = response.content[0].text
+            content_text = response.text
             
-            # Parse the JSON response
-            # Claude sometimes includes markdown json blocks despite instructions, so we clean it just in case
+            # Clean possible markdown blocks
             if content_text.startswith("```json"):
                 content_text = content_text[7:-3].strip()
             elif content_text.startswith("```"):
@@ -80,16 +81,16 @@ class AnthropicService:
             return result
 
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Claude response as JSON: {content_text}")
+            logger.error(f"Failed to parse Gemini response as JSON: {content_text}")
             raise ContentGenerationError("Invalid response format from AI model") from e
         except Exception as e:
-            logger.error(f"Error calling Anthropic API: {str(e)}")
+            logger.error(f"Error calling Gemini API: {str(e)}")
             raise
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((APITimeoutError, RateLimitError, APIError)),
+        retry=retry_if_exception_type((GoogleAPIError, RetryError)),
         reraise=True,
     )
     async def generate_scene_plan(
@@ -119,39 +120,50 @@ class AnthropicService:
             f"Produce exactly {n} scenes for one cohesive short video."
         )
 
-        response = await self.client.messages.create(
-            model=self.model,
-            max_tokens=2000,
-            temperature=0.75,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        content_text = response.content[0].text
-        if content_text.startswith("```json"):
-            content_text = content_text[7:-3].strip()
-        elif content_text.startswith("```"):
-            content_text = content_text[3:-3].strip()
-
-        parsed = json.loads(content_text)
-        scenes = parsed.get("scenes")
-        if not isinstance(scenes, list) or len(scenes) == 0:
-            raise ContentGenerationError("Invalid scenes payload from AI model")
-
-        normalized = []
-        for i, s in enumerate(scenes):
-            if not isinstance(s, dict):
-                continue
-            dur = int(s.get("duration", 4))
-            if dur not in (3, 4, 5):
-                dur = min(max(dur, 3), 5) if dur else 4
-            normalized.append(
-                {
-                    "scene_index": int(s.get("scene_index", i)),
-                    "prompt": str(s.get("prompt", "")).strip(),
-                    "duration": dur,
-                    "role": str(s.get("role", "motion")).strip()[:32],
-                }
+        try:
+            response = await self.model.generate_content_async(
+                contents=[
+                    {"role": "user", "parts": [system_prompt, user_prompt]}
+                ],
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.75,
+                    response_mime_type="application/json",
+                )
             )
-        if len(normalized) < 6:
-            raise ContentGenerationError("Too few scenes returned from AI model")
-        return normalized[:8]
+
+            content_text = response.text
+            if content_text.startswith("```json"):
+                content_text = content_text[7:-3].strip()
+            elif content_text.startswith("```"):
+                content_text = content_text[3:-3].strip()
+
+            parsed = json.loads(content_text)
+            scenes = parsed.get("scenes")
+            if not isinstance(scenes, list) or len(scenes) == 0:
+                raise ContentGenerationError("Invalid scenes payload from AI model")
+
+            normalized = []
+            for i, s in enumerate(scenes):
+                if not isinstance(s, dict):
+                    continue
+                dur = int(s.get("duration", 4))
+                if dur not in (3, 4, 5):
+                    dur = min(max(dur, 3), 5) if dur else 4
+                normalized.append(
+                    {
+                        "scene_index": int(s.get("scene_index", i)),
+                        "prompt": str(s.get("prompt", "")).strip(),
+                        "duration": dur,
+                        "role": str(s.get("role", "motion")).strip()[:32],
+                    }
+                )
+            if len(normalized) < 6:
+                raise ContentGenerationError("Too few scenes returned from AI model")
+            return normalized[:8]
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Gemini response as JSON: {content_text}")
+            raise ContentGenerationError("Invalid response format from AI model") from e
+        except Exception as e:
+            logger.error(f"Error calling Gemini API: {str(e)}")
+            raise
