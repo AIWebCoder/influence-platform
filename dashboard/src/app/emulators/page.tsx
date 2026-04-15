@@ -35,6 +35,9 @@ export default function EmulatorsPage() {
     const load = async () => {
       try {
         const res = await fetch("/api/emulators", { cache: "no-store" });
+        if (!res.ok) {
+          throw new Error(`API returned status ${res.status}`);
+        }
         const payload = (await res.json()) as EmulatorResponse;
         if (mounted) setData(payload);
       } catch {
@@ -92,6 +95,9 @@ export default function EmulatorsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      if (!res.ok) {
+        throw new Error(`API error ${res.status}`);
+      }
       const body = (await res.json()) as { status: string; error?: string };
       if (!res.ok || body.status !== "success") {
         setErrorBySerial((prev) => ({

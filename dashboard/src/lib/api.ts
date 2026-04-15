@@ -12,6 +12,11 @@ const contentClient = axios.create({
   timeout: 5000,
 });
 
+const contentClientLongTimeout = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_CONTENT_API_URL || 'http://localhost:8000',
+  timeout: 120000,
+});
+
 export const api = {
   distribution: {
     getAccounts: async () => {
@@ -140,6 +145,84 @@ export const api = {
       const response = await contentClient.patch(`/content/${id}`, data);
       return response.data;
     }
+  },
+  generationJobs: {
+    create: async (data: {
+      content_type: string;
+      mode: string;
+      niche: string;
+      topic: string;
+      target_accounts: string[];
+      scheduled_at?: string;
+      template_id?: string;
+      campaign_id?: string;
+      scene_count?: number;
+    }) => {
+      const response = await contentClientLongTimeout.post('/generation-jobs', data);
+      return response.data as { job_id: string };
+    },
+    launch: async (jobId: string) => {
+      const response = await contentClient.post(`/generation-jobs/${jobId}/launch`);
+      return response.data as { status: string; job_id: string };
+    },
+    markReady: async (jobId: string) => {
+      const response = await contentClient.post(`/generation-jobs/${jobId}/ready`);
+      return response.data as { status: string; job_id: string };
+    },
+    getCostEstimate: async (jobId: string) => {
+      const response = await contentClient.get(`/generation-jobs/${jobId}/cost-estimate`);
+      return response.data as {
+        total_credits: number;
+        currency: string;
+        breakdown: Array<{ line: string; units: number; unit_credits: number; subtotal: number }>;
+      };
+    },
+    get: async (jobId: string) => {
+      const response = await contentClient.get(`/generation-jobs/${jobId}`);
+      return response.data;
+    },
+    previewScenes: async (data: {
+      content_type: string;
+      mode: string;
+      niche: string;
+      topic: string;
+      scene_count?: number;
+    }) => {
+      const response = await contentClientLongTimeout.post('/generation-jobs/preview-scenes', data);
+      return response.data as Array<{
+        scene_index: number;
+        prompt: string;
+        duration: number;
+        role?: string;
+      }>;
+    },
+    retryStep: async (jobId: string, step_name: string) => {
+      const response = await contentClient.post(`/generation-jobs/${jobId}/retry-step`, { step_name });
+      return response.data;
+    },
+    retryScene: async (jobId: string, scene_id: string) => {
+      const response = await contentClient.post(`/generation-jobs/${jobId}/retry-scene`, { scene_id });
+      return response.data;
+    },
+    patchScene: async (
+      jobId: string,
+      sceneId: string,
+      data: { prompt?: string; duration?: number; scene_role?: string; metadata?: Record<string, unknown> }
+    ) => {
+      const response = await contentClient.patch(`/generation-jobs/${jobId}/scenes/${sceneId}`, data);
+      return response.data;
+    },
+    reorderScenes: async (jobId: string, sceneIds: string[]) => {
+      const response = await contentClient.put(`/generation-jobs/${jobId}/scenes/reorder`, { scene_ids: sceneIds });
+      return response.data;
+    },
+    previewScene: async (jobId: string, sceneId: string, kind: 'image' | 'video' = 'image') => {
+      const response = await contentClientLongTimeout.post(
+        `/generation-jobs/${jobId}/scenes/${sceneId}/preview`,
+        { kind }
+      );
+      return response.data;
+    },
   },
   alerts: {
     getAlerts: async (isRead?: boolean) => {

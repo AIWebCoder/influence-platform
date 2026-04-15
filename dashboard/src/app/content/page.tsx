@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { 
   Sparkles, 
@@ -13,7 +14,8 @@ import {
   Calendar, 
   Clock,
   Pencil,
-  Eye
+  Eye,
+  Clapperboard
 } from "lucide-react";
 import clsx from "clsx";
 import { cn } from "@/lib/utils";
@@ -179,6 +181,20 @@ export default function ContentPlannerPage() {
           {toast.message}
         </div>
       )}
+
+      <Link
+        href="/generation-studio"
+        className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-indigo-200 bg-indigo-50/90 px-5 py-4 text-sm font-semibold text-indigo-950 shadow-sm transition hover:border-indigo-300 hover:bg-indigo-50 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-100 dark:hover:bg-indigo-500/15"
+      >
+        <span className="flex items-center gap-3">
+          <Clapperboard className="h-5 w-5 shrink-0 text-indigo-600 dark:text-indigo-300" />
+          <span>
+            <span className="block text-xs font-bold uppercase tracking-widest text-indigo-600/80 dark:text-indigo-300/80">New</span>
+            Generation Studio — draft jobs, scene timeline, cost estimate, launch when ready.
+          </span>
+        </span>
+        <span className="text-xs font-black uppercase tracking-widest text-indigo-600 dark:text-indigo-300">Open →</span>
+      </Link>
 
       {/* Header bar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">

@@ -17,6 +17,7 @@ import {
   Users,
   ChevronRight,
   Smartphone,
+  Clapperboard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AlertBell } from "./AlertBell";
@@ -54,6 +55,7 @@ export function Sidebar() {
         { name: text.nav.accounts, href: "/accounts", icon: Users },
         { name: text.nav.accountHealth, href: "/account-health", icon: ShieldCheck },
         { name: text.nav.contentPlanner, href: "/content", icon: Calendar },
+        { name: text.nav.generationStudio, href: "/generation-studio", icon: Clapperboard },
         { name: text.nav.publications, href: "/publications", icon: BookOpen },
         { name: text.nav.proxies, href: "/proxies", icon: Globe },
         { name: text.nav.campaigns, href: "/campaigns", icon: Activity },

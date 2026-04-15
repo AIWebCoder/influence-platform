@@ -10,6 +10,10 @@ export async function GET() {
     const res = await fetch(`${controllerBase}/emulators`, {
       cache: "no-store",
     });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Emulator controller returned ${res.status}: ${text}`);
+    }
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch (error) {

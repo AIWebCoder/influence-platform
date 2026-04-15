@@ -6,6 +6,7 @@ export const config = {
     "/accounts(.*)",
     "/campaigns(.*)",
     "/content(.*)",
+    "/generation-studio(.*)",
     "/emulators(.*)"
   ]
 };
