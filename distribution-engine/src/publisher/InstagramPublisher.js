@@ -11,12 +11,13 @@ class InstagramPublisher extends Publisher {
 
   async publish(contentPacket, account) {
     try {
-      // Playwright-based Instagram publishing (existing logic)
-      const { publishToInstagram } = require('../managers/PublishingManager');
-      const result = await publishToInstagram(contentPacket, account);
+      const PublishingWorker = require('./PublishingWorker');
+      const accountId = account.id || account.account_id;
+      const type = contentPacket.type || 'post';
+      const postUrl = await PublishingWorker.executeExternalPublish(accountId, contentPacket, type);
       return {
         success: true,
-        externalId: result?.postId || null,
+        externalId: postUrl,
       };
     } catch (error) {
       return {

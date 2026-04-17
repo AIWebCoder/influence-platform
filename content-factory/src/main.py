@@ -12,10 +12,12 @@ import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
-from src.core.database import init_db
+from src.core.database import AsyncSessionLocal, init_db
 from src.core.redis import init_redis
 from src.services.cache_service import init_cache
 from src.api import content, templates, niches, health, auth, scheduling, hashtags, alerts, users, reports, analytics, billing, generation_jobs
+from src.services.pipeline_trace import configure_pipeline_trace_logging
+from src.services.generation_job_service import recover_stale_jobs
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -43,6 +45,13 @@ handler = logging.StreamHandler()
 handler.setFormatter(JSONFormatter())
 root_logger.addHandler(handler)
 
+# Pipeline trace: raw JSON lines → content-factory/logs/pipeline_trace.log (not wrapped by root JSONFormatter)
+try:
+    _trace_path = configure_pipeline_trace_logging()
+    print(f"✅ Pipeline trace log: {_trace_path}")
+except OSError as e:
+    print(f"⚠️ Pipeline trace file logging disabled: {e}")
+
 # Get logger for this module
 logger = logging.getLogger(__name__)
 
@@ -64,6 +73,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     await init_redis()
     await init_cache(os.getenv("REDIS_URL", "redis://localhost:6379"))
+    async with AsyncSessionLocal() as db:
+        recovered = await recover_stale_jobs(db, stale_after_minutes=10)
+        await db.commit()
+        if recovered:
+            logger.warning("Recovered %s stale running generation jobs on startup", recovered)
     print("✅ Content Factory démarré")
     yield
     # Shutdown

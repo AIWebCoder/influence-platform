@@ -14,7 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Code source
 COPY . .
 
+RUN chmod +x /app/docker-entrypoint.sh
+
 EXPOSE 8000
 
+# Run Alembic then API so generation_jobs / organizations / etc. exist on fresh DB.
 # No --reload in Docker: bind-mounted src triggers the reloader and drops in-flight requests (ERR_EMPTY_RESPONSE).
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

@@ -10,7 +10,6 @@ from src.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.services.content_service import ContentService
 from src.services.gemini_service import GeminiService
-from src.services.openai_service import OpenAIService
 from src.models.content import ContentPacket as DBContentPacket
 
 router = APIRouter()

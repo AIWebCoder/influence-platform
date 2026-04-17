@@ -61,7 +61,9 @@ async def generate_single_content(request: ContentGenerateRequest, db_packet_id:
                     try:
                         visual_prompt = f"A high quality aesthetic instagram image for the '{request.niche}' niche. The topic matches: {generated_data['caption'][:50]}..."
                         if request.type == "reel":
-                            visual_url = await kie_svc.generate_video(visual_prompt, duration=15)
+                            safe_duration = max(3, min(5, 5))
+                            vres = await kie_svc.generate_video(visual_prompt, duration=safe_duration)
+                            visual_url = vres.get("url") if isinstance(vres, dict) else vres
                             visual_type = "video"
                         else:
                             # story → 9:16, post/carousel → 1:1

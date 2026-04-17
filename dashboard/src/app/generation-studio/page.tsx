@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -26,7 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CheckCircle2, Circle, GripVertical, Loader2, RefreshCw, Rocket, Video, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, GripVertical, Loader2, RefreshCw, Rocket, Square, Video, XCircle } from "lucide-react";
 import toast from "react-hot-toast";
 
 type ContentType = "post" | "reel" | "story";
@@ -72,6 +72,7 @@ type GenerationJobDetail = {
   id: string;
   status: string;
   progress: number;
+  step_control?: Record<string, string>;
   input_payload: Record<string, unknown>;
   output_url?: string | null;
   logs: Array<{ ts?: string; level?: string; message?: string }>;
@@ -89,13 +90,15 @@ const NICHE_OPTIONS = ["fitness", "food", "travel", "business", "lifestyle"] as 
 function statusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
   if (status === "completed" || status === "queued") return "default";
   if (status === "failed") return "destructive";
-  if (status === "running" || status === "ready") return "secondary";
+  if (status === "running" || status === "ready" || status === "cancelling") return "secondary";
+  if (status === "cancelled") return "outline";
   return "outline";
 }
 
 function StepIcon({ status }: { status: string }) {
   if (status === "completed") return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
   if (status === "failed") return <XCircle className="h-4 w-4 text-red-600" />;
+  if (status === "cancelled") return <Square className="h-4 w-4 text-muted-foreground" />;
   if (status === "running") return <Loader2 className="h-4 w-4 animate-spin text-amber-600" />;
   return <Circle className="h-4 w-4 text-muted-foreground" />;
 }
@@ -113,7 +116,11 @@ export default function GenerationStudioPage() {
   const [createLoading, setCreateLoading] = useState(false);
   const [launchLoading, setLaunchLoading] = useState(false);
   const [readyLoading, setReadyLoading] = useState(false);
-  const [previewingSceneId, setPreviewingSceneId] = useState<string | null>(null);
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [cancelStepLoading, setCancelStepLoading] = useState<string | null>(null);
+  const [previewingTarget, setPreviewingTarget] = useState<{ sceneId: string; kind: "image" | "video" } | null>(null);
+  /** At most one scene video panel expanded (toggle with "Vid preview" / "Hide video"). */
+  const [openSceneVideoId, setOpenSceneVideoId] = useState<string | null>(null);
 
   const [editOpen, setEditOpen] = useState(false);
   const [editScene, setEditScene] = useState<JobScene | DraftScene | null>(null);
@@ -130,8 +137,12 @@ export default function GenerationStudioPage() {
   const { data: job, mutate } = useSWR<GenerationJobDetail | undefined>(
     jobId ? ["generation-job", jobId] : null,
     () => fetchJob(jobId as string),
-    { refreshInterval: jobId ? 3000 : 0 }
+    { refreshInterval: jobId ? 2000 : 0 }
   );
+
+  useEffect(() => {
+    setOpenSceneVideoId(null);
+  }, [jobId]);
 
   const sortedScenes: Array<JobScene | DraftScene> = useMemo(() => {
     if (job?.scenes?.length) {
@@ -146,7 +157,13 @@ export default function GenerationStudioPage() {
   );
 
   const canLaunch = job && (job.status === "draft" || job.status === "ready");
-  const pipelineActive = job && job.status === "running";
+  const jobIsCancelling = job?.status === "cancelling";
+  const jobIsCancelled = job?.status === "cancelled";
+  const canStopPipeline = job && (job.status === "running" || job.status === "pending");
+  const sceneActionsLocked = Boolean(jobIsCancelling);
+  const sceneRegenDisabled = Boolean(jobIsCancelling || jobIsCancelled);
+  const livePollActive = job && ["running", "pending", "cancelling"].includes(job.status);
+  const isVerticalVideo = contentType === "reel" || contentType === "story";
 
   const handlePreview = async () => {
     if (!topic.trim()) {
@@ -211,6 +228,21 @@ export default function GenerationStudioPage() {
     }
   };
 
+  const handleStopPipeline = async () => {
+    if (!jobId) return;
+    setCancelLoading(true);
+    try {
+      await api.generationJobs.cancel(jobId);
+      await mutate();
+      toast.success("Stopping… partial results are kept.");
+    } catch (e: unknown) {
+      const msg = e && typeof e === "object" && "response" in e ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail : null;
+      toast.error(typeof msg === "string" ? msg : "Could not request stop.");
+    } finally {
+      setCancelLoading(false);
+    }
+  };
+
   const handleMarkReady = async () => {
     if (!jobId) return;
     setReadyLoading(true);
@@ -227,15 +259,18 @@ export default function GenerationStudioPage() {
 
   const handleSceneMediaPreview = async (sceneId: string, kind: "image" | "video") => {
     if (!jobId) return;
-    setPreviewingSceneId(sceneId);
+    setPreviewingTarget({ sceneId, kind });
     try {
       await api.generationJobs.previewScene(jobId, sceneId, kind);
       await mutate();
       toast.success(kind === "video" ? "Video preview generated." : "Image preview generated.");
+      if (kind === "video") {
+        setOpenSceneVideoId(sceneId);
+      }
     } catch {
       toast.error("Preview generation failed.");
     } finally {
-      setPreviewingSceneId(null);
+      setPreviewingTarget(null);
     }
   };
 
@@ -354,6 +389,32 @@ export default function GenerationStudioPage() {
     }
   };
 
+  const cancelStep = async (stepName: string) => {
+    if (!jobId) return;
+    setCancelStepLoading(stepName);
+    try {
+      await api.generationJobs.cancelStep(jobId, stepName);
+      await mutate();
+      toast.success(`Stopping ${stepName}…`);
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === "object" && "response" in e
+          ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : null;
+      toast.error(typeof msg === "string" ? msg : "Cancel step failed.");
+    } finally {
+      setCancelStepLoading(null);
+    }
+  };
+
+  const pipelineStepControl = (stepName: string, stepStatus: string) => {
+    const c = job?.step_control?.[stepName];
+    if (c) return c;
+    if (stepStatus === "completed") return "completed";
+    if (stepStatus === "cancelled") return "cancelled";
+    return "pending";
+  };
+
   const logs = job?.logs ?? [];
   const maxDur = Math.max(1, ...sortedScenes.map((s) => s.duration || 1));
 
@@ -455,10 +516,28 @@ export default function GenerationStudioPage() {
                 ) : null}
               </div>
               {jobId && (
-                <p className="text-xs text-muted-foreground">
-                  Job <span className="font-mono">{jobId.slice(0, 8)}…</span>
-                  {job ? ` · ${job.status}` : ""}
-                </p>
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    Job <span className="font-mono">{jobId.slice(0, 8)}…</span>
+                    {job ? ` · ${job.status}` : ""}
+                  </p>
+                  {canStopPipeline ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-destructive/50 text-destructive hover:bg-destructive/10 dark:border-destructive/60"
+                      disabled={cancelLoading}
+                      onClick={handleStopPipeline}
+                    >
+                      {cancelLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
+                      Cancel job
+                    </Button>
+                  ) : null}
+                  {jobIsCancelling ? (
+                    <p className="text-xs text-muted-foreground">Stopping… the pipeline will exit after the current step.</p>
+                  ) : null}
+                </div>
               )}
               {job?.cost_estimate ? (
                 <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs">
@@ -498,8 +577,8 @@ export default function GenerationStudioPage() {
                       return (
                         <div
                           key={sid}
-                          draggable
-                          onDragStart={() => setDragSceneId(sid)}
+                          draggable={!jobIsCancelling}
+                          onDragStart={() => !jobIsCancelling && setDragSceneId(sid)}
                           onDragOver={(e) => e.preventDefault()}
                           onDrop={() => onDropOnScene(sid)}
                           style={{ flex: `${w} 1 0` }}
@@ -529,6 +608,15 @@ export default function GenerationStudioPage() {
                       const key = sid ?? `draft-${scene.scene_index}`;
                       const st = "status" in scene && scene.status ? scene.status : "local";
                       const meta = "metadata" in scene ? scene.metadata : undefined;
+                      const jobScene = sid ? (scene as JobScene) : null;
+                      const videoSrc =
+                        meta?.preview_video_url ??
+                        (jobScene?.video_url ? String(jobScene.video_url) : undefined);
+                      const videoPanelOpen = Boolean(sid && openSceneVideoId === sid && videoSrc);
+                      const imgPreviewBusy =
+                        Boolean(sid && previewingTarget?.sceneId === sid && previewingTarget.kind === "image");
+                      const vidPreviewBusy =
+                        Boolean(sid && previewingTarget?.sceneId === sid && previewingTarget.kind === "video");
                       return (
                         <div key={key} className="rounded-lg border border-border bg-card/60 p-3 shadow-sm">
                           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -547,33 +635,71 @@ export default function GenerationStudioPage() {
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    disabled={previewingSceneId === sid}
+                                    disabled={sceneActionsLocked || sceneRegenDisabled || imgPreviewBusy}
                                     onClick={() => handleSceneMediaPreview(sid, "image")}
                                   >
-                                    {previewingSceneId === sid ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                                    {imgPreviewBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
                                     Img preview
                                   </Button>
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    disabled={previewingSceneId === sid}
-                                    onClick={() => handleSceneMediaPreview(sid, "video")}
+                                    disabled={sceneActionsLocked || sceneRegenDisabled || vidPreviewBusy}
+                                    onClick={() => {
+                                      if (!videoSrc) {
+                                        void handleSceneMediaPreview(sid, "video");
+                                        return;
+                                      }
+                                      setOpenSceneVideoId((prev) => (prev === sid ? null : sid));
+                                    }}
                                   >
-                                    Vid preview
+                                    {vidPreviewBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                                    {videoPanelOpen ? "Hide video" : "Vid preview"}
                                   </Button>
                                 </>
                               ) : null}
-                              <Button size="sm" variant="outline" onClick={() => openEdit(scene)}>
+                              <Button size="sm" variant="outline" disabled={sceneActionsLocked} onClick={() => openEdit(scene)}>
                                 Edit
                               </Button>
-                              <Button size="sm" variant="destructive" onClick={() => regenerateScene(scene)}>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                disabled={sceneActionsLocked || sceneRegenDisabled}
+                                onClick={() => regenerateScene(scene)}
+                              >
                                 Retry media
                               </Button>
                             </div>
                           </div>
                           <p className="text-sm leading-relaxed">{scene.prompt}</p>
-                          {meta?.preview_video_url ? (
-                            <video src={meta.preview_video_url} className="mt-2 max-h-32 w-full rounded border" controls playsInline />
+                          {videoSrc ? (
+                            <div
+                              className={cn(
+                                "video-container mt-3 overflow-hidden rounded-lg border border-border/50 bg-muted/20 shadow-md shadow-black/[0.07] ring-1 ring-black/[0.04] transition-[max-height,opacity] duration-300 ease-in-out dark:bg-muted/10 dark:shadow-black/40 dark:ring-white/[0.06]",
+                                videoPanelOpen ? "max-h-[560px] opacity-100" : "max-h-0 opacity-0"
+                              )}
+                              aria-hidden={!videoPanelOpen}
+                            >
+                              <div
+                                className={cn(
+                                  "p-2 transition-opacity duration-300 ease-in-out",
+                                  videoPanelOpen ? "opacity-100" : "pointer-events-none opacity-0"
+                                )}
+                              >
+                                <video
+                                  src={videoSrc}
+                                  className={cn(
+                                    "mx-auto w-full max-h-[320px] rounded-lg object-cover shadow-sm",
+                                    isVerticalVideo
+                                      ? "aspect-[9/16] max-w-[min(100%,280px)]"
+                                      : "aspect-video max-w-full"
+                                  )}
+                                  controls
+                                  playsInline
+                                  preload="metadata"
+                                />
+                              </div>
+                            </div>
                           ) : null}
                           {sid && (scene as JobScene).error_message ? (
                             <p className="mt-2 text-xs text-red-600 dark:text-red-400">{(scene as JobScene).error_message}</p>
@@ -591,7 +717,11 @@ export default function GenerationStudioPage() {
             <CardHeader>
               <CardTitle className="text-base">Live job</CardTitle>
               <CardDescription>
-                {pipelineActive || (job && job.status === "completed") ? "Polling every 3s." : "Polling while a job id is set."}
+                {livePollActive || (job && job.status === "completed")
+                  ? jobIsCancelling
+                    ? "Stopping… polling every 2s."
+                    : "Polling every 2–3s while the job is active."
+                  : "Polling while a job id is set."}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -613,7 +743,27 @@ export default function GenerationStudioPage() {
                       <span className="font-mono">{job.progress}%</span>
                     </div>
                     <Progress value={job.progress} className="h-2" />
-                    <Badge variant={statusBadgeVariant(job.status)}>{job.status}</Badge>
+                    <div className="flex w-full flex-wrap items-center justify-between gap-2">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <Badge variant={statusBadgeVariant(job.status)}>{job.status}</Badge>
+                        {jobIsCancelling ? (
+                          <span className="text-xs text-muted-foreground">Stopping…</span>
+                        ) : null}
+                      </div>
+                      {canStopPipeline ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={cancelLoading}
+                          onClick={handleStopPipeline}
+                          className="shrink-0 border-destructive/50 text-destructive hover:bg-destructive/10 dark:border-destructive/60"
+                        >
+                          {cancelLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
+                          Cancel job
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
 
                   {job.output_url ? (
@@ -627,8 +777,10 @@ export default function GenerationStudioPage() {
                       />
                     </div>
                   ) : (
-                    <div className="flex aspect-video items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
-                      Final video appears when assembly completes.
+                    <div className="flex aspect-video items-center justify-center rounded-md border border-dashed px-3 text-center text-xs text-muted-foreground">
+                      {jobIsCancelled
+                        ? "Job was cancelled. Partial scene media is preserved; no final assembly was run."
+                        : "Final video appears when assembly completes."}
                     </div>
                   )}
 
@@ -642,32 +794,77 @@ export default function GenerationStudioPage() {
                       </TabsTrigger>
                     </TabsList>
                     <TabsContent value="steps" className="mt-3 space-y-2">
-                      {job.steps.map((s) => (
-                        <div
-                          key={s.id}
-                          className="flex items-start justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm"
-                        >
-                          <div className="flex items-start gap-2">
-                            <StepIcon status={s.status} />
-                            <div>
-                              <p className="font-medium leading-none">{s.step_name}</p>
-                              <p className="text-xs text-muted-foreground">{s.progress}%</p>
-                              {s.status === "failed" && s.error_message ? (
-                                <p className="mt-1 text-xs text-red-600">{s.error_message}</p>
+                      {job.steps.map((s) => {
+                        const ctrl = pipelineStepControl(s.step_name, s.status);
+                        const showCancel = ctrl !== "completed" && s.status !== "completed";
+                        const cancelDisabled =
+                          job.status === "draft" ||
+                          job.status === "ready" ||
+                          jobIsCancelling ||
+                          jobIsCancelled ||
+                          ctrl === "cancelling" ||
+                          ctrl === "cancelled" ||
+                          s.status === "cancelled" ||
+                          (s.status !== "running" && ctrl !== "running");
+                        return (
+                          <div
+                            key={s.id}
+                            className="flex items-start justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm"
+                          >
+                            <div className="flex min-w-0 flex-1 items-start gap-2">
+                              <StepIcon status={s.status} />
+                              <div className="min-w-0">
+                                <p className="font-medium leading-none">{s.step_name}</p>
+                                <p className="text-xs text-muted-foreground">{s.progress}%</p>
+                                {ctrl === "cancelling" ? (
+                                  <p className="mt-1 text-xs text-amber-700">Cancelling…</p>
+                                ) : null}
+                                {s.status === "failed" && s.error_message ? (
+                                  <p className="mt-1 text-xs text-red-600">{s.error_message}</p>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className="flex shrink-0 gap-2">
+                              {showCancel ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  className="shrink-0"
+                                  disabled={cancelDisabled || cancelStepLoading === s.step_name}
+                                  onClick={() => cancelStep(s.step_name)}
+                                >
+                                  {cancelStepLoading === s.step_name ? (
+                                    <span className="inline-flex items-center gap-1">
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                      Cancel
+                                    </span>
+                                  ) : (
+                                    "Cancel"
+                                  )}
+                                </Button>
                               ) : null}
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                className="shrink-0"
+                                disabled={
+                                  job.status === "draft" ||
+                                  job.status === "ready" ||
+                                  jobIsCancelling ||
+                                  jobIsCancelled ||
+                                  ctrl === "cancelling" ||
+                                  ctrl === "cancelled" ||
+                                  s.status === "cancelled"
+                                }
+                                onClick={() => retryStep(s.step_name)}
+                              >
+                                Retry
+                              </Button>
                             </div>
                           </div>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            className="shrink-0"
-                            disabled={job.status === "draft" || job.status === "ready"}
-                            onClick={() => retryStep(s.step_name)}
-                          >
-                            Retry
-                          </Button>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </TabsContent>
                     <TabsContent value="logs" className="mt-3 max-h-56 overflow-y-auto rounded-md border bg-muted/30 p-2 font-mono text-[11px] leading-relaxed">
                       {logs.length === 0 ? (

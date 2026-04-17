@@ -24,6 +24,34 @@ class Settings(BaseSettings):
     # Rough cost model for UI estimates (abstract credits; tune per provider)
     GENERATION_CREDITS_PER_IMAGE: float = 1.0
     GENERATION_CREDITS_PER_VIDEO: float = 4.0
+    # Target ratio for "full" video success; below this the pipeline still continues if ≥1 video
+    # (demo-friendly). Production can set to 1.0 to require all scenes.
+    GENERATION_MIN_VIDEO_SUCCESS_RATIO: float = 0.5
+    # If true, image_generation fails when any scene has only one of two keyframe URLs
+    GENERATION_FAIL_ON_PARTIAL_IMAGES: bool = False
+    # When ffmpeg merges multiple clips locally, there is no public merged URL; promote first
+    # scene clip for distribution while metadata/logs state merged file is local-only.
+    GENERATION_PROMOTE_FIRST_CLIP_WHEN_MERGED_LOCAL_ONLY: bool = True
+    # --- Demo mode (reversible via env; tighten for production) ---
+    GENERATION_DEMO_MODE: bool = True
+    GENERATION_DEMO_MAX_SCENES: int = 3
+    # After video step, pin output_url to first scene video so later steps cannot leave job empty
+    GENERATION_DEMO_PIN_OUTPUT_URL_AFTER_VIDEO: bool = True
+    # Kie task polling cap (each poll waits POLL_INTERVAL_SECONDS in KieService)
+    GENERATION_KIE_MAX_POLLS: int = 60
+    # When DEMO_MODE, effective polls are min(KIE_MAX_POLLS, DEMO_KIE_MAX_POLLS)
+    GENERATION_DEMO_KIE_MAX_POLLS: int = 30
+    # Parallel Kie video calls (DB commits remain sequential on one session)
+    GENERATION_VIDEO_MAX_CONCURRENCY: int = 3
+    # After Kie reports state=success without resultUrls, keep polling this many more
+    # success polls (same 5s cadence) before treating as SUCCESS_NO_URLS (~40s when 8).
+    GENERATION_VIDEO_SUCCESS_WAIT_POLLS: int = 8
+    # Extra Kie video attempts only when first ends with TIMEOUT or SUCCESS_NO_URLS
+    GENERATION_KIE_VIDEO_MAX_RETRIES: int = 1
+    # Kie createTask POST: max attempts (initial + retries) on HTTP/body 5xx only
+    GENERATION_KIE_VIDEO_CREATE_MAX_ATTEMPTS: int = 3
+    # If True, multi-clip ffmpeg failure still sets output_url to first scene clip (demo only)
+    GENERATION_ASSEMBLY_FALLBACK_ON_CONCAT_FAIL: bool = True
     
     # Admin credentials - MUST be set in production
     ADMIN_USERNAME: str = "admin"

@@ -5,13 +5,21 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from google.api_core.exceptions import GoogleAPIError, RetryError
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
 from src.core.database import get_db
-from src.services.generation_job_service import PIPELINE_STEPS, GenerationJobService
+from src.models.generation_job import GenerationJob
+from src.services.generation_job_service import (
+    PIPELINE_STEPS,
+    GenerationJobService,
+    default_step_control,
+    recover_stale_jobs,
+)
+from src.services.pipeline_trace import emit, get_job_trace
 from src.services.generation_orchestrator import (
     populate_draft_scenes,
     run_generation_job_pipeline,
@@ -145,6 +153,7 @@ class GenerationJobDetailOut(BaseModel):
     id: str
     status: str
     progress: int
+    step_control: dict[str, str] = Field(default_factory=dict)
     input_payload: dict[str, Any]
     output_url: Optional[str] = None
     logs: list[dict[str, Any]] = Field(default_factory=list)
@@ -175,6 +184,12 @@ def _compute_cost_estimate(job) -> dict[str, Any]:
     }
 
 
+def _step_control_for_response(job) -> dict[str, str]:
+    merged = default_step_control()
+    merged.update({k: str(v) for k, v in (job.step_control or {}).items() if k in merged})
+    return merged
+
+
 def _serialize_job(job, include_cost: bool = True) -> GenerationJobDetailOut:
     steps = sorted(job.steps, key=lambda x: x.step_order)
     scenes = sorted(job.scenes, key=lambda x: x.scene_index)
@@ -185,6 +200,7 @@ def _serialize_job(job, include_cost: bool = True) -> GenerationJobDetailOut:
         id=str(job.id),
         status=job.status,
         progress=job.progress or 0,
+        step_control=_step_control_for_response(job),
         input_payload=job.input_payload or {},
         output_url=job.output_url,
         logs=list(job.logs or []),
@@ -246,19 +262,132 @@ async def launch_generation_job(
         jid = uuid.UUID(job_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid job id")
-    svc = GenerationJobService(db)
-    job = await svc.get_job(jid, with_children=False)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if job.status not in ("draft", "ready"):
-        raise HTTPException(status_code=400, detail="Job must be in draft or ready to launch")
-    job.status = "running"
-    job.progress = max(job.progress or 0, 1)
-    svc.touch(job)
+    res = await db.execute(
+        update(GenerationJob)
+        .where(
+            GenerationJob.id == jid,
+            GenerationJob.status.in_(("draft", "ready")),
+        )
+        .values(
+            status="running",
+            progress=1,
+            updated_at=datetime.now(timezone.utc),
+        )
+        .returning(GenerationJob.id)
+    )
+    launched_id = res.scalar_one_or_none()
+    if not launched_id:
+        svc = GenerationJobService(db)
+        existing = await svc.get_job(jid, with_children=False)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Launch rejected: job is in '{existing.status}' state.",
+        )
     await db.commit()
-    await db.refresh(job)
     background_tasks.add_task(run_generation_job_pipeline, jid)
     return {"status": "running", "job_id": job_id}
+
+
+@router.post("/admin/recover-stale-jobs")
+async def admin_recover_stale_jobs(db: AsyncSession = Depends(get_db)):
+    recovered_count = await recover_stale_jobs(db, stale_after_minutes=10)
+    await db.commit()
+    return {"status": "ok", "recovered_jobs": recovered_count}
+
+
+@router.post("/{job_id}/cancel")
+async def cancel_generation_job(job_id: str, db: AsyncSession = Depends(get_db)):
+    """Request cooperative cancellation of a running (or pending) media job."""
+    try:
+        jid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+    res = await db.execute(
+        update(GenerationJob)
+        .where(
+            GenerationJob.id == jid,
+            GenerationJob.status.in_(("running", "pending")),
+        )
+        .values(status="cancelling")
+    )
+    await db.commit()
+    if res.rowcount == 0:
+        svc = GenerationJobService(db)
+        job = await svc.get_job(jid, with_children=False)
+        if job and job.status == "cancelling":
+            return {"status": "cancelling", "job_id": job_id}
+        if job and job.status == "cancelled":
+            return {"status": "cancelled", "job_id": job_id}
+        raise HTTPException(
+            status_code=400,
+            detail="Job cannot be cancelled in its current state (must be running or pending).",
+        )
+    emit(
+        "job_cancellation_requested",
+        job_id=job_id,
+        step="api",
+        new_status="cancelling",
+    )
+    return {"status": "cancelling", "job_id": job_id}
+
+
+class CancelStepBody(BaseModel):
+    step: str
+
+
+@router.post("/{job_id}/cancel-step")
+async def cancel_generation_step(job_id: str, body: CancelStepBody, db: AsyncSession = Depends(get_db)):
+    """Request cooperative cancellation of a single pipeline step (job keeps running)."""
+    try:
+        jid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+    valid = {name for name, _ in PIPELINE_STEPS}
+    if body.step not in valid:
+        raise HTTPException(status_code=400, detail="Invalid step")
+    svc = GenerationJobService(db)
+    job = await svc.get_job(jid, with_children=True)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in ("cancelling", "cancelled"):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot cancel an individual step while the job is cancelling or cancelled.",
+        )
+    if job.status not in ("running", "pending"):
+        raise HTTPException(
+            status_code=400,
+            detail="Step cancel only applies while the job is running or pending.",
+        )
+    ctrl = _step_control_for_response(job)
+    cur = ctrl.get(body.step)
+    if cur in ("cancelling", "cancelled"):
+        emit(
+            "step_cancellation_requested",
+            job_id=job_id,
+            step=body.step,
+            duplicate=True,
+        )
+        return {"status": cur, "job_id": job_id, "step": body.step}
+    step_row = next((s for s in job.steps if s.step_name == body.step), None)
+    if not step_row:
+        raise HTTPException(status_code=404, detail="Step not found on job")
+    if step_row.status != "running" and cur != "running":
+        raise HTTPException(status_code=400, detail="Step is not running; nothing to cancel.")
+    merged = _step_control_for_response(job)
+    merged[body.step] = "cancelling"
+    job.step_control = merged
+    svc.touch(job)
+    await db.commit()
+    emit(
+        "step_cancellation_requested",
+        job_id=job_id,
+        step=body.step,
+        new_state="cancelling",
+    )
+    return {"status": "cancelling", "job_id": job_id, "step": body.step}
 
 
 @router.post("/{job_id}/ready")
@@ -292,6 +421,24 @@ async def get_cost_estimate(job_id: str, db: AsyncSession = Depends(get_db)):
     if not job.scenes:
         raise HTTPException(status_code=400, detail="No scenes on job yet")
     return _compute_cost_estimate(job)
+
+
+@router.get("/{job_id}/trace")
+async def get_generation_job_trace(
+    job_id: str,
+    limit: Optional[int] = Query(None, ge=1, le=10000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Structured pipeline trace lines (JSON) for this job from ``logs/pipeline_trace.log``."""
+    try:
+        jid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+    svc = GenerationJobService(db)
+    job = await svc.get_job(jid, with_children=False)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"job_id": job_id, "events": get_job_trace(job_id, limit=limit)}
 
 
 @router.get("/{job_id}", response_model=GenerationJobDetailOut)
@@ -372,10 +519,20 @@ async def retry_step(
     job = await svc.get_job(jid, with_children=False)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in ("cancelling", "cancelled"):
+        raise HTTPException(status_code=400, detail="Cannot retry steps while the job is cancelling or cancelled.")
+    if job.status == "running":
+        raise HTTPException(status_code=400, detail="Cannot retry while job is running")
     if job.status in ("draft", "ready"):
         raise HTTPException(
             status_code=400,
             detail="Launch the job before retrying pipeline steps.",
+        )
+    ctrl = _step_control_for_response(job)
+    if ctrl.get(body.step_name) == "cancelling":
+        raise HTTPException(
+            status_code=400,
+            detail="Wait for the step to finish cancelling before retrying.",
         )
 
     background_tasks.add_task(run_generation_job_pipeline_from, jid, body.step_name)
@@ -402,6 +559,10 @@ async def retry_scene(
     job = await svc.get_job(jid, with_children=False)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in ("cancelling", "cancelled"):
+        raise HTTPException(status_code=400, detail="Cannot retry scene while the job is cancelling or cancelled.")
+    if job.status == "running":
+        raise HTTPException(status_code=400, detail="Cannot retry while job is running")
     if job.status in ("draft", "ready"):
         raise HTTPException(
             status_code=400,

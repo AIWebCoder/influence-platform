@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Sequence
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -19,6 +19,10 @@ PIPELINE_STEPS: Sequence[tuple[str, int]] = (
 )
 
 
+def default_step_control() -> dict[str, str]:
+    return {name: "pending" for name, _ in PIPELINE_STEPS}
+
+
 class GenerationJobService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -28,6 +32,8 @@ class GenerationJobService:
             status="draft",
             progress=0,
             input_payload=input_payload,
+            step_control=default_step_control(),
+            distribution_sent=False,
             output_url=None,
             logs=[],
         )
@@ -94,3 +100,18 @@ class GenerationJobService:
 
     def touch(self, job: GenerationJob) -> None:
         job.updated_at = datetime.now(timezone.utc)
+
+
+async def recover_stale_jobs(db: AsyncSession, stale_after_minutes: int = 10) -> int:
+    """Move stale running jobs back to pending so they can be relaunched."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_after_minutes)
+    res = await db.execute(
+        update(GenerationJob)
+        .where(
+            GenerationJob.status == "running",
+            GenerationJob.updated_at < cutoff,
+        )
+        .values(status="pending")
+        .returning(GenerationJob.id)
+    )
+    return len(list(res.scalars().all()))

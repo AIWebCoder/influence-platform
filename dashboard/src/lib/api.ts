@@ -1,12 +1,13 @@
 import axios from 'axios';
+import type { InternalAxiosRequestConfig } from 'axios';
 
-// The Distribution Engine API (Node.js) usually on port 3000
+// The Distribution Engine API (Node.js) on port 3001 by default
 const distributionClient = axios.create({
   baseURL: process.env.NEXT_PUBLIC_DISTRIBUTION_API_URL || 'http://localhost:3001',
   timeout: 5000,
 });
 
-// The Content Factory API (Python) usually on port 8000
+// The Content Factory API (Python) on port 8000
 const contentClient = axios.create({
   baseURL: process.env.NEXT_PUBLIC_CONTENT_API_URL || 'http://localhost:8000',
   timeout: 5000,
@@ -16,6 +17,23 @@ const contentClientLongTimeout = axios.create({
   baseURL: process.env.NEXT_PUBLIC_CONTENT_API_URL || 'http://localhost:8000',
   timeout: 120000,
 });
+
+/** Same JWT_SECRET as distribution-engine + Content Factory — attach session token for Bearer APIs */
+async function attachBearerAuth(config: InternalAxiosRequestConfig) {
+  if (typeof window === 'undefined') return config;
+  const { getSession } = await import('next-auth/react');
+  const session = await getSession();
+  const token = (session as { accessToken?: string } | null)?.accessToken;
+  if (token) {
+    config.headers = config.headers ?? {};
+    (config.headers as Record<string, string>).Authorization = `Bearer ${token}`;
+  }
+  return config;
+}
+
+distributionClient.interceptors.request.use(attachBearerAuth);
+contentClient.interceptors.request.use(attachBearerAuth);
+contentClientLongTimeout.interceptors.request.use(attachBearerAuth);
 
 export const api = {
   distribution: {
@@ -32,8 +50,7 @@ export const api = {
       return response.data;
     },
     addAccount: async (payload: { username: string; password_encrypted: string; status: string; metadata?: any }) => {
-      // Hardcode port 3001 fallback just in case env is 3000 but the engine runs on 3001
-      const response = await axios.post((process.env.NEXT_PUBLIC_DISTRIBUTION_API_URL || 'http://localhost:3001') + '/accounts', payload);
+      const response = await distributionClient.post('/accounts', payload);
       return response.data;
     },
     getPublications: async (status?: string, limit = 100, offset = 0) => {
@@ -165,6 +182,10 @@ export const api = {
       const response = await contentClient.post(`/generation-jobs/${jobId}/launch`);
       return response.data as { status: string; job_id: string };
     },
+    cancel: async (jobId: string) => {
+      const response = await contentClient.post(`/generation-jobs/${jobId}/cancel`);
+      return response.data as { status: string; job_id: string };
+    },
     markReady: async (jobId: string) => {
       const response = await contentClient.post(`/generation-jobs/${jobId}/ready`);
       return response.data as { status: string; job_id: string };
@@ -199,6 +220,10 @@ export const api = {
     retryStep: async (jobId: string, step_name: string) => {
       const response = await contentClient.post(`/generation-jobs/${jobId}/retry-step`, { step_name });
       return response.data;
+    },
+    cancelStep: async (jobId: string, step: string) => {
+      const response = await contentClient.post(`/generation-jobs/${jobId}/cancel-step`, { step });
+      return response.data as { status: string; job_id: string; step: string };
     },
     retryScene: async (jobId: string, scene_id: string) => {
       const response = await contentClient.post(`/generation-jobs/${jobId}/retry-scene`, { scene_id });

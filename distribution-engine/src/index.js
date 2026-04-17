@@ -44,6 +44,14 @@ app.use(limiter);
 // Routes
 app.use('/health', healthRouter);
 app.use('/auth', authRouter);
+
+// Prometheus metrics must be public (scrapers have no JWT)
+const { register } = require('./core/metrics');
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', register.contentType);
+  res.end(await register.metrics());
+});
+
 app.use(authMiddleware);
 app.use('/accounts', accountsRouter);
 
@@ -73,19 +81,24 @@ app.get('/', (req, res) => {
   });
 });
 
-// Prometheus metrics endpoint
-const { register } = require('./core/metrics');
-app.get('/metrics', async (req, res) => {
-  res.set('Content-Type', register.contentType);
-  res.end(await register.metrics());
-});
-
 // Démarrage
 async function start() {
   try {
     await initDB();
     await initRedis();
     console.log('✅ Base de données et Redis prêts');
+
+    const { publishModeLabel } = require('./core/publishMode');
+    const dry = publishModeLabel() === 'DRY_RUN';
+    console.log(JSON.stringify({
+      event: 'publish_pipeline_startup',
+      mode: publishModeLabel(),
+      publish_mode: dry ? 'DRY_RUN_MODE' : 'REAL_PUBLISH_MODE',
+      PUBLISH_DRY_RUN: process.env.PUBLISH_DRY_RUN,
+      hint: dry
+        ? 'DRY_RUN_MODE: no Playwright / Instagram tokens. Set PUBLISH_DRY_RUN=false only for controlled real posts.'
+        : 'REAL_PUBLISH_MODE: external automation and tokens will be used.',
+    }));
 
     // Démarrer le consumer de queue en background
     consumeQueue('content:ready');
