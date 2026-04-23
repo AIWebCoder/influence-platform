@@ -18,14 +18,14 @@ router.get('/posts', async (req, res) => {
         p.published_at,
         a.username as account_username,
         c.caption,
-        m.likes,
-        m.comments,
+        m.likes_count AS likes,
+        m.comments_count AS comments,
         m.engagement_rate
       FROM publications p
       JOIN accounts a ON p.account_id = a.id
       JOIN content_packets c ON p.content_packet_id = c.id
       LEFT JOIN LATERAL (
-        SELECT likes, comments, engagement_rate 
+        SELECT likes_count, comments_count, engagement_rate 
         FROM post_metrics 
         WHERE publication_id = p.id 
         ORDER BY recorded_at DESC LIMIT 1
@@ -73,8 +73,8 @@ router.get('/top-performing', async (req, res) => {
         p.instagram_post_id,
         a.username,
         m.engagement_rate,
-        m.likes,
-        m.comments
+        m.likes_count AS likes,
+        m.comments_count AS comments
       FROM post_metrics m
       JOIN publications p ON m.publication_id = p.id
       JOIN accounts a ON p.account_id = a.id

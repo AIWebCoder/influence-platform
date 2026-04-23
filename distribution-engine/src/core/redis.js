@@ -32,22 +32,67 @@ async function consumeQueue(queueName) {
       const result = await consumer.brpop(queueName, 2);
       
       if (result) {
-        const [, payload] = result;
-        const packet = JSON.parse(payload);
+        const [, rawPayload] = result;
+        let packet;
+        try {
+          packet = JSON.parse(rawPayload);
+        } catch (parseErr) {
+          console.error(JSON.stringify({
+            level: 'error',
+            service: 'distribution-engine',
+            component: 'queue-consumer',
+            event: 'invalid_queue_payload',
+            message: parseErr.message,
+          }));
+          setImmediate(poll);
+          return;
+        }
         
-        console.log(`📦 Nouveau contenu reçu en file d'attente:`, {
-          id: packet.id,
+        console.log(JSON.stringify({
+          level: 'info',
+          service: 'distribution-engine',
+          event: 'queue_message_received',
+          packetId: packet.id,
           niche: packet.niche,
           type: packet.type,
-          accounts: packet.target_accounts
-        });
+          accountCount: Array.isArray(packet.target_accounts) ? packet.target_accounts.length : 0,
+        }));
 
         currentWorkers++;
         console.log(`[QueueManager] Active Workers: ${currentWorkers}/${MAX_CONCURRENT}`);
 
         const PublishingWorker = require('../publisher/PublishingWorker');
         PublishingWorker.processPacket(packet)
-          .catch(err => console.error('Erreur non attrapée dans PublishingWorker:', err))
+          .catch(async (err) => {
+            const msg = err && err.message ? err.message : String(err);
+            const code = err && err.code;
+            console.error(JSON.stringify({
+              level: 'error',
+              service: 'distribution-engine',
+              event: 'worker_process_failed',
+              message: msg,
+              code: code || null,
+            }));
+            // Best-effort requeue: do not requeue DB-after-publish failures (would duplicate external side effects)
+            if (code === 'POST_PUBLISH_DB_FAILURE') {
+              return;
+            }
+            try {
+              await redisClient.lpush(queueName, rawPayload);
+              console.log(JSON.stringify({
+                level: 'warn',
+                service: 'distribution-engine',
+                event: 'queue_message_requeued_after_worker_error',
+                queue: queueName,
+              }));
+            } catch (rqErr) {
+              console.error(JSON.stringify({
+                level: 'error',
+                event: 'requeue_failed',
+                message: rqErr.message,
+              }));
+            }
+          })
           .finally(() => {
              currentWorkers--;
              console.log(`[QueueManager] Worker libéré. Active Workers: ${currentWorkers}/${MAX_CONCURRENT}`);

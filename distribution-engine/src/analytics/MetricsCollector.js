@@ -63,25 +63,40 @@ class MetricsCollector {
     );
 
     for (const pub of publicationsRes.rows) {
-      // Simulate engagement growth
+      const detail = await pool.query(
+        `SELECT id, account_id, content_packet_id, instagram_post_id FROM publications WHERE id = $1`,
+        [pub.id]
+      );
+      const row = detail.rows[0];
+      if (!row?.content_packet_id) continue;
+
       const lastMetrics = await pool.query(
-        "SELECT likes, comments FROM post_metrics WHERE publication_id = $1 ORDER BY recorded_at DESC LIMIT 1",
+        'SELECT likes_count, comments_count FROM post_metrics WHERE publication_id = $1 ORDER BY recorded_at DESC LIMIT 1',
         [pub.id]
       );
 
-      const base = lastMetrics.rows[0] || { likes: 0, comments: 0 };
-      const newLikes = base.likes + Math.floor(Math.random() * 100);
-      const newComments = base.comments + Math.floor(Math.random() * 10);
-      
-      // Calculate engagement rate based on followers (rough estimate)
-      const accRes = await pool.query("SELECT followers_count FROM accounts WHERE id = $1", [pub.account_id]);
+      const base = lastMetrics.rows[0] || { likes_count: 0, comments_count: 0 };
+      const newLikes = base.likes_count + Math.floor(Math.random() * 100);
+      const newComments = base.comments_count + Math.floor(Math.random() * 10);
+
+      const accRes = await pool.query('SELECT followers_count FROM accounts WHERE id = $1', [pub.account_id]);
       const followers = accRes.rows[0]?.followers_count || 1000;
       const er = ((newLikes + newComments) / followers) * 100;
 
       await pool.query(
-        `INSERT INTO post_metrics (publication_id, likes, comments, engagement_rate, recorded_at)
-         VALUES ($1, $2, $3, $4, NOW())`,
-        [pub.id, newLikes, newComments, er.toFixed(2)]
+        `INSERT INTO post_metrics (
+          publication_id, content_packet_id, account_id, instagram_post_id,
+          likes_count, comments_count, engagement_rate, recorded_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+        [
+          pub.id,
+          row.content_packet_id,
+          row.account_id,
+          row.instagram_post_id,
+          newLikes,
+          newComments,
+          parseFloat(er.toFixed(4)),
+        ]
       );
     }
     console.log(`[MetricsCollector] Updated metrics for ${publicationsRes.rows.length} recent posts.`);

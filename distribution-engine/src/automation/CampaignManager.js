@@ -106,11 +106,11 @@ class CampaignManager {
     let growthQuery = `
       SELECT SUM(followers_count - (
         SELECT followers_count FROM account_growth g2 
-        WHERE g2.account_id = g.account_id AND g2.captured_at < g.captured_at 
-        ORDER BY g2.captured_at DESC LIMIT 1
+        WHERE g2.account_id = g.account_id AND g2.recorded_at < g.recorded_at 
+        ORDER BY g2.recorded_at DESC LIMIT 1
       )) as gained
       FROM account_growth g
-      WHERE g.captured_at > $1
+      WHERE g.recorded_at > $1
     `;
     const growthParams = [campaign.created_at];
     if (accountId) {

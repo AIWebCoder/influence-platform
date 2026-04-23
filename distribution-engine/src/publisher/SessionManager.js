@@ -1,6 +1,7 @@
 const { chromium } = require('playwright-extra');
 const { getStealthPlugin } = require('./StealthConfig');
 const ProxyManager = require('../proxy/ProxyManager');
+const { isPublishDryRun } = require('../core/publishMode');
 
 // Load the stealth plugin
 chromium.use(getStealthPlugin());
@@ -11,6 +12,18 @@ class SessionManager {
   }
 
   async initializeSession(accountId) {
+    if (isPublishDryRun()) {
+      console.warn(JSON.stringify({
+        level: 'warn',
+        service: 'distribution-engine',
+        component: 'SessionManager',
+        event: 'DRY_RUN_EXTERNAL_CALL_BLOCKED',
+        accountId,
+        message: 'Playwright session start blocked in DRY_RUN — external publish must not bypass executeExternalPublish',
+      }));
+      throw new Error('DRY_RUN_EXTERNAL_CALL_BLOCKED');
+    }
+
     if (this.activeSessions.has(accountId)) {
       return this.activeSessions.get(accountId);
     }

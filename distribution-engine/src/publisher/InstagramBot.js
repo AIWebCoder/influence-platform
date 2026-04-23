@@ -1,6 +1,7 @@
 const SessionManager = require('./SessionManager');
 const Humanizer = require('./Humanizer');
 const { getPool } = require('../core/database');
+const { isPublishDryRun, dryRunPostUrl } = require('../core/publishMode');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -12,6 +13,24 @@ class InstagramBot {
    * @param {Object} contentPacket 
    */
   async publishContent(accountId, contentPacket) {
+    if (isPublishDryRun()) {
+      const url = dryRunPostUrl(contentPacket.id);
+      console.log(
+        JSON.stringify({
+          level: 'info',
+          service: 'distribution-engine',
+          component: 'InstagramBot',
+          event: 'DRY_RUN_MODE',
+          publish_mode: 'DRY_RUN_MODE',
+          action: 'skip_playwright',
+          accountId,
+          packetId: contentPacket.id,
+          fakeUrl: url,
+        })
+      );
+      return url;
+    }
+
     let context;
     const pool = getPool();
     try {
@@ -85,18 +104,34 @@ class InstagramBot {
       console.log(`[Bot] Post successfully published for ${accountId}!`);
       
       await page.close();
-      
-      await pool.query("UPDATE content_packets SET status = 'published' WHERE id = $1", [contentPacket.id]);
-      
-      // Return a simulated URL 
-      return `https://instagram.com/p/live_${contentPacket.id.substring(0,8)}/`;
+
+      // Return a simulated URL (publications row + content_packets update are done in PublishingWorker after success)
+      return `https://instagram.com/p/live_${contentPacket.id.substring(0, 8)}/`;
       
     } catch (error) {
-      console.error(`[Bot Error] Pub failed for ${accountId}:`, error);
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          service: 'distribution-engine',
+          component: 'InstagramBot',
+          event: 'publish_failed',
+          accountId,
+          packetId: contentPacket.id,
+          message: error.message,
+        })
+      );
       try {
-        await pool.query("UPDATE content_packets SET status = 'failed' WHERE id = $1", [contentPacket.id]);
+        await pool.query("UPDATE content_packets SET status = 'failed', updated_at = NOW() WHERE id = $1", [contentPacket.id]);
       } catch (dbErr) {
-        console.error("Failed to update db status on error", dbErr);
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            component: 'InstagramBot',
+            event: 'content_packet_status_update_failed',
+            packetId: contentPacket.id,
+            message: dbErr.message,
+          })
+        );
       }
       throw error;
     }

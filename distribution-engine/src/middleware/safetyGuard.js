@@ -1,5 +1,6 @@
 const ActionLimits = require('../core/actionLimits');
 const CooldownManager = require('../core/cooldownManager');
+const { getPool } = require('../core/database');
 
 class SafetyGuard {
   /**
@@ -104,7 +105,6 @@ class SafetyGuard {
    * @param {string} reason - Reason for emergency stop
    */
   static async emergencyStop(accountId, reason) {
-    const { getPool } = require('../core/database');
     const pool = getPool();
 
     await pool.query(
@@ -121,7 +121,6 @@ class SafetyGuard {
    * @param {string} accountId 
    */
   static async triggerCooldown(accountId) {
-    const { getPool } = require('../core/database');
     const pool = getPool();
 
     await pool.query(
@@ -144,7 +143,6 @@ class SafetyGuard {
    * @param {string} accountId - Account UUID
    */
   static async resumeAccount(accountId) {
-    const { getPool } = require('../core/database');
     const pool = getPool();
 
     await pool.query(

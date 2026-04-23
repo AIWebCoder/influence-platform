@@ -3,19 +3,19 @@ const InstagramBot = require('./InstagramBot');
 const { pushDelayed } = require('../core/redis');
 const SafetyGuard = require('../middleware/safetyGuard');
 const Humanizer = require('../utils/humanizer');
+const { isPublishDryRun, publishModeLabel, dryRunPostUrl } = require('../core/publishMode');
 
-// Retry configuration
 const MAX_RETRIES = 3;
-const BASE_RETRY_DELAY_MS = 30 * 1000; // 30 seconds
-const MAX_RETRY_DELAY_MS = 15 * 60 * 1000; // 15 minutes
+const BASE_RETRY_DELAY_MS = 30 * 1000;
+const MAX_RETRY_DELAY_MS = 15 * 60 * 1000;
 
-// Error classification
 const PERMANENT_ERRORS = [
   'Account Suspended',
   'Content Policy Violation',
   'Account Disabled',
   'Login Required',
   'Invalid Credentials',
+  'Reel publish not implemented',
 ];
 
 const RETRYABLE_ERRORS = [
@@ -31,12 +31,64 @@ const RETRYABLE_ERRORS = [
   'Temporary Block',
 ];
 
+function logStructured(level, payload) {
+  console.log(JSON.stringify({ level, service: 'distribution-engine', component: 'PublishingWorker', ...payload }));
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
+}
+
 class PublishingWorker {
   /**
-   * Classify an error as 'permanent', 'retryable', or 'unknown'.
-   * @param {Error} error
-   * @returns {string} 'permanent' | 'retryable' | 'unknown'
+   * Ensure publications FK target exists for this packet id.
+   * Content Factory currently enqueues generation jobs directly without persisting content_packets rows.
    */
+  async ensureContentPacketExists(packet) {
+    const pool = getPool();
+    await pool.query(
+      `INSERT INTO content_packets (
+         id, type, caption, visual_url, hashtags, target_accounts, scheduled_at, niche, status, metadata, created_at, updated_at
+       )
+       VALUES (
+         $1::uuid,
+         $2,
+         $3,
+         $4,
+         COALESCE($5::jsonb, '[]'::jsonb),
+         COALESCE($6::jsonb, '[]'::jsonb),
+         $7::timestamptz,
+         $8,
+         'queued',
+         COALESCE($9::jsonb, '{}'::jsonb),
+         NOW(),
+         NOW()
+       )
+       ON CONFLICT (id)
+       DO UPDATE SET
+         type = EXCLUDED.type,
+         caption = EXCLUDED.caption,
+         visual_url = EXCLUDED.visual_url,
+         hashtags = EXCLUDED.hashtags,
+         target_accounts = EXCLUDED.target_accounts,
+         scheduled_at = EXCLUDED.scheduled_at,
+         niche = EXCLUDED.niche,
+         metadata = COALESCE(content_packets.metadata, '{}'::jsonb) || EXCLUDED.metadata,
+         updated_at = NOW()`,
+      [
+        packet.id,
+        packet.type || 'reel',
+        packet.caption || null,
+        packet.visual_url || null,
+        JSON.stringify(packet.hashtags || []),
+        JSON.stringify(packet.target_accounts || []),
+        packet.scheduled_at || null,
+        packet.niche || null,
+        JSON.stringify(packet.metadata || {}),
+      ]
+    );
+  }
+
   classifyError(error) {
     const msg = (error.message || '').toLowerCase();
 
@@ -51,122 +103,235 @@ class PublishingWorker {
     return 'unknown';
   }
 
-  /**
-   * Calculate exponential backoff delay: 2^attempt * BASE, capped at MAX.
-   * @param {number} attempt - Current retry attempt (0-indexed)
-   * @returns {number} Delay in milliseconds
-   */
   getRetryDelay(attempt) {
     const delay = Math.pow(2, attempt) * BASE_RETRY_DELAY_MS;
-    // Add jitter: ±20%
     const jitter = delay * 0.2 * (Math.random() * 2 - 1);
     return Math.min(delay + jitter, MAX_RETRY_DELAY_MS);
   }
 
+  getRequeueProfile(reason, retryCount = 0) {
+    if (reason === 'daily_limit_exceeded' || reason === 'safety_daily_limit') {
+      return { delayMs: 2 * 60 * 60 * 1000, code: 'REQUEUE_DAILY_LIMIT' };
+    }
+    if (reason.startsWith('safety_cooldown_') || reason.startsWith('min_interval_wait_')) {
+      return { delayMs: 60 * 1000, code: 'REQUEUE_COOLDOWN' };
+    }
+    const computed = this.getRetryDelay(retryCount);
+    return { delayMs: computed, code: 'REQUEUE_RETRY_BACKOFF' };
+  }
+
+  /**
+   * Idempotency: skip external publish if we already recorded success for this account + packet.
+   */
+  async findExistingPublished(accountId, packetId) {
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT id, instagram_post_id, status
+       FROM publications
+       WHERE account_id = $1 AND content_packet_id = $2 AND status = 'published'
+       ORDER BY published_at DESC NULLS LAST
+       LIMIT 1`,
+      [accountId, packetId]
+    );
+    return result.rows[0] || null;
+  }
+
   async processPacket(packet) {
+    if (!packet || !packet.id) {
+      logStructured('error', { code: 'INVALID_PACKET', detail: 'missing packet.id' });
+      return;
+    }
+    if (!Array.isArray(packet.target_accounts) || packet.target_accounts.length === 0) {
+      logStructured('error', { code: 'INVALID_PACKET', packetId: packet.id, detail: 'target_accounts empty' });
+      return;
+    }
+
     const { id, target_accounts, type } = packet;
-    console.log(`[PublishingWorker] Processing packet ${id} for accounts ${target_accounts}`);
+    const invalidAccountId = target_accounts.find((accId) => !isUuid(accId));
+    if (invalidAccountId) {
+      logStructured('error', {
+        code: 'INVALID_TARGET_ACCOUNT_ID',
+        packetId: id,
+        accountId: invalidAccountId,
+        detail: 'target_accounts must contain UUID values only',
+      });
+      return;
+    }
+    // Keep publications FK valid even when packet originates from generation-jobs.
+    await this.ensureContentPacketExists(packet);
+    logStructured('info', {
+      event: 'process_packet_start',
+      packetId: id,
+      mode: publishModeLabel(),
+      publish_mode: publishModeLabel() === 'DRY_RUN' ? 'DRY_RUN_MODE' : 'REAL_PUBLISH_MODE',
+      accounts: target_accounts.length,
+    });
 
+    const dryRun = isPublishDryRun();
     for (let i = 0; i < target_accounts.length; i++) {
-        const accountId = target_accounts[i];
+      const accountId = target_accounts[i];
       try {
-        // PHASE 6: Safety Guard pre-check
-        const safetyCheck = await SafetyGuard.preActionValidation(accountId, 'post');
-        if (!safetyCheck.allowed) {
-          console.warn(`[PublishingWorker] 🚫 Safety block for ${accountId}: ${safetyCheck.reason}`);
+        const existing = await this.findExistingPublished(accountId, id);
+        if (existing) {
+          logStructured('info', {
+            event: 'publish_skipped_idempotent',
+            accountId,
+            packetId: id,
+            publicationId: existing.id,
+            instagramPostId: existing.instagram_post_id || null,
+          });
+          continue;
+        }
 
-          // Log the safety block as a publication attempt
-          await this.logPublicationAttempt(accountId, id, type, null, 'failed', 'safety_block', safetyCheck.reason);
+        if (!dryRun) {
+          const safetyCheck = await SafetyGuard.preActionValidation(accountId, 'post');
+          if (!safetyCheck.allowed) {
+            logStructured('warn', { event: 'safety_block', accountId, packetId: id, reason: safetyCheck.reason });
+            await this.logPublicationAttempt(accountId, id, type, null, 'failed', 'safety_block', safetyCheck.reason);
 
-          if (safetyCheck.blockType === 'daily_limit') {
+            if (safetyCheck.blockType === 'daily_limit') {
             await this.requeueWithDelay(packet, accountId, 'safety_daily_limit');
-          } else if (safetyCheck.waitTime) {
+            } else if (safetyCheck.waitTime) {
             await this.requeueWithDelay(packet, accountId, `safety_cooldown_${safetyCheck.waitTime}s`, safetyCheck.waitTime * 1000);
+            }
+            continue;
+          }
+
+          const canPublish = await this.checkRateLimit(accountId);
+          if (!canPublish) {
+            logStructured('warn', { event: 'rate_limit', accountId, packetId: id });
+            await this.logPublicationAttempt(accountId, id, type, null, 'failed', 'rate_limit', 'Daily rate limit exceeded');
+            await this.requeueWithDelay(packet, accountId, 'daily_limit_exceeded');
+            continue;
+          }
+
+          const intervalCheck = await this.checkMinInterval(accountId);
+          if (!intervalCheck.allowed) {
+            logStructured('warn', { event: 'min_interval', accountId, packetId: id, waitMinutes: intervalCheck.waitMinutes });
+            await this.requeueWithDelay(packet, accountId, `min_interval_wait_${intervalCheck.waitMinutes}m`);
+            continue;
+          }
+        } else {
+          logStructured('info', { event: 'dry_run_bypass_guards', accountId, packetId: id });
+        }
+
+        const humanDelay = Humanizer.getRandomDelay('post');
+        logStructured('info', { event: 'human_delay_ms', ms: humanDelay, accountId, packetId: id });
+        await new Promise((resolve) => setTimeout(resolve, humanDelay));
+
+        if (process.env.PUBLISH_SKIP_RACE_RECHECK !== 'true') {
+          const raceJitterMs = 200 + Math.floor(Math.random() * 301);
+          await new Promise((resolve) => setTimeout(resolve, raceJitterMs));
+          const afterRaceCheck = await this.findExistingPublished(accountId, id);
+          if (afterRaceCheck) {
+            logStructured('info', {
+              event: 'publish_skipped_idempotent_recheck',
+              accountId,
+              packetId: id,
+              publicationId: afterRaceCheck.id,
+              instagramPostId: afterRaceCheck.instagram_post_id || null,
+              raceJitterMs,
+            });
+            continue;
+          }
+        }
+
+        let postUrl;
+        try {
+          postUrl = await this.executeExternalPublish(accountId, packet, type);
+        } catch (publishErr) {
+          await SafetyGuard.postActionProcessing(accountId, 'post', null, false);
+          const failureType = this.classifyError(publishErr);
+          const errMsg = publishErr.message || String(publishErr);
+          logStructured('error', { event: 'publish_failed', accountId, packetId: id, failureType, message: errMsg });
+
+          const retryCount = await this.getRetryCount(accountId, id);
+
+          if (failureType === 'permanent') {
+            await this.logPublicationAttempt(accountId, id, type, null, 'permanently_failed', failureType, errMsg);
+            if (errMsg.includes('Action Blocked') || errMsg.includes('Suspended')) {
+              const BanMonitor = require('../health/BanMonitor');
+              await BanMonitor.recordAlert(accountId, 'ban', errMsg);
+              const backupId = await BanMonitor.getBackupAccount(accountId);
+              if (backupId && !target_accounts.includes(backupId)) {
+                target_accounts.push(backupId);
+              }
+            }
+          } else if (retryCount >= MAX_RETRIES) {
+            await this.logPublicationAttempt(accountId, id, type, null, 'permanently_failed', 'max_retries_exhausted', errMsg);
+          } else {
+            const delay = this.getRetryDelay(retryCount);
+            await this.logPublicationAttempt(accountId, id, type, null, 'retrying', failureType, errMsg, retryCount + 1);
+            await this.requeueWithDelay(packet, accountId, `retry_${retryCount + 1}`, delay);
           }
           continue;
         }
 
-        // 1. Check daily rate limits (legacy check - now handled by SafetyGuard)
-        const canPublish = await this.checkRateLimit(accountId);
-        if (!canPublish) {
-          console.warn(`[PublishingWorker] ⏳ Daily rate limit exceeded for account ${accountId}. Re-queuing with 2h delay.`);
-          await this.logPublicationAttempt(accountId, id, type, null, 'failed', 'rate_limit', 'Daily rate limit exceeded');
-          await this.requeueWithDelay(packet, accountId, 'daily_limit_exceeded');
-          continue;
+        try {
+          await this.logPublication(accountId, id, postUrl);
+        } catch (dbErr) {
+          if (dbErr && dbErr.code === '23505') {
+            await new Promise((resolve) => setTimeout(resolve, 75));
+            const winner = await this.findExistingPublished(accountId, id);
+            logStructured('info', {
+              event: 'publish_skipped_idempotent_db',
+              accountId,
+              packetId: id,
+              publicationId: winner?.id || null,
+              instagramPostId: winner?.instagram_post_id || null,
+              note: 'unique partial index blocked duplicate published row (concurrent or replay)',
+            });
+            postUrl = winner?.instagram_post_id || postUrl;
+          } else {
+            logStructured('critical', {
+              code: 'POST_PUBLISH_DB_FAILURE',
+              message: 'External publish succeeded but publications row insert failed — check DB schema and manual reconciliation',
+              accountId,
+              packetId: id,
+              postUrl,
+              dbError: dbErr.message,
+            });
+            const e = new Error('POST_PUBLISH_DB_FAILURE');
+            e.code = 'POST_PUBLISH_DB_FAILURE';
+            e.cause = dbErr;
+            throw e;
+          }
         }
 
-        // 2. Check minimum interval (90 min between posts)
-        const intervalCheck = await this.checkMinInterval(accountId);
-        if (!intervalCheck.allowed) {
-          console.warn(`[PublishingWorker] ⏳ Min interval not met for account ${accountId}. Must wait ${intervalCheck.waitMinutes} more minutes. Re-queuing.`);
-          await this.requeueWithDelay(packet, accountId, `min_interval_wait_${intervalCheck.waitMinutes}m`);
-          continue;
+        const poolCp = getPool();
+        try {
+          await poolCp.query(
+            "UPDATE content_packets SET status = 'published', updated_at = NOW() WHERE id = $1::uuid",
+            [id]
+          );
+        } catch (cpErr) {
+          logStructured('critical', {
+            code: 'CONTENT_PACKET_STATUS_UPDATE_FAILED',
+            message: 'publications row inserted but content_packets update failed',
+            packetId: id,
+            dbError: cpErr.message,
+          });
         }
 
-        // PHASE 6: Add human-like delay before publishing
-        const humanDelay = Humanizer.getRandomDelay('post');
-        console.log(`[PublishingWorker] 🤖 Adding human-like delay: ${humanDelay}ms`);
-        await new Promise(resolve => setTimeout(resolve, humanDelay));
-
-        // 3. Publish via Playwright bot — route by visual_type
-        console.log(`[PublishingWorker] Starting bot for ${accountId}...`);
-        let postUrl;
-
-        if (packet.visual_type === 'video' || type === 'reel') {
-          // Video/Reel content → dedicated reel publishing flow
-          postUrl = await this.publishReel(packet, accountId);
-        } else {
-          // Image content → standard post flow
-          postUrl = await InstagramBot.publishContent(accountId, packet);
-        }
-
-        // 4. Log success in DB and update last_activity_at
-        await this.logPublication(accountId, id, type, postUrl);
         await this.updateLastActivity(accountId);
-
-        // PHASE 6: Post-action processing with SafetyGuard
         await SafetyGuard.postActionProcessing(accountId, 'post', null, true);
-
-        console.log(`[PublishingWorker] ✅ Successfully published for account ${accountId}`);
+        logStructured('info', { event: 'publish_success', accountId, packetId: id, postUrl });
       } catch (botError) {
-        // PHASE 6: Record failed action
+        if (botError && botError.code === 'POST_PUBLISH_DB_FAILURE') {
+          logStructured('critical', { event: 'publish_pipeline_stopped_db', accountId, packetId: id });
+          throw botError;
+        }
         await SafetyGuard.postActionProcessing(accountId, 'post', null, false);
-
         const errMsg = botError.message || '';
         const failureType = this.classifyError(botError);
-
-        console.error(`[PublishingWorker] ❌ Error for account ${accountId} [${failureType}]:`, errMsg);
-
-        // Get current retry count for this packet + account
+        logStructured('error', { event: 'unexpected_worker_error', accountId, packetId: id, failureType, message: errMsg });
         const retryCount = await this.getRetryCount(accountId, id);
-
         if (failureType === 'permanent') {
-          // Permanent failure: do not retry
-          console.error(`[PublishingWorker] 🛑 Permanent failure for ${accountId}: ${errMsg}`);
           await this.logPublicationAttempt(accountId, id, type, null, 'permanently_failed', failureType, errMsg);
-
-          // Handle ban/block scenario
-          if (errMsg.includes('Action Blocked') || errMsg.includes('Suspended')) {
-            const BanMonitor = require('../health/BanMonitor');
-            await BanMonitor.recordAlert(accountId, 'ban', errMsg);
-
-            // Try fallback account
-            const backupId = await BanMonitor.getBackupAccount(accountId);
-            if (backupId && !target_accounts.includes(backupId)) {
-              console.log(`[PublishingWorker] 🔄 Rerouting packet ${id} to backup account ${backupId}`);
-              target_accounts.push(backupId);
-            } else {
-              console.error(`[PublishingWorker] ❌ No backup accounts available for packet ${id}`);
-            }
-          }
         } else if (retryCount >= MAX_RETRIES) {
-          // Max retries exhausted
-          console.error(`[PublishingWorker] 🛑 Max retries (${MAX_RETRIES}) exhausted for account ${accountId}, packet ${id}`);
           await this.logPublicationAttempt(accountId, id, type, null, 'permanently_failed', 'max_retries_exhausted', errMsg);
         } else {
-          // Retryable: re-queue with exponential backoff
           const delay = this.getRetryDelay(retryCount);
-          console.log(`[PublishingWorker] 🔁 Retrying (${retryCount + 1}/${MAX_RETRIES}) in ${Math.round(delay / 1000)}s for account ${accountId}`);
           await this.logPublicationAttempt(accountId, id, type, null, 'retrying', failureType, errMsg, retryCount + 1);
           await this.requeueWithDelay(packet, accountId, `retry_${retryCount + 1}`, delay);
         }
@@ -174,18 +339,46 @@ class PublishingWorker {
     }
   }
 
+  async executeExternalPublish(accountId, packet, type) {
+    if (isPublishDryRun()) {
+      const url = dryRunPostUrl(packet.id);
+      logStructured('info', {
+        event: 'DRY_RUN_MODE',
+        publish_mode: 'DRY_RUN_MODE',
+        action: 'skip_instagram',
+        accountId,
+        packetId: packet.id,
+        fakeUrl: url,
+      });
+      return url;
+    }
+
+    logStructured('info', {
+      event: 'external_publish_begin',
+      accountId,
+      packetId: packet.id,
+      contentType: packet.visual_type === 'video' || type === 'reel' ? 'reel' : 'post',
+    });
+
+    if (packet.visual_type === 'video' || type === 'reel') {
+      return await this.publishReel(packet, accountId);
+    }
+
+    return await InstagramBot.publishContent(accountId, packet);
+  }
+
   async checkRateLimit(accountId) {
     const pool = getPool();
     const WarmupManager = require('../managers/WarmupManager');
-    
+
     const limit = await WarmupManager.calculateDailyLimit(accountId);
-    
+
     const result = await pool.query(
       `SELECT count(*) FROM publications 
        WHERE account_id = $1 AND published_at >= CURRENT_DATE`,
       [accountId]
     );
-    
+
     const count = parseInt(result.rows[0].count, 10);
     return count < limit;
   }
@@ -195,12 +388,6 @@ class PublishingWorker {
     return await WarmupManager.checkMinInterval(accountId);
   }
 
-  /**
-   * Get the current retry count for a specific account + packet combo.
-   * @param {string} accountId
-   * @param {string} packetId
-   * @returns {number}
-   */
   async getRetryCount(accountId, packetId) {
     const pool = getPool();
     try {
@@ -212,53 +399,38 @@ class PublishingWorker {
       );
       return parseInt(result.rows[0].retry_count, 10);
     } catch (err) {
-      console.warn(`[PublishingWorker] Error getting retry count:`, err.message);
+      logStructured('error', { code: 'retry_count_query_failed', accountId, packetId, message: err.message });
       return 0;
     }
   }
 
-  /**
-   * Re-queues a packet with a delay via the delayed sorted set.
-   * @param {object} packet - Content packet
-   * @param {string} accountId - Account UUID
-   * @param {string} reason - Reason for requeue
-   * @param {number} customDelayMs - Custom delay in milliseconds (default: 2 hours)
-   */
   async requeueWithDelay(packet, accountId, reason, customDelayMs = null) {
-    const delayMs = customDelayMs || (2 * 60 * 60 * 1000); // Default 2 hours
-    console.log(`[PublishingWorker] 📋 Re-queue: account=${accountId} reason=${reason} delay=${Math.floor(delayMs/1000)}s`);
+    const profile = this.getRequeueProfile(reason);
+    const delayMs = customDelayMs || profile.delayMs;
+    logStructured('info', { event: 'requeue_delayed', accountId, packetId: packet.id, reason, delayMs, requeue_code: profile.code });
     await pushDelayed(JSON.stringify(packet), delayMs);
   }
 
   /**
-   * Log a successful publication.
+   * Persist successful publish — columns MUST match infra/init.sql publications.
    */
-  async logPublication(accountId, packetId, type, postUrl) {
+  async logPublication(accountId, packetId, postUrl) {
     const pool = getPool();
     const query = `
-      INSERT INTO publications (id, account_id, content_packet_id, platform, type, url, published_at, status, retry_count)
-      VALUES (gen_random_uuid(), $1, $2, 'instagram', $3, $4, NOW(), 'published', 0)
+      INSERT INTO publications (
+        id, account_id, content_packet_id, status, instagram_post_id,
+        published_at, retry_count, created_at, updated_at
+      )
+      VALUES (gen_random_uuid(), $1, $2, 'published', $3, NOW(), 0, NOW(), NOW())
     `;
-    await pool.query(query, [accountId, packetId, type, postUrl]);
+    await pool.query(query, [accountId, packetId, postUrl]);
   }
 
-  /**
-   * Log a publication attempt (success, failure, retry).
-   * @param {string} accountId
-   * @param {string} packetId
-   * @param {string} type - Content type
-   * @param {string|null} postUrl
-   * @param {string} status - 'published', 'failed', 'retrying', 'permanently_failed'
-   * @param {string|null} failureType - 'permanent', 'retryable', 'unknown', etc.
-   * @param {string|null} errorMessage
-   * @param {number} retryCount
-   */
   async logPublicationAttempt(accountId, packetId, type, postUrl, status, failureType, errorMessage, retryCount = 0) {
     const pool = getPool();
     try {
-      // Try to update an existing record first
       const existing = await pool.query(
-        `SELECT id FROM publications WHERE account_id = $1 AND content_packet_id = $2 LIMIT 1`,
+        `SELECT id FROM publications WHERE account_id = $1 AND content_packet_id = $2 ORDER BY created_at DESC LIMIT 1`,
         [accountId, packetId]
       );
 
@@ -271,28 +443,40 @@ class PublishingWorker {
         );
       } else {
         await pool.query(
-          `INSERT INTO publications (id, account_id, content_packet_id, platform, type, url, status, error_message, retry_count, failure_type, last_retry_at, created_at, updated_at)
-           VALUES (gen_random_uuid(), $1, $2, 'instagram', $3, $4, $5, $6, $7, $8, NOW(), NOW(), NOW())`,
-          [accountId, packetId, type, postUrl, status, errorMessage, retryCount, failureType]
+          `INSERT INTO publications (
+            id, account_id, content_packet_id, status, instagram_post_id,
+            error_message, retry_count, failure_type, last_retry_at, created_at, updated_at
+          )
+          VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW(), NOW())`,
+          [accountId, packetId, status, postUrl, errorMessage, retryCount, failureType]
         );
       }
     } catch (err) {
-      console.error(`[PublishingWorker] Error logging publication attempt:`, err.message);
+      logStructured('error', {
+        code: 'log_publication_attempt_db_failed',
+        accountId,
+        packetId,
+        status,
+        message: err.message,
+      });
     }
   }
 
-  /**
-   * Stub for reel/video publishing — to be implemented with full Playwright flow.
-   * Resolves cleanly so packets are not lost or errored.
-   * @param {object} packet - Content packet
-   * @param {string} accountId - Account UUID
-   * @returns {string|null} Post URL or null
-   */
   async publishReel(packet, accountId) {
-    console.log(`[PublishingWorker] 🎬 Reel publishing requested for account ${accountId}, packet ${packet.id}`);
-    console.log(`[PublishingWorker] ⚠️ Reel publishing not implemented yet — packet logged, no error raised.`);
-    // TODO: Implement Playwright-based reel upload flow via InstagramBot
-    return null;
+    if (isPublishDryRun()) {
+      const url = dryRunPostUrl(`${packet.id}-reel`);
+      logStructured('info', {
+        event: 'DRY_RUN_MODE',
+        publish_mode: 'DRY_RUN_MODE',
+        action: 'skip_reel_publish',
+        accountId,
+        packetId: packet.id,
+        fakeUrl: url,
+      });
+      return url;
+    }
+    logStructured('warn', { event: 'reel_not_implemented', accountId, packetId: packet.id });
+    throw new Error('Reel publish not implemented — set PUBLISH_DRY_RUN=true for demos or implement reel flow');
   }
 
   async updateLastActivity(accountId) {
