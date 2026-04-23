@@ -43,7 +43,9 @@ docker-compose ps
 
 ## Required Migrations
 
-Run these before validating the latest emulator/proxy flow:
+On **`docker compose up`**, the **content-factory** image runs **`alembic upgrade head`** before Uvicorn starts (`content-factory/docker-entrypoint.sh`), so SQLAlchemy-managed tables (`generation_jobs`, `organizations`, etc.) are applied automatically.
+
+Postgres still loads **`infra/init.sql`** on first volume init. For emulator rate limits and proxy bindings on an existing database, apply:
 
 ```bash
 docker-compose exec -T postgres psql -U ipuser -d influence_platform -f /docker-entrypoint-initdb.d/init.sql
@@ -51,7 +53,11 @@ docker-compose exec -T postgres psql -U ipuser -d influence_platform -f /work/in
 docker-compose exec -T postgres psql -U ipuser -d influence_platform -f /work/infra/V009_proxy_bridge_and_types.sql
 ```
 
-If `/work` is not mounted in your container, run from host with `docker compose exec -T postgres psql ... -c "<sql>"` or mount the repo path.
+`infra/V005_analytics_tables.sql` only adds **`account_growth`** and aligns **`post_metrics.publication_id`** (no second `post_metrics` definition).
+
+If `/work` is not mounted in your container, run from host with `docker compose exec -T postgres psql ...` using paths under your repo, or mount the repo path.
+
+**Local dev (no Docker):** from `content-factory/`, run `alembic upgrade head` after Postgres is up.
 
 ## Emulator Operations
 

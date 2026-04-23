@@ -1,30 +1,25 @@
--- Seed script for testing real Instagram accounts (Phase 2 J19-J20)
--- Replace 'your_test_username' and 'your_hashed_password' before running if testing locally.
+-- Optional real-account test seeds (Phase 2). Replace password_encrypted with a real stored secret before use.
 
-INSERT INTO niches (id, name, description)
-VALUES 
-    ('niche_test_real', 'Real Testing Niche', 'Niche for end-to-end real account testing')
-ON CONFLICT (id) DO NOTHING;
+INSERT INTO niches (name, description, hashtags, posting_times)
+SELECT 'Real Testing Niche', 'Niche for end-to-end real account testing', '[]'::jsonb, '[]'::jsonb
+WHERE NOT EXISTS (SELECT 1 FROM niches WHERE name = 'Real Testing Niche');
 
-INSERT INTO accounts (id, username, password_hash, niche, status, health_score, proxy_url)
+INSERT INTO accounts (id, username, password_encrypted, status, health_score, metadata)
 VALUES
     (
-        'test_acc_001', 
-        'test_username_1', 
-        -- This should be a properly hashed password using bcrypt in a real scenario
-        '$2a$10$XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX', 
-        'niche_test_real', 
-        'active', 
-        100, 
-        'http://proxy-user:proxy-pass@proxy.example.com:8000'
+        uuid_generate_v4(),
+        'test_username_1',
+        '$2a$10$XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+        'active',
+        100,
+        '{"niche":"Real Testing Niche"}'::jsonb
     ),
     (
-        'test_acc_002', 
-        'test_username_2', 
-        '$2a$10$XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX', 
-        'niche_test_real', 
-        'active', 
-        100, 
-        'http://proxy-user:proxy-pass@proxy.example.com:8000'
+        uuid_generate_v4(),
+        'test_username_2',
+        '$2a$10$XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+        'active',
+        100,
+        '{"niche":"Real Testing Niche"}'::jsonb
     )
 ON CONFLICT (username) DO NOTHING;

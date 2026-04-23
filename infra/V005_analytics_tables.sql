@@ -1,20 +1,13 @@
 -- ─────────────────────────────────────────
 -- PHASE 16: Advanced Analytics Engine
 -- Migration V005
+-- Canonical post_metrics shape lives in init.sql (content_packet_id + publication_id + counts).
+-- This file only adds follower growth + aligns existing DBs.
 -- ─────────────────────────────────────────
 
--- Track statistics for each publication over time
-CREATE TABLE IF NOT EXISTS post_metrics (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    publication_id UUID NOT NULL REFERENCES publications(id) ON DELETE CASCADE,
-    likes INTEGER DEFAULT 0,
-    comments INTEGER DEFAULT 0,
-    shares INTEGER DEFAULT 0,
-    saves INTEGER DEFAULT 0,
-    reach INTEGER DEFAULT 0,
-    engagement_rate DECIMAL(5,2),
-    recorded_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- Link metrics rows to publications when upgrading older DBs (idempotent)
+ALTER TABLE post_metrics ADD COLUMN IF NOT EXISTS publication_id UUID REFERENCES publications(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_post_metrics_publication ON post_metrics(publication_id, recorded_at DESC);
 
 -- Track follower count and engagement trends for accounts
 CREATE TABLE IF NOT EXISTS account_growth (
@@ -26,6 +19,4 @@ CREATE TABLE IF NOT EXISTS account_growth (
     recorded_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Indexes for fast timeseries retrieval
-CREATE INDEX IF NOT EXISTS idx_post_metrics_pub ON post_metrics(publication_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_account_growth_acc ON account_growth(account_id, recorded_at DESC);

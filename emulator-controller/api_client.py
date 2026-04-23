@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from typing import Any
 
 import asyncpg
@@ -78,7 +79,13 @@ class DistributionApiClient:
     async def get_accounts(self) -> list[dict[str, Any]]:
         resp = await self._request("GET", "/accounts")
         data = resp.json()
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for row in data:
+            if isinstance(row, dict) and row.get("id") and row.get("username"):
+                out.append(row)
+        return out
 
     async def get_campaigns(self) -> list[dict[str, Any]]:
         resp = await self._request("GET", "/campaigns")
@@ -124,7 +131,9 @@ class DistributionApiClient:
         for attempt in range(1, self.max_retries + 1):
             start = time.perf_counter()
             try:
-                response = await self._client.request(method, path, **kwargs)
+                headers = dict(kwargs.pop("headers", {}) or {})
+                headers["x-trace-id"] = str(uuid.uuid4())
+                response = await self._client.request(method, path, headers=headers, **kwargs)
                 duration = time.perf_counter() - start
                 logger.info(
                     "api_request method=%s path=%s status=%s duration_ms=%.2f",
@@ -135,7 +144,7 @@ class DistributionApiClient:
                 )
                 if response.status_code == 401:
                     await self.login()
-                    response = await self._client.request(method, path, **kwargs)
+                    response = await self._client.request(method, path, headers=headers, **kwargs)
                 response.raise_for_status()
                 self._breaker_failures = 0
                 return response

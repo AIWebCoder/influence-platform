@@ -114,6 +114,11 @@ CREATE INDEX idx_publications_status ON publications(status);
 CREATE INDEX idx_publications_account ON publications(account_id);
 CREATE INDEX idx_publications_content ON publications(content_packet_id);
 
+-- At most one row in "published" per (account, content_packet) - hard idempotency for live publishes
+CREATE UNIQUE INDEX IF NOT EXISTS idx_publications_unique_published_per_account_packet
+    ON publications (account_id, content_packet_id)
+    WHERE (status = 'published');
+
 -- ─────────────────────────────────────────
 -- ALERTS TABLE
 -- ─────────────────────────────────────────
@@ -205,6 +210,7 @@ CREATE TRIGGER trigger_publications_updated_at
 -- Post Metrics (Task 11.1)
 CREATE TABLE IF NOT EXISTS post_metrics (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    publication_id UUID REFERENCES publications(id) ON DELETE CASCADE,
     content_packet_id UUID REFERENCES content_packets(id) ON DELETE CASCADE,
     account_id UUID REFERENCES accounts(id) ON DELETE CASCADE,
     instagram_post_id VARCHAR(200),
@@ -221,6 +227,7 @@ CREATE TABLE IF NOT EXISTS post_metrics (
 CREATE INDEX idx_post_metrics_content ON post_metrics(content_packet_id);
 CREATE INDEX idx_post_metrics_account ON post_metrics(account_id);
 CREATE INDEX idx_post_metrics_recorded ON post_metrics(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_post_metrics_publication ON post_metrics(publication_id, recorded_at DESC);
 
 -- Proxy Performance (Task 11.3)
 CREATE TABLE IF NOT EXISTS proxy_performance (

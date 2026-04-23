@@ -1,9 +1,11 @@
+# App code: host folders are bind-mounted so local edits match the container (see per-service volumes).
 services:
   # ─────────────────────────────────────────
   # INFRASTRUCTURE
   # ─────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
+    pull_policy: always
     container_name: ip_postgres
     restart: unless-stopped
     environment:
@@ -24,6 +26,7 @@ services:
 
   pgbouncer:
     image: edoburu/pgbouncer:latest
+    pull_policy: always
     container_name: ip_pgbouncer
     restart: unless-stopped
     ports:
@@ -48,7 +51,8 @@ services:
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
+    pull_policy: always
     container_name: ip_redis
     restart: unless-stopped
     ports:
@@ -75,6 +79,7 @@ services:
     build:
       context: ./content-factory
       dockerfile: Dockerfile
+      pull: true
     container_name: ip_content_factory
     restart: unless-stopped
     ports:
@@ -85,8 +90,15 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3-flash-preview}
+      TEXT_PROVIDER_PRIMARY: ${TEXT_PROVIDER_PRIMARY:-gemini}
+      DYNAMIC_MODE_STRICT: ${DYNAMIC_MODE_STRICT:-true}
+      GENERATION_ALLOW_SYNTHETIC_PREVIEW_FALLBACK: ${GENERATION_ALLOW_SYNTHETIC_PREVIEW_FALLBACK:-false}
+      GENERATION_ENABLE_DEMO_CAPS: ${GENERATION_ENABLE_DEMO_CAPS:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       KIE_API_KEY: ${KIE_API_KEY:-}
+      SEEDANCE_API_KEY: ${SEEDANCE_API_KEY:-}
+      SEEDANCE_BASE_URL: ${SEEDANCE_BASE_URL:-https://api.kie.ai}
       JWT_SECRET: ${JWT_SECRET:-changeme_in_production}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
@@ -99,10 +111,10 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./content-factory/src:/app/src
-      - ./content-factory/alembic:/app/alembic
-      - ./content-factory/alembic.ini:/app/alembic.ini
-      - ./content-factory/tests:/app/tests
+      # Full tree so local changes (entrypoint, requirements, src, alembic) match the container
+      - ./content-factory:/app
+      # Persist structured pipeline trace logs on host
+      - ./content-factory/src/logs:/app/src/logs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -117,6 +129,7 @@ services:
     build:
       context: ./distribution-engine
       dockerfile: Dockerfile
+      pull: true
     container_name: ip_distribution_engine
     restart: unless-stopped
     ports:
@@ -138,14 +151,19 @@ services:
       QUEUE_BATCH_SIZE: ${QUEUE_BATCH_SIZE:-5}
       CAMPAIGN_CYCLE_HOURS: ${CAMPAIGN_CYCLE_HOURS:-6}
       CHROMIUM_PATH: /usr/bin/chromium-browser
+      PUBLISH_DRY_RUN: ${PUBLISH_DRY_RUN:-false}
+      PUBLISH_SKIP_RACE_RECHECK: ${PUBLISH_SKIP_RACE_RECHECK:-false}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
     depends_on:
       pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
-      - ./distribution-engine/src:/app/src
-      - ./distribution-engine/tests:/app/tests
+      # Full tree: local `src/` (and tests) are what the container runs
+      - ./distribution-engine:/app
+      # Keep Linux node_modules from the image; do not overwrite with the host folder
+      - /app/node_modules
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 30s
@@ -160,6 +178,7 @@ services:
     build:
       context: ./emulator-controller
       dockerfile: Dockerfile
+      pull: true
     container_name: ip_emulator_controller
     restart: unless-stopped
     environment:
@@ -206,7 +225,6 @@ services:
         condition: service_healthy
     volumes:
       - ./emulator-controller:/app
-      - ./emulator-controller/logs:/app/logs
 
   # ─────────────────────────────────────────
   # DASHBOARD (Next.js)
@@ -215,6 +233,7 @@ services:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
+      pull: true
     container_name: ip_dashboard
     restart: unless-stopped
     ports:
@@ -236,8 +255,10 @@ services:
       emulator-controller:
         condition: service_started
     volumes:
-      - ./dashboard/src:/app/src
-      - ./dashboard/public:/app/public
+      # Full tree: next.config, tailwind, src, public, etc. stay in sync with local
+      - ./dashboard:/app
+      - /app/node_modules
+      - /app/.next
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1"]
       interval: 30s
@@ -250,7 +271,8 @@ services:
   # ─────────────────────────────────────────
 
   prometheus:
-    image: prom/prometheus:v2.50.0
+    image: prom/prometheus:v2.53.4
+    pull_policy: always
     container_name: ip_prometheus
     restart: unless-stopped
     ports:
@@ -267,7 +289,8 @@ services:
       - emulator-controller
 
   grafana:
-    image: grafana/grafana:10.3.1
+    image: grafana/grafana:10.4.8
+    pull_policy: always
     container_name: ip_grafana
     restart: unless-stopped
     ports:
