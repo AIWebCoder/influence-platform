@@ -7,14 +7,14 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
-const topPosts = [
-  { id: 1, caption: "5 tricks for Next.js 14 🚀", engagement: "12.4k", niche: "Tech" },
-  { id: 2, early: true, caption: "Morning routine setup ☕", engagement: "8.1k", niche: "Lifestyle" },
-  { id: 3, caption: "How to fix shadowbans...", engagement: "6.2k", niche: "Growth" },
-  { id: 4, caption: "AI tools you need in 2026", engagement: "5.5k", niche: "Tech" },
-];
+type TopPost = {
+  id: string;
+  caption: string;
+  engagement: string;
+  niche?: string;
+};
 
-export function TopContent() {
+export function TopContent({ posts }: { posts: TopPost[] }) {
   return (
     <Card className="col-span-3">
       <CardHeader>
@@ -25,16 +25,20 @@ export function TopContent() {
       </CardHeader>
       <CardContent>
         <div className="space-y-6">
-          {topPosts.map(post => (
+          {posts.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No published content yet.</p>
+          ) : posts.map(post => (
             <div className="flex items-center" key={post.id}>
               <div className="ml-4 space-y-1 flex-1">
                 <p className="text-sm font-medium leading-none truncate w-[200px]">
                   {post.caption}
                 </p>
                 <div className="flex items-center text-xs text-muted-foreground pt-1 gap-2">
-                  <Badge variant="outline" className="text-[10px] uppercase">
-                    {post.niche}
-                  </Badge>
+                  {post.niche ? (
+                    <Badge variant="outline" className="text-[10px] uppercase">
+                      {post.niche}
+                    </Badge>
+                  ) : null}
                 </div>
               </div>
               <div className="ml-auto font-bold text-sm text-green-600 dark:text-green-400">

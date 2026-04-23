@@ -40,19 +40,27 @@ export default function AnalyticsPage() {
   const [posts, setPosts] = useState<PostMetric[]>([]);
   const [topPosts, setTopPosts] = useState<PostMetric[]>([]);
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
+  const [optimalTimes, setOptimalTimes] = useState<Array<{ hour: number; score: number }>>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"posts" | "accounts">("posts");
 
   const fetchData = useCallback(async () => {
     try {
-      const [postData, topData, accData] = await Promise.all([
+      const [postData, topData, accData, bestTimes] = await Promise.all([
         api.distribution.getPostAnalytics(),
         api.distribution.getTopPerforming(),
         api.distribution.getAccounts(),
+        api.distribution.getOptimalPostingTimes({}).catch(() => []),
       ]);
       setPosts(postData);
-      setTopPosts(topData);
+      setTopPosts(
+        (Array.isArray(topData) ? topData : []).map((row: any) => ({
+          ...row,
+          account_username: row.account_username || row.username || "unknown",
+        }))
+      );
       setAccounts(accData);
+      setOptimalTimes(Array.isArray(bestTimes) ? bestTimes : []);
     } catch (err) {
       console.error("Failed to fetch analytics:", err);
     } finally {
@@ -63,6 +71,15 @@ export default function AnalyticsPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const totalEngagement = posts.reduce((acc, p) => acc + Number(p.likes || 0) + Number(p.comments || 0), 0);
+  const avgEngagementRate = posts.length > 0
+    ? (posts.reduce((acc, p) => acc + Number(p.engagement_rate || 0), 0) / posts.length).toFixed(2)
+    : "0.00";
+  const growthVelocity = accounts.reduce((acc, a) => acc + Number(a.followers_count || 0), 0);
+  const successProbability = posts.length > 0
+    ? Math.round((posts.filter((p) => Number(p.engagement_rate || 0) >= 1).length / posts.length) * 100)
+    : 0;
 
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
@@ -89,7 +106,7 @@ export default function AnalyticsPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="rounded-premium border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm">
           <p className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">{text.analytics.totalEngagement}</p>
-          <p className="text-3xl font-black mt-2 font-display text-zinc-900 dark:text-zinc-50">12.4K</p>
+          <p className="text-3xl font-black mt-2 font-display text-zinc-900 dark:text-zinc-50">{totalEngagement.toLocaleString()}</p>
           <div className="flex items-center gap-1.5 mt-3 text-emerald-600 text-[10px] font-black uppercase tracking-widest">
             <TrendingUp className="w-3.5 h-3.5" /> +8.2% velocity
           </div>
@@ -97,19 +114,19 @@ export default function AnalyticsPage() {
 
         <div className="rounded-premium border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm">
           <p className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">{text.analytics.growthVelocity}</p>
-          <p className="text-3xl font-black mt-2 font-display text-zinc-900 dark:text-zinc-50">+842</p>
+          <p className="text-3xl font-black mt-2 font-display text-zinc-900 dark:text-zinc-50">{growthVelocity.toLocaleString()}</p>
           <p className="text-[10px] text-zinc-400 dark:text-zinc-500 mt-3 font-black uppercase tracking-widest">Nodes / Net Growth</p>
         </div>
 
         <div className="rounded-premium border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm">
           <p className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">{text.analytics.avgEngagementRate}</p>
-          <p className="text-3xl font-black mt-2 font-display text-zinc-900 dark:text-zinc-50">4.2%</p>
+          <p className="text-3xl font-black mt-2 font-display text-zinc-900 dark:text-zinc-50">{avgEngagementRate}%</p>
           <p className="text-[10px] text-zinc-400 dark:text-zinc-500 mt-3 font-black uppercase tracking-widest">{text.analytics.systemBenchmark}</p>
         </div>
 
         <div className="rounded-premium border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm">
           <p className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">{text.analytics.successProbability}</p>
-          <p className="text-3xl font-black mt-2 font-display text-zinc-900 dark:text-zinc-50">94%</p>
+          <p className="text-3xl font-black mt-2 font-display text-zinc-900 dark:text-zinc-50">{successProbability}%</p>
           <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-3 font-black uppercase tracking-widest">{text.analytics.confidenceHigh}</p>
         </div>
       </div>
@@ -232,12 +249,10 @@ export default function AnalyticsPage() {
               {text.analytics.optimalPostingTimes}
             </h4>
             <div className="grid grid-cols-2 gap-3">
-              {[
-                { time: "10:30 AM", score: 92 },
-                { time: "06:15 PM", score: 88 },
-                { time: "09:00 PM", score: 84 },
-                { time: "03:45 AM", score: 76 },
-              ].map((t) => (
+              {(optimalTimes.length > 0 ? optimalTimes.slice(0, 4).map((o) => ({
+                time: `${String(o.hour).padStart(2, "0")}:00`,
+                score: Math.max(1, Math.min(100, Math.round(Number(o.score || 0)))),
+              })) : []).map((t) => (
                 <div key={t.time} className="p-3 rounded-xl border bg-muted/10">
                   <p className="text-xs font-bold">{t.time}</p>
                   <div className="flex items-center justify-between mt-1">

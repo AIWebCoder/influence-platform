@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import axios from "axios";
+import { api } from "@/lib/api";
 import { PerformanceChart } from "@/components/analytics/PerformanceChart";
 import { TopContent } from "@/components/analytics/TopContent";
 import { Recommendations } from "@/components/analytics/Recommendations";
@@ -14,17 +14,18 @@ export default function AnalyticsDashboard() {
   const [queueSize, setQueueSize] = useState("0");
   const [avgHealth, setAvgHealth] = useState(0);
   const [chartData, setChartData] = useState<any[]>([]);
+  const [topPosts, setTopPosts] = useState<Array<{ id: string; caption: string; engagement: string; niche?: string }>>([]);
+  const [recommendations, setRecommendations] = useState<Array<{ type: "insight" | "warning"; title: string; description: string }>>([]);
 
   useEffect(() => {
     async function loadData() {
       try {
-        const [accRes, queueRes] = await Promise.all([
-          axios.get("http://localhost:3001/accounts"),
-          axios.get("http://localhost:8000/content/queue/size").catch(() => ({ data: { size: "0" } })),
+        const [accounts, queueRes, posts] = await Promise.all([
+          api.distribution.getAccounts(),
+          api.content.getQueueSize(),
+          api.distribution.getPostAnalytics(),
         ]);
-
-        const accounts = accRes.data;
-        const qSize = queueRes.data.size;
+        const qSize = String(queueRes?.size ?? 0);
 
         setAccountCount(accounts.length);
         setQueueSize(qSize);
@@ -35,25 +36,50 @@ export default function AnalyticsDashboard() {
         });
         setAvgHealth(accounts.length > 0 ? Math.round(totalHealth / accounts.length) : 0);
 
-        const newChartData = [
-          { day: "01" },
-          { day: "05" },
-          { day: "10" },
-          { day: "15" },
-          { day: "20" },
-          { day: "25" },
-          { day: "30" },
-        ].map((point, index) => {
-          const row: any = { day: point.day };
-          accounts.forEach((acc: any) => {
-            row[`acc_${acc.username}`] = Math.floor(Math.random() * 500) + 100 * index + (acc.health_score || 50);
-          });
-          return row;
-        });
-
-        if (accounts.length > 0) {
-          setChartData(newChartData);
+        const grouped = new Map<string, Record<string, string | number>>();
+        for (const post of posts as Array<{ published_at: string; account_username: string; likes?: number; comments?: number }>) {
+          const dt = post.published_at ? new Date(post.published_at) : null;
+          if (!dt || Number.isNaN(dt.getTime())) continue;
+          const day = dt.toISOString().slice(5, 10);
+          const key = `acc_${post.account_username}`;
+          const score = Number(post.likes || 0) + Number(post.comments || 0);
+          if (!grouped.has(day)) grouped.set(day, { day });
+          const row = grouped.get(day)!;
+          row[key] = Number(row[key] || 0) + score;
         }
+        const rows = Array.from(grouped.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([, row]) => row);
+        setChartData(rows);
+
+        const best = [...(posts as Array<{ id: string; caption?: string; likes?: number; comments?: number; engagement_rate?: string; account_username?: string }>)]
+          .sort((a, b) => Number(b.engagement_rate || 0) - Number(a.engagement_rate || 0))
+          .slice(0, 4)
+          .map((p) => ({
+            id: p.id,
+            caption: p.caption || "(no caption)",
+            engagement: `${Number(p.likes || 0) + Number(p.comments || 0)}`,
+            niche: p.account_username ? `@${p.account_username}` : undefined,
+          }));
+        setTopPosts(best);
+
+        const recs: Array<{ type: "insight" | "warning"; title: string; description: string }> = [];
+        const lowHealth = accounts
+          .filter((a: any) => Number(a.health_score || 0) < 50)
+          .slice(0, 2);
+        for (const a of lowHealth) {
+          recs.push({
+            type: "warning",
+            title: `Rest account: ${a.username}`,
+            description: `Health score is ${a.health_score}. Pause posting and investigate account safety signals.`,
+          });
+        }
+        recs.push({
+          type: "insight",
+          title: "Optimize queue throughput",
+          description: `Current queue size is ${qSize}. Keep queue under control to reduce publish latency.`,
+        });
+        setRecommendations(recs);
       } catch (err) {
         console.error("Error loading analytics data", err);
       }
@@ -113,11 +139,11 @@ export default function AnalyticsDashboard() {
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
         <PerformanceChart data={chartData} />
-        <TopContent />
+        <TopContent posts={topPosts} />
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-        <Recommendations />
+        <Recommendations items={recommendations} />
       </div>
     </div>
   );

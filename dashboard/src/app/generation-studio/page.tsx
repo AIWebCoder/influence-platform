@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -20,17 +20,26 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DateTimePicker } from "@/components/ui/date-time-picker";
 import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CheckCircle2, Circle, GripVertical, Loader2, RefreshCw, Rocket, Video, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, Circle, GripVertical, Loader2, RefreshCw, Rocket, Square, Video, XCircle } from "lucide-react";
 import toast from "react-hot-toast";
 
 type ContentType = "post" | "reel" | "story";
 type Mode = "persona" | "faceless";
+type ExecutionMode = "scene_based" | "multi_scene_single_video";
 
 type DraftScene = {
   scene_index: number;
@@ -72,6 +81,7 @@ type GenerationJobDetail = {
   id: string;
   status: string;
   progress: number;
+  step_control?: Record<string, string>;
   input_payload: Record<string, unknown>;
   output_url?: string | null;
   logs: Array<{ ts?: string; level?: string; message?: string }>;
@@ -84,18 +94,25 @@ type GenerationJobDetail = {
   } | null;
 };
 
+type DistributionAccount = {
+  id?: string;
+  username?: string;
+};
+
 const NICHE_OPTIONS = ["fitness", "food", "travel", "business", "lifestyle"] as const;
 
 function statusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
   if (status === "completed" || status === "queued") return "default";
   if (status === "failed") return "destructive";
-  if (status === "running" || status === "ready") return "secondary";
+  if (status === "running" || status === "ready" || status === "cancelling") return "secondary";
+  if (status === "cancelled") return "outline";
   return "outline";
 }
 
 function StepIcon({ status }: { status: string }) {
   if (status === "completed") return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
   if (status === "failed") return <XCircle className="h-4 w-4 text-red-600" />;
+  if (status === "cancelled") return <Square className="h-4 w-4 text-muted-foreground" />;
   if (status === "running") return <Loader2 className="h-4 w-4 animate-spin text-amber-600" />;
   return <Circle className="h-4 w-4 text-muted-foreground" />;
 }
@@ -103,9 +120,11 @@ function StepIcon({ status }: { status: string }) {
 export default function GenerationStudioPage() {
   const [contentType, setContentType] = useState<ContentType>("reel");
   const [mode, setMode] = useState<Mode>("faceless");
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>("multi_scene_single_video");
+  const [videoDuration, setVideoDuration] = useState<number>(15);
   const [niche, setNiche] = useState<string>("fitness");
   const [topic, setTopic] = useState("");
-  const [accounts, setAccounts] = useState("bot_1, bot_2");
+  const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
   const [schedule, setSchedule] = useState<Date | undefined>(undefined);
   const [draftScenes, setDraftScenes] = useState<DraftScene[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -113,7 +132,11 @@ export default function GenerationStudioPage() {
   const [createLoading, setCreateLoading] = useState(false);
   const [launchLoading, setLaunchLoading] = useState(false);
   const [readyLoading, setReadyLoading] = useState(false);
-  const [previewingSceneId, setPreviewingSceneId] = useState<string | null>(null);
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [cancelStepLoading, setCancelStepLoading] = useState<string | null>(null);
+  const [previewingTarget, setPreviewingTarget] = useState<{ sceneId: string; kind: "image" | "video" } | null>(null);
+  /** At most one scene video panel expanded (toggle with "Vid preview" / "Hide video"). */
+  const [openSceneVideoId, setOpenSceneVideoId] = useState<string | null>(null);
 
   const [editOpen, setEditOpen] = useState(false);
   const [editScene, setEditScene] = useState<JobScene | DraftScene | null>(null);
@@ -130,8 +153,25 @@ export default function GenerationStudioPage() {
   const { data: job, mutate } = useSWR<GenerationJobDetail | undefined>(
     jobId ? ["generation-job", jobId] : null,
     () => fetchJob(jobId as string),
-    { refreshInterval: jobId ? 3000 : 0 }
+    { refreshInterval: jobId ? 2000 : 0 }
   );
+
+  const { data: accountChoices = [], isLoading: accountsLoading } = useSWR<Array<{ id: string; username: string }>>(
+    "distribution-accounts",
+    async () => {
+      const list = (await api.distribution.getAccounts()) as DistributionAccount[];
+      return list
+        .map((acc) => ({
+          id: typeof acc?.id === "string" ? acc.id.trim() : "",
+          username: typeof acc?.username === "string" ? acc.username.trim() : "",
+        }))
+        .filter((acc) => Boolean(acc.id) && Boolean(acc.username));
+    }
+  );
+
+  useEffect(() => {
+    setOpenSceneVideoId(null);
+  }, [jobId]);
 
   const sortedScenes: Array<JobScene | DraftScene> = useMemo(() => {
     if (job?.scenes?.length) {
@@ -144,9 +184,23 @@ export default function GenerationStudioPage() {
     () => sortedScenes.reduce((acc, s) => acc + (s.duration || 0), 0),
     [sortedScenes]
   );
+  const accountSummary = useMemo(() => {
+    if (selectedAccounts.length === 0) return "Select target accounts";
+    const labels = selectedAccounts
+      .map((id) => accountChoices.find((a) => a.id === id)?.username || id)
+      .filter(Boolean);
+    if (labels.length <= 2) return labels.join(", ");
+    return `${selectedAccounts.length} accounts selected`;
+  }, [selectedAccounts, accountChoices]);
 
   const canLaunch = job && (job.status === "draft" || job.status === "ready");
-  const pipelineActive = job && job.status === "running";
+  const jobIsCancelling = job?.status === "cancelling";
+  const jobIsCancelled = job?.status === "cancelled";
+  const canStopPipeline = job && (job.status === "running" || job.status === "pending");
+  const sceneActionsLocked = Boolean(jobIsCancelling);
+  const sceneRegenDisabled = Boolean(jobIsCancelling || jobIsCancelled);
+  const livePollActive = job && ["running", "pending", "cancelling"].includes(job.status);
+  const isVerticalVideo = contentType === "reel" || contentType === "story";
 
   const handlePreview = async () => {
     if (!topic.trim()) {
@@ -172,25 +226,36 @@ export default function GenerationStudioPage() {
   };
 
   const handleCreateDraft = async () => {
-    const tAccounts = accounts.split(",").map((a) => a.trim()).filter(Boolean);
-    if (!topic.trim() || tAccounts.length === 0) {
+    if (!topic.trim() || selectedAccounts.length === 0) {
       toast.error("Topic and at least one account are required.");
       return;
     }
     setCreateLoading(true);
     try {
       const res = await api.generationJobs.create({
+        execution_mode: executionMode,
         content_type: contentType,
         mode,
         niche,
         topic: topic.trim(),
-        target_accounts: tAccounts,
+        target_accounts: selectedAccounts,
         scheduled_at: schedule ? schedule.toISOString() : undefined,
+        video_duration: executionMode === "multi_scene_single_video" ? videoDuration : undefined,
       });
       setJobId(res.job_id);
       toast.success("Draft job created with scenes. Edit, preview, then launch.");
-    } catch {
-      toast.error("Could not create draft job.");
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === "object" && "response" in e
+          ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : null;
+      const code =
+        e && typeof e === "object" && "code" in e ? String((e as { code?: string }).code || "") : "";
+      if (code === "ECONNABORTED") {
+        toast.error("Create draft request timed out on frontend. Retrying usually succeeds.");
+      } else {
+        toast.error(typeof msg === "string" ? msg : "Could not create draft job.");
+      }
     } finally {
       setCreateLoading(false);
     }
@@ -211,6 +276,21 @@ export default function GenerationStudioPage() {
     }
   };
 
+  const handleStopPipeline = async () => {
+    if (!jobId) return;
+    setCancelLoading(true);
+    try {
+      await api.generationJobs.cancel(jobId);
+      await mutate();
+      toast.success("Stopping… partial results are kept.");
+    } catch (e: unknown) {
+      const msg = e && typeof e === "object" && "response" in e ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail : null;
+      toast.error(typeof msg === "string" ? msg : "Could not request stop.");
+    } finally {
+      setCancelLoading(false);
+    }
+  };
+
   const handleMarkReady = async () => {
     if (!jobId) return;
     setReadyLoading(true);
@@ -227,15 +307,18 @@ export default function GenerationStudioPage() {
 
   const handleSceneMediaPreview = async (sceneId: string, kind: "image" | "video") => {
     if (!jobId) return;
-    setPreviewingSceneId(sceneId);
+    setPreviewingTarget({ sceneId, kind });
     try {
       await api.generationJobs.previewScene(jobId, sceneId, kind);
       await mutate();
       toast.success(kind === "video" ? "Video preview generated." : "Image preview generated.");
+      if (kind === "video") {
+        setOpenSceneVideoId(sceneId);
+      }
     } catch {
       toast.error("Preview generation failed.");
     } finally {
-      setPreviewingSceneId(null);
+      setPreviewingTarget(null);
     }
   };
 
@@ -354,6 +437,32 @@ export default function GenerationStudioPage() {
     }
   };
 
+  const cancelStep = async (stepName: string) => {
+    if (!jobId) return;
+    setCancelStepLoading(stepName);
+    try {
+      await api.generationJobs.cancelStep(jobId, stepName);
+      await mutate();
+      toast.success(`Stopping ${stepName}…`);
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === "object" && "response" in e
+          ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : null;
+      toast.error(typeof msg === "string" ? msg : "Cancel step failed.");
+    } finally {
+      setCancelStepLoading(null);
+    }
+  };
+
+  const pipelineStepControl = (stepName: string, stepStatus: string) => {
+    const c = job?.step_control?.[stepName];
+    if (c) return c;
+    if (stepStatus === "completed") return "completed";
+    if (stepStatus === "cancelled") return "cancelled";
+    return "pending";
+  };
+
   const logs = job?.logs ?? [];
   const maxDur = Math.max(1, ...sortedScenes.map((s) => s.duration || 1));
 
@@ -401,6 +510,18 @@ export default function GenerationStudioPage() {
                   </SelectContent>
                 </Select>
               </div>
+                <div className="space-y-2">
+                  <Label>Execution Mode</Label>
+                  <Select value={executionMode} onValueChange={(v) => setExecutionMode(v as ExecutionMode)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="multi_scene_single_video">Multi-scene single video (Seedance)</SelectItem>
+                      <SelectItem value="scene_based">Scene-based (Kie)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               <div className="space-y-2">
                 <Label>Niche</Label>
                 <Select value={niche} onValueChange={setNiche}>
@@ -416,13 +537,71 @@ export default function GenerationStudioPage() {
                   </SelectContent>
                 </Select>
               </div>
+              {executionMode === "multi_scene_single_video" ? (
+                <div className="space-y-2">
+                  <Label>Video duration (Seedance)</Label>
+                  <Select value={String(videoDuration)} onValueChange={(v) => setVideoDuration(Number(v))}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="4">4s</SelectItem>
+                      <SelectItem value="5">5s</SelectItem>
+                      <SelectItem value="6">6s</SelectItem>
+                      <SelectItem value="7">7s</SelectItem>
+                      <SelectItem value="8">8s</SelectItem>
+                      <SelectItem value="9">9s</SelectItem>
+                      <SelectItem value="10">10s</SelectItem>
+                      <SelectItem value="11">11s</SelectItem>
+                      <SelectItem value="12">12s</SelectItem>
+                      <SelectItem value="13">13s</SelectItem>
+                      <SelectItem value="14">14s</SelectItem>
+                      <SelectItem value="15">15s</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">Seedance supports 4 to 15 seconds.</p>
+                </div>
+              ) : null}
               <div className="space-y-2">
                 <Label>Topic</Label>
                 <Input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="e.g. morning mobility routine" />
               </div>
               <div className="space-y-2">
                 <Label>Accounts</Label>
-                <Input value={accounts} onChange={(e) => setAccounts(e.target.value)} placeholder="comma-separated usernames" />
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button type="button" variant="outline" className="w-full justify-between font-normal">
+                      <span className="truncate text-left">{accountSummary}</span>
+                      <ChevronDown className="h-4 w-4 shrink-0 opacity-70" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)]">
+                    <DropdownMenuLabel>Select one or more accounts</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {accountsLoading ? (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">Loading accounts...</div>
+                    ) : accountChoices.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No accounts found</div>
+                    ) : (
+                      accountChoices.map((account) => (
+                        <DropdownMenuCheckboxItem
+                          key={account.id}
+                          checked={selectedAccounts.includes(account.id)}
+                          onCheckedChange={(checked) => {
+                            setSelectedAccounts((prev) =>
+                              checked
+                                ? Array.from(new Set([...prev, account.id]))
+                                : prev.filter((acc) => acc !== account.id)
+                            );
+                          }}
+                          onSelect={(event) => event.preventDefault()}
+                        >
+                          @{account.username}
+                        </DropdownMenuCheckboxItem>
+                      ))
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
               <div className="space-y-2">
                 <Label>Schedule</Label>
@@ -455,10 +634,28 @@ export default function GenerationStudioPage() {
                 ) : null}
               </div>
               {jobId && (
-                <p className="text-xs text-muted-foreground">
-                  Job <span className="font-mono">{jobId.slice(0, 8)}…</span>
-                  {job ? ` · ${job.status}` : ""}
-                </p>
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    Job <span className="font-mono">{jobId.slice(0, 8)}…</span>
+                    {job ? ` · ${job.status}` : ""}
+                  </p>
+                  {canStopPipeline ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-destructive/50 text-destructive hover:bg-destructive/10 dark:border-destructive/60"
+                      disabled={cancelLoading}
+                      onClick={handleStopPipeline}
+                    >
+                      {cancelLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
+                      Cancel job
+                    </Button>
+                  ) : null}
+                  {jobIsCancelling ? (
+                    <p className="text-xs text-muted-foreground">Stopping… the pipeline will exit after the current step.</p>
+                  ) : null}
+                </div>
               )}
               {job?.cost_estimate ? (
                 <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs">
@@ -498,8 +695,8 @@ export default function GenerationStudioPage() {
                       return (
                         <div
                           key={sid}
-                          draggable
-                          onDragStart={() => setDragSceneId(sid)}
+                          draggable={!jobIsCancelling}
+                          onDragStart={() => !jobIsCancelling && setDragSceneId(sid)}
                           onDragOver={(e) => e.preventDefault()}
                           onDrop={() => onDropOnScene(sid)}
                           style={{ flex: `${w} 1 0` }}
@@ -529,6 +726,15 @@ export default function GenerationStudioPage() {
                       const key = sid ?? `draft-${scene.scene_index}`;
                       const st = "status" in scene && scene.status ? scene.status : "local";
                       const meta = "metadata" in scene ? scene.metadata : undefined;
+                      const jobScene = sid ? (scene as JobScene) : null;
+                      const videoSrc =
+                        meta?.preview_video_url ??
+                        (jobScene?.video_url ? String(jobScene.video_url) : undefined);
+                      const videoPanelOpen = Boolean(sid && openSceneVideoId === sid && videoSrc);
+                      const imgPreviewBusy =
+                        Boolean(sid && previewingTarget?.sceneId === sid && previewingTarget.kind === "image");
+                      const vidPreviewBusy =
+                        Boolean(sid && previewingTarget?.sceneId === sid && previewingTarget.kind === "video");
                       return (
                         <div key={key} className="rounded-lg border border-border bg-card/60 p-3 shadow-sm">
                           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -547,33 +753,71 @@ export default function GenerationStudioPage() {
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    disabled={previewingSceneId === sid}
+                                    disabled={sceneActionsLocked || sceneRegenDisabled || imgPreviewBusy}
                                     onClick={() => handleSceneMediaPreview(sid, "image")}
                                   >
-                                    {previewingSceneId === sid ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                                    {imgPreviewBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
                                     Img preview
                                   </Button>
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    disabled={previewingSceneId === sid}
-                                    onClick={() => handleSceneMediaPreview(sid, "video")}
+                                    disabled={sceneActionsLocked || sceneRegenDisabled || vidPreviewBusy}
+                                    onClick={() => {
+                                      if (!videoSrc) {
+                                        void handleSceneMediaPreview(sid, "video");
+                                        return;
+                                      }
+                                      setOpenSceneVideoId((prev) => (prev === sid ? null : sid));
+                                    }}
                                   >
-                                    Vid preview
+                                    {vidPreviewBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                                    {videoPanelOpen ? "Hide video" : "Vid preview"}
                                   </Button>
                                 </>
                               ) : null}
-                              <Button size="sm" variant="outline" onClick={() => openEdit(scene)}>
+                              <Button size="sm" variant="outline" disabled={sceneActionsLocked} onClick={() => openEdit(scene)}>
                                 Edit
                               </Button>
-                              <Button size="sm" variant="destructive" onClick={() => regenerateScene(scene)}>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                disabled={sceneActionsLocked || sceneRegenDisabled}
+                                onClick={() => regenerateScene(scene)}
+                              >
                                 Retry media
                               </Button>
                             </div>
                           </div>
                           <p className="text-sm leading-relaxed">{scene.prompt}</p>
-                          {meta?.preview_video_url ? (
-                            <video src={meta.preview_video_url} className="mt-2 max-h-32 w-full rounded border" controls playsInline />
+                          {videoSrc ? (
+                            <div
+                              className={cn(
+                                "video-container mt-3 overflow-hidden rounded-lg border border-border/50 bg-muted/20 shadow-md shadow-black/[0.07] ring-1 ring-black/[0.04] transition-[max-height,opacity] duration-300 ease-in-out dark:bg-muted/10 dark:shadow-black/40 dark:ring-white/[0.06]",
+                                videoPanelOpen ? "max-h-[560px] opacity-100" : "max-h-0 opacity-0"
+                              )}
+                              aria-hidden={!videoPanelOpen}
+                            >
+                              <div
+                                className={cn(
+                                  "p-2 transition-opacity duration-300 ease-in-out",
+                                  videoPanelOpen ? "opacity-100" : "pointer-events-none opacity-0"
+                                )}
+                              >
+                                <video
+                                  src={videoSrc}
+                                  className={cn(
+                                    "mx-auto w-full max-h-[320px] rounded-lg object-cover shadow-sm",
+                                    isVerticalVideo
+                                      ? "aspect-[9/16] max-w-[min(100%,280px)]"
+                                      : "aspect-video max-w-full"
+                                  )}
+                                  controls
+                                  playsInline
+                                  preload="metadata"
+                                />
+                              </div>
+                            </div>
                           ) : null}
                           {sid && (scene as JobScene).error_message ? (
                             <p className="mt-2 text-xs text-red-600 dark:text-red-400">{(scene as JobScene).error_message}</p>
@@ -591,7 +835,11 @@ export default function GenerationStudioPage() {
             <CardHeader>
               <CardTitle className="text-base">Live job</CardTitle>
               <CardDescription>
-                {pipelineActive || (job && job.status === "completed") ? "Polling every 3s." : "Polling while a job id is set."}
+                {livePollActive || (job && job.status === "completed")
+                  ? jobIsCancelling
+                    ? "Stopping… polling every 2s."
+                    : "Polling every 2–3s while the job is active."
+                  : "Polling while a job id is set."}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -613,7 +861,27 @@ export default function GenerationStudioPage() {
                       <span className="font-mono">{job.progress}%</span>
                     </div>
                     <Progress value={job.progress} className="h-2" />
-                    <Badge variant={statusBadgeVariant(job.status)}>{job.status}</Badge>
+                    <div className="flex w-full flex-wrap items-center justify-between gap-2">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <Badge variant={statusBadgeVariant(job.status)}>{job.status}</Badge>
+                        {jobIsCancelling ? (
+                          <span className="text-xs text-muted-foreground">Stopping…</span>
+                        ) : null}
+                      </div>
+                      {canStopPipeline ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={cancelLoading}
+                          onClick={handleStopPipeline}
+                          className="shrink-0 border-destructive/50 text-destructive hover:bg-destructive/10 dark:border-destructive/60"
+                        >
+                          {cancelLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
+                          Cancel job
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
 
                   {job.output_url ? (
@@ -627,8 +895,10 @@ export default function GenerationStudioPage() {
                       />
                     </div>
                   ) : (
-                    <div className="flex aspect-video items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground">
-                      Final video appears when assembly completes.
+                    <div className="flex aspect-video items-center justify-center rounded-md border border-dashed px-3 text-center text-xs text-muted-foreground">
+                      {jobIsCancelled
+                        ? "Job was cancelled. Partial scene media is preserved; no final assembly was run."
+                        : "Final video appears when assembly completes."}
                     </div>
                   )}
 
@@ -642,32 +912,77 @@ export default function GenerationStudioPage() {
                       </TabsTrigger>
                     </TabsList>
                     <TabsContent value="steps" className="mt-3 space-y-2">
-                      {job.steps.map((s) => (
-                        <div
-                          key={s.id}
-                          className="flex items-start justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm"
-                        >
-                          <div className="flex items-start gap-2">
-                            <StepIcon status={s.status} />
-                            <div>
-                              <p className="font-medium leading-none">{s.step_name}</p>
-                              <p className="text-xs text-muted-foreground">{s.progress}%</p>
-                              {s.status === "failed" && s.error_message ? (
-                                <p className="mt-1 text-xs text-red-600">{s.error_message}</p>
+                      {job.steps.map((s) => {
+                        const ctrl = pipelineStepControl(s.step_name, s.status);
+                        const showCancel = ctrl !== "completed" && s.status !== "completed";
+                        const cancelDisabled =
+                          job.status === "draft" ||
+                          job.status === "ready" ||
+                          jobIsCancelling ||
+                          jobIsCancelled ||
+                          ctrl === "cancelling" ||
+                          ctrl === "cancelled" ||
+                          s.status === "cancelled" ||
+                          (s.status !== "running" && ctrl !== "running");
+                        return (
+                          <div
+                            key={s.id}
+                            className="flex items-start justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm"
+                          >
+                            <div className="flex min-w-0 flex-1 items-start gap-2">
+                              <StepIcon status={s.status} />
+                              <div className="min-w-0">
+                                <p className="font-medium leading-none">{s.step_name}</p>
+                                <p className="text-xs text-muted-foreground">{s.progress}%</p>
+                                {ctrl === "cancelling" ? (
+                                  <p className="mt-1 text-xs text-amber-700">Cancelling…</p>
+                                ) : null}
+                                {s.status === "failed" && s.error_message ? (
+                                  <p className="mt-1 text-xs text-red-600">{s.error_message}</p>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className="flex shrink-0 gap-2">
+                              {showCancel ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  className="shrink-0"
+                                  disabled={cancelDisabled || cancelStepLoading === s.step_name}
+                                  onClick={() => cancelStep(s.step_name)}
+                                >
+                                  {cancelStepLoading === s.step_name ? (
+                                    <span className="inline-flex items-center gap-1">
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                      Cancel
+                                    </span>
+                                  ) : (
+                                    "Cancel"
+                                  )}
+                                </Button>
                               ) : null}
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                className="shrink-0"
+                                disabled={
+                                  job.status === "draft" ||
+                                  job.status === "ready" ||
+                                  jobIsCancelling ||
+                                  jobIsCancelled ||
+                                  ctrl === "cancelling" ||
+                                  ctrl === "cancelled" ||
+                                  s.status === "cancelled"
+                                }
+                                onClick={() => retryStep(s.step_name)}
+                              >
+                                Retry
+                              </Button>
                             </div>
                           </div>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            className="shrink-0"
-                            disabled={job.status === "draft" || job.status === "ready"}
-                            onClick={() => retryStep(s.step_name)}
-                          >
-                            Retry
-                          </Button>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </TabsContent>
                     <TabsContent value="logs" className="mt-3 max-h-56 overflow-y-auto rounded-md border bg-muted/30 p-2 font-mono text-[11px] leading-relaxed">
                       {logs.length === 0 ? (

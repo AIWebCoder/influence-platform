@@ -1,12 +1,13 @@
 import axios from 'axios';
+import type { InternalAxiosRequestConfig } from 'axios';
 
-// The Distribution Engine API (Node.js) usually on port 3000
+// The Distribution Engine API (Node.js) on port 3001 by default
 const distributionClient = axios.create({
   baseURL: process.env.NEXT_PUBLIC_DISTRIBUTION_API_URL || 'http://localhost:3001',
   timeout: 5000,
 });
 
-// The Content Factory API (Python) usually on port 8000
+// The Content Factory API (Python) on port 8000
 const contentClient = axios.create({
   baseURL: process.env.NEXT_PUBLIC_CONTENT_API_URL || 'http://localhost:8000',
   timeout: 5000,
@@ -14,8 +15,59 @@ const contentClient = axios.create({
 
 const contentClientLongTimeout = axios.create({
   baseURL: process.env.NEXT_PUBLIC_CONTENT_API_URL || 'http://localhost:8000',
-  timeout: 120000,
+  timeout: 300000,
 });
+
+/** Same JWT_SECRET as distribution-engine + Content Factory — attach session token for Bearer APIs */
+async function attachBearerAuth(config: InternalAxiosRequestConfig) {
+  if (typeof window === 'undefined') return config;
+  const { getSession } = await import('next-auth/react');
+  const session = await getSession();
+  const token = (session as { accessToken?: string } | null)?.accessToken;
+  const traceId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  config.headers = config.headers ?? {};
+  (config.headers as Record<string, string>)["x-trace-id"] = String(traceId);
+  if (token) {
+    (config.headers as Record<string, string>).Authorization = `Bearer ${token}`;
+  }
+  return config;
+}
+
+distributionClient.interceptors.request.use(attachBearerAuth);
+contentClient.interceptors.request.use(attachBearerAuth);
+contentClientLongTimeout.interceptors.request.use(attachBearerAuth);
+
+let authRecoveryInProgress = false;
+
+async function handleUnauthorizedError(error: any) {
+  if (typeof window === 'undefined') {
+    return Promise.reject(error);
+  }
+
+  const status = error?.response?.status;
+  if (status !== 401) {
+    return Promise.reject(error);
+  }
+
+  // Prevent multiple concurrent redirects when several requests fail together.
+  if (!authRecoveryInProgress) {
+    authRecoveryInProgress = true;
+    try {
+      const { signOut } = await import('next-auth/react');
+      await signOut({ callbackUrl: '/login' });
+    } catch (_e) {
+      window.location.href = '/login';
+    } finally {
+      authRecoveryInProgress = false;
+    }
+  }
+
+  return Promise.reject(error);
+}
+
+distributionClient.interceptors.response.use((response) => response, handleUnauthorizedError);
+contentClient.interceptors.response.use((response) => response, handleUnauthorizedError);
+contentClientLongTimeout.interceptors.response.use((response) => response, handleUnauthorizedError);
 
 export const api = {
   distribution: {
@@ -32,8 +84,7 @@ export const api = {
       return response.data;
     },
     addAccount: async (payload: { username: string; password_encrypted: string; status: string; metadata?: any }) => {
-      // Hardcode port 3001 fallback just in case env is 3000 but the engine runs on 3001
-      const response = await axios.post((process.env.NEXT_PUBLIC_DISTRIBUTION_API_URL || 'http://localhost:3001') + '/accounts', payload);
+      const response = await distributionClient.post('/accounts', payload);
       return response.data;
     },
     getPublications: async (status?: string, limit = 100, offset = 0) => {
@@ -119,8 +170,7 @@ export const api = {
       return response.data;
     },
     getTemplates: async () => {
-      // Mocking endpoint for now, waiting for Track A
-      const response = await contentClient.get('/templates').catch(() => ({ data: [] }));
+      const response = await contentClient.get('/templates');
       return response.data;
     },
     generateContent: async (data: { niche: string, type?: string, target_accounts: string[], scheduled_at?: string }) => {
@@ -134,11 +184,11 @@ export const api = {
       return response.data;
     },
     getHealth: async () => {
-      const response = await contentClient.get('/health').catch(() => ({ data: { status: 'offline' } }));
+      const response = await contentClient.get('/health');
       return response.data;
     },
     getQueueSize: async () => {
-      const response = await contentClient.get('/content/queue/size').catch(() => ({ data: { size: '?' } }));
+      const response = await contentClient.get('/content/queue/size');
       return response.data;
     },
     patchContentPacket: async (id: string, data: { caption?: string; hashtags?: string[] }) => {
@@ -148,6 +198,7 @@ export const api = {
   },
   generationJobs: {
     create: async (data: {
+      execution_mode?: "scene_based" | "multi_scene_single_video";
       content_type: string;
       mode: string;
       niche: string;
@@ -157,12 +208,21 @@ export const api = {
       template_id?: string;
       campaign_id?: string;
       scene_count?: number;
+      video_duration?: number;
     }) => {
-      const response = await contentClientLongTimeout.post('/generation-jobs', data);
+      const payload = {
+        execution_mode: data.execution_mode ?? "multi_scene_single_video",
+        ...data,
+      };
+      const response = await contentClientLongTimeout.post('/generation-jobs', payload);
       return response.data as { job_id: string };
     },
     launch: async (jobId: string) => {
       const response = await contentClient.post(`/generation-jobs/${jobId}/launch`);
+      return response.data as { status: string; job_id: string };
+    },
+    cancel: async (jobId: string) => {
+      const response = await contentClient.post(`/generation-jobs/${jobId}/cancel`);
       return response.data as { status: string; job_id: string };
     },
     markReady: async (jobId: string) => {
@@ -200,6 +260,10 @@ export const api = {
       const response = await contentClient.post(`/generation-jobs/${jobId}/retry-step`, { step_name });
       return response.data;
     },
+    cancelStep: async (jobId: string, step: string) => {
+      const response = await contentClient.post(`/generation-jobs/${jobId}/cancel-step`, { step });
+      return response.data as { status: string; job_id: string; step: string };
+    },
     retryScene: async (jobId: string, scene_id: string) => {
       const response = await contentClient.post(`/generation-jobs/${jobId}/retry-scene`, { scene_id });
       return response.data;
@@ -227,15 +291,15 @@ export const api = {
   alerts: {
     getAlerts: async (isRead?: boolean) => {
       const params = isRead !== undefined ? `?is_read=${isRead}` : '';
-      const response = await contentClient.get(`/alerts${params}`).catch(() => ({ data: [] }));
+      const response = await contentClient.get(`/alerts${params}`);
       return response.data;
     },
     getUnreadCount: async () => {
-      const response = await contentClient.get('/alerts/unread/count').catch(() => ({ data: { unread_count: 0 } }));
+      const response = await contentClient.get('/alerts/unread/count');
       return response.data;
     },
     markAsRead: async (alertId: string) => {
-      const response = await contentClient.post(`/alerts/read/${alertId}`).catch(() => ({ data: { status: 'error' } }));
+      const response = await contentClient.post(`/alerts/read/${alertId}`);
       return response.data;
     }
   }

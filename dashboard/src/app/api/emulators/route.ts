@@ -7,8 +7,10 @@ const controllerBase =
 
 export async function GET() {
   try {
+    const traceId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     const res = await fetch(`${controllerBase}/emulators`, {
       cache: "no-store",
+      headers: { "x-trace-id": String(traceId) },
     });
     if (!res.ok) {
       const text = await res.text();
@@ -18,12 +20,8 @@ export async function GET() {
     return NextResponse.json(data, { status: res.status });
   } catch (error) {
     return NextResponse.json(
-      {
-        count: 0,
-        items: [],
-        error: error instanceof Error ? error.message : "Failed to fetch emulators",
-      },
-      { status: 200 }
+      { error: error instanceof Error ? error.message : "Failed to fetch emulators" },
+      { status: 502 }
     );
   }
 }

@@ -80,73 +80,41 @@ export function Sidebar() {
       .map((part) => part[0]?.toUpperCase())
       .join("") || "IP";
 
-  const activeItem = navGroups.flatMap((group) => group.items).find((item) => pathname === item.href);
-  const totalDestinations = navGroups.reduce((count, group) => count + group.items.length, 0);
-
   return (
-    <aside className="relative flex h-full w-[22rem] flex-col overflow-hidden border-r border-zinc-200/70 bg-[#f6efe2] text-zinc-900 dark:border-zinc-800 dark:bg-[#09090b] dark:text-zinc-100">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-x-0 top-0 h-64 bg-[radial-gradient(circle_at_top,_rgba(191,219,254,0.42),_transparent_60%)] dark:bg-[radial-gradient(circle_at_top,_rgba(245,158,11,0.2),_transparent_55%)]" />
-        <div className="absolute -left-20 top-44 h-56 w-56 rounded-full bg-emerald-200/35 blur-3xl dark:bg-emerald-500/10" />
-        <div className="absolute bottom-20 right-[-4.5rem] h-52 w-52 rounded-full bg-amber-200/45 blur-3xl dark:bg-amber-400/10" />
-      </div>
-
-      <div className="relative px-5 pb-4 pt-5">
-        <div className="overflow-hidden rounded-[2rem] border border-zinc-950/10 bg-white/72 p-5 shadow-[0_18px_45px_-28px_rgba(24,24,27,0.45)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5 dark:shadow-[0_24px_60px_-34px_rgba(0,0,0,0.75)]">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="inline-flex items-center rounded-full border border-zinc-950/10 bg-white/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-zinc-500 dark:border-white/10 dark:bg-white/5 dark:text-zinc-400">
+    <aside className="flex h-full w-[22rem] flex-col overflow-hidden border-r border-border bg-background text-foreground">
+      <div className="border-b border-border px-4 py-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/70 px-2.5 py-1">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-background text-[10px] font-semibold text-foreground">
+                IP
+              </span>
+              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                 Influence Platform
-              </div>
-              <h1 className="mt-3 font-display text-[1.7rem] font-semibold tracking-[-0.04em] text-zinc-950 dark:text-white">
-                Influence
-              </h1>
-              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                {activeItem?.name || text.nav.dashboard}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <LanguageToggle />
-              <ThemeToggle className="border-zinc-950/10 bg-white/80 text-zinc-800 shadow-none hover:bg-white dark:border-white/10 dark:bg-white/5 dark:text-zinc-200 dark:hover:bg-white/10" />
-              <AlertBell />
+              </span>
             </div>
           </div>
-
-          <div className="mt-5 grid grid-cols-3 gap-2">
-            <div className="rounded-2xl border border-zinc-950/10 bg-zinc-950 px-3 py-3 text-zinc-50 dark:border-white/10 dark:bg-white/10 dark:text-white">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-400 dark:text-zinc-500">Modules</p>
-              <p className="mt-1 text-lg font-semibold">{navGroups.length}</p>
-            </div>
-            <div className="rounded-2xl border border-zinc-950/10 bg-white/78 px-3 py-3 dark:border-white/10 dark:bg-white/5">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-500">Routes</p>
-              <p className="mt-1 text-lg font-semibold text-zinc-950 dark:text-white">{totalDestinations}</p>
-            </div>
-            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-3 dark:border-emerald-400/20 dark:bg-emerald-400/10">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300">Mode</p>
-              <p className="mt-1 text-lg font-semibold text-emerald-900 dark:text-emerald-100">FR</p>
-            </div>
+          <div className="flex items-center gap-2">
+            <LanguageToggle />
+            <ThemeToggle className="border-border bg-background text-foreground shadow-none hover:bg-muted" />
+            <AlertBell />
           </div>
         </div>
       </div>
 
-      <div className="relative flex-1 overflow-y-auto px-4 pb-5">
-        <nav className="space-y-4">
-          {navGroups.map((group) => (
+      <div className="flex-1 overflow-y-auto px-3 py-4">
+        <nav className="space-y-5">
+          {navGroups.map((group, index) => (
             <section
               key={group.label}
-              className="rounded-[1.75rem] border border-zinc-950/10 bg-white/70 p-3 shadow-[0_14px_35px_-28px_rgba(24,24,27,0.4)] backdrop-blur dark:border-white/10 dark:bg-white/5 dark:shadow-none"
+              className={cn(index > 0 && "border-t border-border/50 pt-4")}
             >
               <div className="mb-2 flex items-center justify-between px-2">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-zinc-500 dark:text-zinc-500">
+                <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                   {group.label}
                 </p>
-                <span className="rounded-full bg-zinc-950 px-2 py-0.5 text-[10px] font-semibold text-white dark:bg-white/10 dark:text-zinc-200">
-                  {group.items.length}
-                </span>
               </div>
-
-              <div className="space-y-1.5">
+              <div className="space-y-1">
                 {group.items.map((item) => {
                   const isActive = pathname === item.href;
 
@@ -155,29 +123,31 @@ export function Sidebar() {
                       key={item.href}
                       href={item.href}
                       className={cn(
-                        "group flex items-center gap-3 rounded-[1.35rem] px-3 py-3 transition-all duration-200",
+                        "group flex items-center gap-3 rounded-md px-3 py-2 transition-colors",
                         isActive
-                          ? "bg-zinc-950 text-white shadow-[0_20px_40px_-26px_rgba(24,24,27,0.9)] dark:bg-white dark:text-zinc-950"
-                          : "text-zinc-600 hover:bg-zinc-950/5 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-white/8 dark:hover:text-white"
+                          ? "bg-muted text-foreground"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground"
                       )}
                     >
                       <span
                         className={cn(
-                          "flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border transition-colors",
+                          "flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors",
                           isActive
-                            ? "border-white/15 bg-white/10 text-white dark:border-zinc-200/60 dark:bg-zinc-100 dark:text-zinc-950"
-                            : "border-zinc-950/10 bg-white/75 text-zinc-700 group-hover:border-zinc-950/15 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300"
+                            ? "bg-background text-foreground"
+                            : "text-muted-foreground group-hover:bg-background group-hover:text-foreground"
                         )}
                       >
-                        <item.icon className="h-[18px] w-[18px] stroke-[1.9]" />
+                        <item.icon className="h-4 w-4" />
                       </span>
 
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">{item.name}</p>
+                        <p className={cn("truncate text-sm", isActive ? "font-semibold text-foreground" : "font-medium")}>
+                          {item.name}
+                        </p>
                         <p
                           className={cn(
                             "truncate text-xs",
-                            isActive ? "text-white/65 dark:text-zinc-600" : "text-zinc-400 dark:text-zinc-500"
+                            isActive ? "text-foreground/70" : "text-muted-foreground"
                           )}
                         >
                           {group.label}
@@ -186,10 +156,10 @@ export function Sidebar() {
 
                       <ChevronRight
                         className={cn(
-                          "h-4 w-4 shrink-0 transition-all duration-200",
+                          "h-3.5 w-3.5 shrink-0 transition-all duration-200",
                           isActive
-                            ? "translate-x-0 text-white/70 dark:text-zinc-700"
-                            : "-translate-x-1 text-zinc-300 opacity-0 group-hover:translate-x-0 group-hover:opacity-100 dark:text-zinc-600"
+                            ? "translate-x-0 text-muted-foreground"
+                            : "-translate-x-1 text-muted-foreground opacity-0 group-hover:translate-x-0 group-hover:opacity-100"
                         )}
                       />
                     </Link>
@@ -201,27 +171,29 @@ export function Sidebar() {
         </nav>
       </div>
 
-      <div className="relative px-4 pb-5">
-        <div className="rounded-[1.9rem] border border-zinc-950/10 bg-white/78 p-3 shadow-[0_18px_40px_-30px_rgba(24,24,27,0.5)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5 dark:shadow-none">
-          <div className="flex items-center gap-3 rounded-[1.4rem] bg-zinc-950 px-3 py-3 text-white dark:bg-white/10 dark:text-white">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/12 text-sm font-semibold dark:bg-white/10">
+      <div className="border-t border-border p-3">
+        <div className="rounded-md bg-muted/50 p-2">
+          <div className="flex items-center gap-3 rounded-md px-2 py-2 text-foreground">
+            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-background text-sm font-semibold">
               {initials}
             </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold">{userName}</p>
-              <p className="text-xs text-white/65 dark:text-zinc-400">{text.sidebar.profileRole}</p>
+              <p className="text-xs text-muted-foreground">{text.sidebar.profileRole}</p>
             </div>
           </div>
 
-          <button
-            onClick={() => signOut({ callbackUrl: "/login" })}
-            className="mt-3 flex w-full items-center gap-3 rounded-[1.3rem] border border-zinc-950/10 bg-white/75 px-3 py-3 text-sm font-medium text-zinc-800 transition-colors hover:bg-zinc-950 hover:text-white dark:border-white/10 dark:bg-white/5 dark:text-zinc-200 dark:hover:bg-white dark:hover:text-zinc-950"
-          >
-            <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-zinc-950/10 bg-zinc-950 text-white dark:border-white/10 dark:bg-white/10 dark:text-zinc-100">
-              <LogOut className="h-[18px] w-[18px] stroke-[1.8]" />
-            </span>
-            <span>{text.nav.logout}</span>
-          </button>
+          <div className="mt-2 border-t border-border/50 pt-2">
+            <button
+              onClick={() => signOut({ callbackUrl: "/login" })}
+              className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-background hover:text-destructive"
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-md">
+                <LogOut className="h-4 w-4" />
+              </span>
+              <span>{text.nav.logout}</span>
+            </button>
+          </div>
         </div>
       </div>
     </aside>
