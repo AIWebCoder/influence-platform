@@ -14,7 +14,7 @@ from src.core.database import get_db
 from src.models.organization import Organization
 from src.models.user import User
 from src.models.billing import Subscription, UsageRecord
-from src.core.security import verify_password, create_access_token, hash_password
+from src.core.security import verify_password, create_access_token, hash_password, get_current_user
 
 router = APIRouter()
 
@@ -79,7 +79,8 @@ class WebhookEvent(BaseModel):
 @router.post("/organizations")
 async def create_organization(
     request: CreateOrganizationRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(get_current_user),
 ):
     """Create a new organization."""
     
@@ -127,7 +128,8 @@ async def create_organization(
 async def create_subscription(
     org_id: str,
     request: CreateSubscriptionRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(get_current_user),
 ):
     """Create or update a subscription."""
     
@@ -294,7 +296,8 @@ async def get_plans():
 @router.get("/organizations/{org_id}/usage")
 async def get_usage(
     org_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(get_current_user),
 ):
     """Get current usage for an organization."""
     
@@ -340,7 +343,8 @@ async def track_usage(
     org_id: str,
     resource_type: str,
     count: int = 1,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(get_current_user),
 ):
     """Track resource usage."""
     

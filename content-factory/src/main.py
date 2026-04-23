@@ -7,6 +7,7 @@ import os
 import logging
 import json
 from datetime import datetime
+import uuid
 
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
@@ -16,6 +17,7 @@ from src.core.database import init_db
 from src.core.redis import init_redis
 from src.services.cache_service import init_cache
 from src.api import content, templates, niches, health, auth, scheduling, hashtags, alerts, users, reports, analytics, billing, generation_jobs
+from src.services.pipeline_trace import configure_pipeline_trace_logging
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -42,6 +44,13 @@ root_logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
 handler.setFormatter(JSONFormatter())
 root_logger.addHandler(handler)
+
+# Pipeline trace: raw JSON lines → content-factory/logs/pipeline_trace.log (not wrapped by root JSONFormatter)
+try:
+    _trace_path = configure_pipeline_trace_logging()
+    print(f"✅ Pipeline trace log: {_trace_path}")
+except OSError as e:
+    print(f"⚠️ Pipeline trace file logging disabled: {e}")
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
@@ -83,20 +92,26 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 async def recovery_and_logging_middleware(request, call_next):
     """Global middleware for error recovery and request logging."""
     start_time = datetime.utcnow()
+    trace_id = request.headers.get("x-trace-id") or request.headers.get("x-request-id") or str(uuid.uuid4())
     try:
         response = await call_next(request)
         process_time = (datetime.utcnow() - start_time).total_seconds()
-        logger.info(f"Method: {request.method} Path: {request.url.path} Status: {response.status_code} Duration: {process_time}s")
+        response.headers["x-trace-id"] = trace_id
+        logger.info(
+            f"TraceId: {trace_id} Method: {request.method} Path: {request.url.path} "
+            f"Status: {response.status_code} Duration: {process_time}s"
+        )
         return response
     except Exception as exc:
         # Let FastAPI / Starlette return proper status + detail (422, 404, etc.)
         if isinstance(exc, (StarletteHTTPException, RequestValidationError)):
             raise exc
-        logger.error(f"FATAL ERROR on {request.url.path}: {str(exc)}", exc_info=True)
+        logger.error(f"TraceId: {trace_id} FATAL ERROR on {request.url.path}: {str(exc)}", exc_info=True)
         from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=500,
-            content={"error": "An internal server error occurred. The system is recovering."}
+            content={"error": "An internal server error occurred. The system is recovering.", "trace_id": trace_id},
+            headers={"x-trace-id": trace_id},
         )
 
 from src.core.config import settings

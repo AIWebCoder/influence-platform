@@ -19,15 +19,21 @@ PIPELINE_STEPS: Sequence[tuple[str, int]] = (
 )
 
 
+def default_step_control() -> dict[str, str]:
+    return {name: "pending" for name, _ in PIPELINE_STEPS}
+
+
 class GenerationJobService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def create_job(self, input_payload: dict) -> GenerationJob:
+    async def create_job(self, input_payload: dict, execution_mode: str = "scene_based") -> GenerationJob:
         job = GenerationJob(
             status="draft",
+            execution_mode=execution_mode or "scene_based",
             progress=0,
             input_payload=input_payload,
+            step_control=default_step_control(),
             output_url=None,
             logs=[],
         )

@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 from sqlalchemy.dialects.postgresql import UUID
 
 
@@ -20,20 +21,35 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        'alerts',
-        sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v4()')),
-        sa.Column('account_id', UUID(as_uuid=True), sa.ForeignKey('accounts.id'), nullable=True),
-        sa.Column('type', sa.String(50), nullable=False),
-        sa.Column('message', sa.Text(), nullable=True),
-        sa.Column('is_read', sa.Boolean(), server_default=sa.text('false'), nullable=False),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()')),
-    )
-    op.create_index('idx_alerts_account', 'alerts', ['account_id'])
-    op.create_index('idx_alerts_is_read', 'alerts', ['is_read'])
+    bind = op.get_bind()
+    inspector = inspect(bind)
+
+    if not inspector.has_table('alerts'):
+        op.create_table(
+            'alerts',
+            sa.Column('id', UUID(as_uuid=True), primary_key=True, server_default=sa.text('uuid_generate_v4()')),
+            sa.Column('account_id', UUID(as_uuid=True), sa.ForeignKey('accounts.id'), nullable=True),
+            sa.Column('type', sa.String(50), nullable=False),
+            sa.Column('message', sa.Text(), nullable=True),
+            sa.Column('is_read', sa.Boolean(), server_default=sa.text('false'), nullable=False),
+            sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('NOW()')),
+        )
+
+    existing_indexes = {idx["name"] for idx in inspector.get_indexes('alerts')}
+    if 'idx_alerts_account' not in existing_indexes:
+        op.create_index('idx_alerts_account', 'alerts', ['account_id'])
+    if 'idx_alerts_is_read' not in existing_indexes:
+        op.create_index('idx_alerts_is_read', 'alerts', ['is_read'])
 
 
 def downgrade() -> None:
-    op.drop_index('idx_alerts_is_read', table_name='alerts')
-    op.drop_index('idx_alerts_account', table_name='alerts')
-    op.drop_table('alerts')
+    bind = op.get_bind()
+    inspector = inspect(bind)
+
+    if inspector.has_table('alerts'):
+        existing_indexes = {idx["name"] for idx in inspector.get_indexes('alerts')}
+        if 'idx_alerts_is_read' in existing_indexes:
+            op.drop_index('idx_alerts_is_read', table_name='alerts')
+        if 'idx_alerts_account' in existing_indexes:
+            op.drop_index('idx_alerts_account', table_name='alerts')
+        op.drop_table('alerts')

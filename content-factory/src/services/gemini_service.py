@@ -1,18 +1,27 @@
 import json
 import logging
 import random
-from typing import Optional
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from typing import Any, Optional
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 import google.generativeai as genai
 from google.api_core.exceptions import GoogleAPIError, RetryError
 
 from src.core.config import settings
+from src.services.pipeline_trace import emit
 
 logger = logging.getLogger(__name__)
 
 class ContentGenerationError(Exception):
     pass
+
+def _is_gemini_retryable(exc: BaseException) -> bool:
+    # Do not retry known quota/rate-limit failures; retries only burn remaining quota window.
+    msg = str(exc).lower()
+    if "quota exceeded" in msg or "rate limit" in msg or "resourceexhausted" in msg or "429" in msg:
+        return False
+    return isinstance(exc, (GoogleAPIError, RetryError))
+
 
 class GeminiService:
     def __init__(self):
@@ -21,12 +30,32 @@ class GeminiService:
             # We don't raise here to allow instantiation, but generation will fail if unconfigured.
             pass
         genai.configure(api_key=key)
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        self.model = genai.GenerativeModel(settings.GEMINI_MODEL)
+
+    def _trace_kwargs(self, trace: Optional[dict[str, Any]]) -> dict[str, Any]:
+        if not trace:
+            return {}
+        return {k: trace[k] for k in ("job_id", "step") if k in trace}
+
+    def _log_gemini_usage(self, operation: str, response: Any, trace: Optional[dict[str, Any]]) -> None:
+        tk = self._trace_kwargs(trace)
+        um = getattr(response, "usage_metadata", None)
+        if um is None:
+            emit("gemini_usage_missing", operation=operation, **tk)
+            return
+        emit(
+            "gemini_usage",
+            operation=operation,
+            prompt_token_count=getattr(um, "prompt_token_count", None),
+            candidates_token_count=getattr(um, "candidates_token_count", None),
+            total_token_count=getattr(um, "total_token_count", None),
+            **tk,
+        )
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((GoogleAPIError, RetryError)),
+        retry=retry_if_exception(_is_gemini_retryable),
         reraise=True
     )
     async def generate_caption(
@@ -34,6 +63,7 @@ class GeminiService:
         niche: str,
         variant_style: Optional[str] = None,
         topic: Optional[str] = None,
+        trace: Optional[dict[str, Any]] = None,
     ) -> dict:
         """
         Generates an Instagram caption and hashtags based on the provided niche using Gemini.
@@ -55,6 +85,12 @@ class GeminiService:
         )
 
         try:
+            emit(
+                "gemini_request_start",
+                operation="generate_caption",
+                prompt_chars=len(system_prompt) + len(user_prompt),
+                **self._trace_kwargs(trace),
+            )
             response = await self.model.generate_content_async(
                 contents=[
                     {"role": "user", "parts": [system_prompt, user_prompt]}
@@ -64,6 +100,8 @@ class GeminiService:
                     response_mime_type="application/json",
                 )
             )
+            self._log_gemini_usage("generate_caption", response, trace)
+            emit("gemini_request_success", operation="generate_caption", **self._trace_kwargs(trace))
 
             content_text = response.text
             
@@ -90,7 +128,7 @@ class GeminiService:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((GoogleAPIError, RetryError)),
+        retry=retry_if_exception(_is_gemini_retryable),
         reraise=True,
     )
     async def generate_scene_plan(
@@ -100,6 +138,7 @@ class GeminiService:
         content_type: str,
         mode: str,
         scene_count: int,
+        trace: Optional[dict[str, Any]] = None,
     ) -> list[dict]:
         """
         Returns a list of scene dicts: scene_index, prompt, duration (seconds 3–5), role (hook|motion|detail).
@@ -121,6 +160,13 @@ class GeminiService:
         )
 
         try:
+            emit(
+                "gemini_request_start",
+                operation="generate_scene_plan",
+                prompt_chars=len(system_prompt) + len(user_prompt),
+                scene_count_target=n,
+                **self._trace_kwargs(trace),
+            )
             response = await self.model.generate_content_async(
                 contents=[
                     {"role": "user", "parts": [system_prompt, user_prompt]}
@@ -130,6 +176,8 @@ class GeminiService:
                     response_mime_type="application/json",
                 )
             )
+            self._log_gemini_usage("generate_scene_plan", response, trace)
+            emit("gemini_request_success", operation="generate_scene_plan", **self._trace_kwargs(trace))
 
             content_text = response.text
             if content_text.startswith("```json"):
