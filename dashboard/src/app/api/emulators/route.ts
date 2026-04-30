@@ -25,3 +25,45 @@ export async function GET() {
     );
   }
 }
+
+export async function POST(request: Request) {
+  try {
+    const body = (await request.json()) as { serial?: string };
+    const serial = String(body?.serial || "").trim();
+    if (!serial) {
+      return NextResponse.json(
+        { success: false, phase: "validation_failed", message: "serial is required" },
+        { status: 400 }
+      );
+    }
+    const res = await fetch(
+      `${controllerBase}/emulators/${encodeURIComponent(serial)}/actions/restart`,
+      {
+        method: "POST",
+        cache: "no-store",
+      }
+    );
+    const raw = await res.text();
+    let data: Record<string, unknown>;
+    try {
+      data = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    } catch {
+      data = {
+        success: res.ok,
+        serial,
+        phase: res.ok ? "completed" : "proxy_error",
+        message: raw || `Upstream returned HTTP ${res.status}`,
+      };
+    }
+    return NextResponse.json(data, { status: res.status });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        success: false,
+        phase: "proxy_error",
+        message: error instanceof Error ? error.message : "Restart proxy failed",
+      },
+      { status: 502 }
+    );
+  }
+}

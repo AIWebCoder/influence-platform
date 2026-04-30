@@ -99,6 +99,38 @@ export const api = {
       const response = await distributionClient.get('/publications/stats');
       return response.data;
     },
+    getPublicationDiagnostics: async (publicationId: string) => {
+      const response = await distributionClient.get(`/publications/${publicationId}/diagnostics`);
+      return response.data as {
+        id: string;
+        status: string;
+        error_message: string | null;
+        failure_type: string | null;
+        retry_count: number;
+        max_retries: number;
+        attempt: number;
+        last_retry_at: string | null;
+        next_retry_at: string | null;
+        created_at: string;
+        updated_at: string;
+        published_at: string | null;
+        post_url: string | null;
+        account_id: string;
+        account_username: string;
+        content_id: string | null;
+        content_type: string | null;
+        content_niche: string | null;
+        content_caption: string | null;
+      };
+    },
+    retryPublication: async (publicationId: string) => {
+      const response = await distributionClient.post(`/publications/${publicationId}/retry`);
+      return response.data as {
+        publication_id: string;
+        status: string;
+        next_retry_at: string;
+      };
+    },
     getQueueStats: async () => {
       const response = await distributionClient.get('/queue/stats');
       return response.data;
@@ -197,6 +229,54 @@ export const api = {
     }
   },
   generationJobs: {
+    getJobAssets: async (jobId: string) => {
+      const response = await contentClient.get(`/generation-jobs/${jobId}/assets`);
+      return response.data as Array<{
+        id: string;
+        generation_job_id: string;
+        asset_type: "image" | "video" | "thumbnail";
+        storage_provider: string;
+        object_key: string;
+        public_url: string;
+        mime_type: string;
+        size_bytes: number;
+        duration_seconds?: number | null;
+        width?: number | null;
+        height?: number | null;
+        checksum_sha256: string;
+        status: "ready";
+        created_at?: string | null;
+        updated_at?: string | null;
+      }>;
+    },
+    createPublishIntent: async (
+      jobId: string,
+      payload: {
+        asset_id: string;
+        content_type: "post" | "reel" | "story";
+        caption: string;
+        hashtags: string[];
+        mode: "publish_now" | "save_for_later" | "scheduled";
+        scheduled_for?: string;
+        target_account_ids: string[];
+        idempotency_key: string;
+      }
+    ) => {
+      const response = await contentClient.post(`/generation-jobs/${jobId}/publish-intents`, payload);
+      return response.data as {
+        intent_id: string;
+        status: string;
+        targets: Array<{ account_id: string; platform: string; status: string }>;
+      };
+    },
+    dispatchPublishIntent: async (intentId: string) => {
+      const response = await contentClient.post(`/publication-intents/${intentId}/dispatch`);
+      return response.data as {
+        intent_id: string;
+        status: string;
+        dispatched_targets: number;
+      };
+    },
     create: async (data: {
       execution_mode?: "scene_based" | "multi_scene_single_video";
       content_type: string;

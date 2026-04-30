@@ -15,6 +15,7 @@ import {
   Inbox,
   Zap,
   TrendingUp,
+  Search,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -38,8 +39,10 @@ interface Publication {
   published_at: string | null;
   error_message: string | null;
   retry_count: number;
+  attempt?: number;
   failure_type: string | null;
   last_retry_at: string | null;
+  next_retry_at?: string | null;
   max_retries: number;
   engagement_score: number | null;
   created_at: string;
@@ -74,6 +77,28 @@ interface QueueStats {
     retrying: number;
     total_retries: number;
   };
+}
+
+interface PublicationDiagnostics {
+  id: string;
+  status: string;
+  error_message: string | null;
+  failure_type: string | null;
+  retry_count: number;
+  max_retries: number;
+  attempt: number;
+  last_retry_at: string | null;
+  next_retry_at: string | null;
+  created_at: string;
+  updated_at: string;
+  published_at: string | null;
+  post_url: string | null;
+  account_id: string;
+  account_username: string;
+  content_id: string | null;
+  content_type: string | null;
+  content_niche: string | null;
+  content_caption: string | null;
 }
 
 const STATUS_CONFIG: Record<
@@ -212,18 +237,30 @@ export default function PublicationsPage() {
     undefined
   );
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [diagLoadingId, setDiagLoadingId] = useState<string | null>(null);
+  const [diag, setDiag] = useState<PublicationDiagnostics | null>(null);
+  const [diagError, setDiagError] = useState<string | null>(null);
   const LIMIT = 20;
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setFetchError(null);
     try {
       const [pubsData, statsData, queueData] = await Promise.allSettled([
         api.distribution.getPublications(activeFilter, LIMIT, offset),
         api.distribution.getPublicationStats(),
         api.distribution.getQueueStats(),
       ]);
+      const rejectedRequests = [pubsData, statsData, queueData].filter((res) => res.status === "rejected");
+      if (rejectedRequests.length === 3) {
+        setFetchError("Unable to load publication data. Check backend services and retry.");
+      } else if (rejectedRequests.length > 0) {
+        setFetchError("Some publication metrics are temporarily unavailable.");
+      }
 
       if (pubsData.status === "fulfilled") {
         setPublications(pubsData.value.publications || []);
@@ -239,6 +276,7 @@ export default function PublicationsPage() {
       }
     } catch (err) {
       console.error("Error fetching publications data:", err);
+      setFetchError("Unexpected error while loading publications.");
     } finally {
       setLoading(false);
     }
@@ -256,6 +294,38 @@ export default function PublicationsPage() {
 
   const totalPages = Math.ceil(total / LIMIT);
   const currentPage = Math.floor(offset / LIMIT) + 1;
+
+  const canRetry = (pub: Publication) =>
+    ["failed", "permanently_failed", "retrying"].includes(pub.status) &&
+    Number(pub.retry_count || 0) < Number(pub.max_retries || 3);
+
+  const handleRetry = async (publicationId: string) => {
+    setRetryingId(publicationId);
+    try {
+      await api.distribution.retryPublication(publicationId);
+      await fetchData();
+    } catch (error: any) {
+      const msg = error?.response?.data?.error || "Retry action failed.";
+      setFetchError(msg);
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
+  const handleViewDiagnostics = async (publicationId: string) => {
+    setDiagLoadingId(publicationId);
+    setDiagError(null);
+    try {
+      const data = await api.distribution.getPublicationDiagnostics(publicationId);
+      setDiag(data);
+    } catch (error: any) {
+      const msg = error?.response?.data?.error || "Could not load diagnostics.";
+      setDiagError(msg);
+      setDiag(null);
+    } finally {
+      setDiagLoadingId(null);
+    }
+  };
 
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
@@ -281,6 +351,11 @@ export default function PublicationsPage() {
           {text.publications.syncStatus}
         </PrimaryButton>
       </div>
+      {fetchError ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300">
+          {fetchError}
+        </div>
+      ) : null}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
@@ -385,6 +460,9 @@ export default function PublicationsPage() {
                   <th className="text-left text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest px-8 py-5 text-right">
                     Timeline
                   </th>
+                  <th className="text-left text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest px-8 py-5 text-right">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -419,15 +497,22 @@ export default function PublicationsPage() {
                       <PublicationStatusBadge status={pub.status} />
                     </td>
                     <td className="px-4 py-3.5">
-                      <span className="text-sm font-mono">
-                        {pub.retry_count > 0 ? (
-                          <span className="text-amber-600 dark:text-amber-400 font-semibold">
-                            {pub.retry_count}/{pub.max_retries || 3}
+                      <div className="flex flex-col">
+                        <span className="text-sm font-mono">
+                          {pub.retry_count > 0 ? (
+                            <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                              {pub.retry_count}/{pub.max_retries || 3}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">0</span>
+                          )}
+                        </span>
+                        {pub.next_retry_at ? (
+                          <span className="text-[10px] text-muted-foreground mt-1">
+                            next: {formatDate(pub.next_retry_at)}
                           </span>
-                        ) : (
-                          <span className="text-muted-foreground">0</span>
-                        )}
-                      </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-4 py-3.5 max-w-[250px]">
                       {pub.error_message ? (
@@ -450,12 +535,57 @@ export default function PublicationsPage() {
                         {formatDate(pub.published_at || pub.created_at)}
                       </span>
                     </td>
+                    <td className="px-4 py-3.5">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleViewDiagnostics(pub.id)}
+                          disabled={diagLoadingId === pub.id}
+                          className="rounded-md border border-zinc-300 px-2 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                        >
+                          {diagLoadingId === pub.id ? "Loading..." : "Details"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRetry(pub.id)}
+                          disabled={!canRetry(pub) || retryingId === pub.id}
+                          className="rounded-md border border-amber-300 px-2 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                        >
+                          {retryingId === pub.id ? "Retrying..." : "Retry"}
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
+
+        {diagError ? (
+          <div className="border-t border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800/40 dark:bg-red-900/20 dark:text-red-300">
+            {diagError}
+          </div>
+        ) : null}
+
+        {diag ? (
+          <div className="border-t border-zinc-200 bg-zinc-50 px-4 py-3 text-xs text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-300">
+            <div className="mb-2 flex items-center gap-2 font-bold">
+              <Search className="h-3.5 w-3.5" />
+              Diagnostics · {diag.id}
+            </div>
+            <div className="grid grid-cols-1 gap-1 md:grid-cols-2">
+              <span>status: {diag.status}</span>
+              <span>attempt: {diag.attempt}</span>
+              <span>retry_count: {diag.retry_count}</span>
+              <span>max_retries: {diag.max_retries}</span>
+              <span>last_retry_at: {formatDate(diag.last_retry_at)}</span>
+              <span>next_retry_at: {formatDate(diag.next_retry_at)}</span>
+              <span>failure_type: {diag.failure_type || "—"}</span>
+              <span>error: {diag.error_message || "—"}</span>
+            </div>
+          </div>
+        ) : null}
 
         {/* Pagination */}
         {totalPages > 1 && (

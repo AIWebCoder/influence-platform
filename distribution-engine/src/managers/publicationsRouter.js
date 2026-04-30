@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getPool } = require('../core/database');
+const { pushDelayed } = require('../core/redis');
 
 /**
  * GET /publications
@@ -33,8 +34,10 @@ router.get('/', async (req, res) => {
         p.published_at,
         p.error_message,
         p.retry_count,
+        (p.retry_count + 1) as attempt,
         p.failure_type,
         p.last_retry_at,
+        p.next_retry_at,
         p.max_retries,
         p.engagement_score,
         p.created_at,
@@ -113,6 +116,142 @@ router.get('/stats', async (req, res) => {
   } catch (error) {
     console.error('Error GET /publications/stats:', error);
     res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+/**
+ * GET /publications/:id/diagnostics
+ * Detailed diagnostics for operator troubleshooting.
+ */
+router.get('/:id/diagnostics', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { id } = req.params;
+    const result = await pool.query(
+      `
+      SELECT
+        p.id,
+        p.status,
+        p.error_message,
+        p.failure_type,
+        p.retry_count,
+        p.max_retries,
+        (p.retry_count + 1) AS attempt,
+        p.last_retry_at,
+        p.next_retry_at,
+        p.created_at,
+        p.updated_at,
+        p.published_at,
+        p.instagram_post_id AS post_url,
+        p.account_id::text,
+        a.username AS account_username,
+        cp.id::text AS content_id,
+        cp.type AS content_type,
+        cp.niche AS content_niche,
+        cp.caption AS content_caption
+      FROM publications p
+      JOIN accounts a ON a.id = p.account_id
+      LEFT JOIN content_packets cp ON cp.id = p.content_packet_id
+      WHERE p.id = $1::uuid
+      LIMIT 1
+      `,
+      [id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Publication not found' });
+    }
+    return res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error GET /publications/:id/diagnostics:', error);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+/**
+ * POST /publications/:id/retry
+ * Manual operator retry for failed publication.
+ */
+router.post('/:id/retry', async (req, res) => {
+  try {
+    const pool = getPool();
+    const { id } = req.params;
+
+    const rowResult = await pool.query(
+      `
+      SELECT
+        p.id,
+        p.status,
+        p.retry_count,
+        p.max_retries,
+        p.account_id::text AS account_id,
+        p.content_packet_id::text AS content_packet_id,
+        cp.caption,
+        cp.visual_url,
+        cp.hashtags,
+        cp.niche,
+        cp.type,
+        cp.scheduled_at
+      FROM publications p
+      LEFT JOIN content_packets cp ON cp.id = p.content_packet_id
+      WHERE p.id = $1::uuid
+      LIMIT 1
+      `,
+      [id]
+    );
+
+    if (rowResult.rowCount === 0) {
+      return res.status(404).json({ error: 'Publication not found' });
+    }
+
+    const pub = rowResult.rows[0];
+    if (!['failed', 'permanently_failed', 'retrying'].includes(pub.status)) {
+      return res.status(400).json({ error: `Publication is in status '${pub.status}' and cannot be retried.` });
+    }
+    if (Number(pub.retry_count || 0) >= Number(pub.max_retries || 3)) {
+      return res.status(400).json({ error: 'Retry limit exhausted for this publication.' });
+    }
+    if (!pub.content_packet_id || !pub.account_id) {
+      return res.status(400).json({ error: 'Missing content packet or account reference for retry.' });
+    }
+
+    const retryDelayMs = 30 * 1000;
+    const nextRetryAt = new Date(Date.now() + retryDelayMs);
+
+    const payload = {
+      id: String(pub.content_packet_id),
+      caption: pub.caption || '',
+      visual_url: pub.visual_url || null,
+      hashtags: Array.isArray(pub.hashtags) ? pub.hashtags : [],
+      niche: pub.niche || null,
+      type: pub.type || 'post',
+      scheduled_at: pub.scheduled_at || null,
+      target_accounts: [String(pub.account_id)],
+    };
+
+    await pushDelayed(JSON.stringify(payload), retryDelayMs);
+
+    await pool.query(
+      `
+      UPDATE publications
+      SET status = 'retrying',
+          error_message = NULL,
+          failure_type = NULL,
+          last_retry_at = NOW(),
+          next_retry_at = $2,
+          updated_at = NOW()
+      WHERE id = $1::uuid
+      `,
+      [id, nextRetryAt.toISOString()]
+    );
+
+    return res.json({
+      publication_id: id,
+      status: 'retrying',
+      next_retry_at: nextRetryAt.toISOString(),
+    });
+  } catch (error) {
+    console.error('Error POST /publications/:id/retry:', error);
+    return res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 

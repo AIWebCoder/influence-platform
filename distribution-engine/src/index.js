@@ -28,7 +28,7 @@ app.use(express.json());
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS?.split(',').map((o) => o.trim()) || ['http://localhost:3000'],
   methods: ['GET', 'POST', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-trace-id', 'x-request-id'],
 }));
 
 // Rate Limiting — 5000 requests per 15 minutes per IP
@@ -102,6 +102,11 @@ async function start() {
 
     // Démarrer le consumer de queue en background
     consumeQueue('content:ready');
+
+    const PublishingWorker = require('./publisher/PublishingWorker');
+    PublishingWorker.startPublishConsumer();
+    const { startTokenExpiryCron } = require('./services/tokenExpiryMonitor');
+    startTokenExpiryCron();
 
     // Initialize Automated Services (after DB/Redis are READY)
     

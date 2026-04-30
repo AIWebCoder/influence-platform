@@ -7,12 +7,8 @@ import {
   Activity,
   BarChart3,
   BookOpen,
-  Calendar,
-  Globe,
   LayoutDashboard,
   LogOut,
-  ShieldCheck,
-  Sparkles,
   Split,
   Users,
   ChevronRight,
@@ -29,6 +25,7 @@ type NavItem = {
   name: string;
   href: string;
   icon: React.ElementType;
+  comingSoon?: boolean;
 };
 
 type NavGroup = {
@@ -45,28 +42,24 @@ export function Sidebar() {
     {
       label: text.nav.groupOverview,
       items: [
-        { name: text.nav.dashboard, href: "/", icon: LayoutDashboard },
-        { name: text.nav.analytics, href: "/analytics", icon: BarChart3 },
+        { name: text.nav.dashboard, href: "/", icon: LayoutDashboard, comingSoon: true },
+        { name: text.nav.analytics, href: "/analytics", icon: BarChart3, comingSoon: true },
       ],
     },
     {
       label: text.nav.groupOperations,
       items: [
         { name: text.nav.accounts, href: "/accounts", icon: Users },
-        { name: text.nav.accountHealth, href: "/account-health", icon: ShieldCheck },
-        { name: text.nav.contentPlanner, href: "/content", icon: Calendar },
         { name: text.nav.generationStudio, href: "/generation-studio", icon: Clapperboard },
         { name: text.nav.publications, href: "/publications", icon: BookOpen },
-        { name: text.nav.proxies, href: "/proxies", icon: Globe },
-        { name: text.nav.campaigns, href: "/campaigns", icon: Activity },
+        { name: text.nav.campaigns, href: "/campaigns", icon: Activity, comingSoon: true },
         { name: "Emulators", href: "/emulators", icon: Smartphone },
       ],
     },
     {
       label: text.nav.groupIntelligence,
       items: [
-        { name: text.nav.optimizationLab, href: "/analytics/lab", icon: Sparkles },
-        { name: text.nav.abTesting, href: "/ab-tests", icon: Split },
+        { name: text.nav.abTesting, href: "/ab-tests", icon: Split, comingSoon: true },
       ],
     },
   ];
@@ -117,14 +110,19 @@ export function Sidebar() {
               <div className="space-y-1">
                 {group.items.map((item) => {
                   const isActive = pathname === item.href;
+                  const isDisabled = Boolean(item.comingSoon);
 
                   return (
                     <Link
                       key={item.href}
-                      href={item.href}
+                      href={isDisabled ? "#" : item.href}
+                      aria-disabled={isDisabled}
+                      onClick={isDisabled ? (event) => event.preventDefault() : undefined}
                       className={cn(
                         "group flex items-center gap-3 rounded-md px-3 py-2 transition-colors",
-                        isActive
+                        isDisabled
+                          ? "cursor-not-allowed opacity-70 text-muted-foreground"
+                          : isActive
                           ? "bg-muted text-foreground"
                           : "text-muted-foreground hover:bg-muted hover:text-foreground"
                       )}
@@ -150,7 +148,7 @@ export function Sidebar() {
                             isActive ? "text-foreground/70" : "text-muted-foreground"
                           )}
                         >
-                          {group.label}
+                          {item.comingSoon ? "Coming soon" : group.label}
                         </p>
                       </div>
 

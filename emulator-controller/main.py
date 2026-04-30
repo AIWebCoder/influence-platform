@@ -538,12 +538,78 @@ class EmulatorOrchestrator:
                 started=started,
             )
 
+        async def restart_emulator(request: web.Request) -> web.Response:
+            serial = request.match_info.get("serial", "")
+            started = monotonic()
+            if not serial.startswith("emulator-"):
+                return web.json_response(
+                    {
+                        "success": False,
+                        "serial": serial,
+                        "phase": "validation_failed",
+                        "message": "Invalid emulator serial",
+                        "elapsed_ms": int((monotonic() - started) * 1000),
+                    },
+                    status=400,
+                )
+
+            lock = self._get_emulator_lock(serial)
+            if lock.locked():
+                return web.json_response(
+                    {
+                        "success": False,
+                        "serial": serial,
+                        "phase": "busy",
+                        "message": "Emulator is busy",
+                        "elapsed_ms": int((monotonic() - started) * 1000),
+                    },
+                    status=409,
+                )
+
+            async with lock:
+                try:
+                    result = await self.device_manager.restart_emulator(serial)
+                except ValueError as exc:
+                    return web.json_response(
+                        {
+                            "success": False,
+                            "serial": serial,
+                            "phase": "validation_failed",
+                            "message": str(exc),
+                            "elapsed_ms": int((monotonic() - started) * 1000),
+                        },
+                        status=404,
+                    )
+                except Exception as exc:
+                    logger.exception("emulator_restart_failed serial=%s", serial)
+                    return web.json_response(
+                        {
+                            "success": False,
+                            "serial": serial,
+                            "phase": "restart_failed",
+                            "message": str(exc),
+                            "elapsed_ms": int((monotonic() - started) * 1000),
+                        },
+                        status=500,
+                    )
+
+                status_code = 200 if result.get("success") else 500
+                logger.info(
+                    "emulator_restart serial=%s phase=%s success=%s elapsed_ms=%s",
+                    serial,
+                    result.get("phase"),
+                    result.get("success"),
+                    result.get("elapsed_ms"),
+                )
+                return web.json_response(result, status=status_code)
+
         app = web.Application()
         app.router.add_get("/screenshots", list_screenshots)
         app.router.add_get("/emulators", list_emulators)
         app.router.add_get("/emulators/{serial}/frame.png", emulator_frame)
         app.router.add_post("/emulators/{serial}/input/tap", input_tap)
         app.router.add_post("/emulators/{serial}/input/swipe", input_swipe)
+        app.router.add_post("/emulators/{serial}/actions/restart", restart_emulator)
         app.router.add_static("/screenshots/file/", self.settings.screenshot_dir, show_index=False)
 
         self.screenshot_runner = web.AppRunner(app)

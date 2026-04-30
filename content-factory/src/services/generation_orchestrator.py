@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
+import mimetypes
 import shutil
 import subprocess
 import tempfile
@@ -14,7 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -652,6 +654,7 @@ async def _execute_pipeline(db, job_id: uuid.UUID) -> Optional[str]:
             level="warning",
         )
 
+    await _register_generated_assets(db, job)
     job.status = "completed"
     job.progress = 100
     svc.touch(job)
@@ -840,6 +843,87 @@ def _scene_eligible_for_video(sc: GenerationScene) -> bool:
     if settings.GENERATION_DEMO_MODE and sc.status == "partial":
         return _kie_url_ok(sc.start_image_url) or _kie_url_ok(sc.end_image_url)
     return False
+
+
+def _infer_asset_type_and_mime(url: str) -> tuple[str, str]:
+    mime, _enc = mimetypes.guess_type(url)
+    lowered = (url or "").lower()
+    if mime and mime.startswith("video/"):
+        return "video", mime
+    if any(lowered.endswith(ext) for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi")):
+        return "video", mime or "video/mp4"
+    if any(lowered.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif")):
+        return "image", mime or "image/jpeg"
+    return "image", mime or "application/octet-stream"
+
+
+def _asset_object_key(url: str, asset_type: str, job_id: uuid.UUID) -> str:
+    basename = (url.split("?")[0].rstrip("/").split("/")[-1] or "").strip()
+    if not basename:
+        checksum = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+        basename = f"{checksum}.bin"
+    return f"generated/{job_id}/{asset_type}/{basename}"
+
+
+async def _register_generated_assets(db: AsyncSession, job: GenerationJob) -> None:
+    media_urls: list[str] = []
+    if job.output_url:
+        media_urls.append(str(job.output_url))
+    for sc in sorted(job.scenes or [], key=lambda x: x.scene_index):
+        if sc.video_url:
+            media_urls.append(str(sc.video_url))
+        if sc.start_image_url:
+            media_urls.append(str(sc.start_image_url))
+        if sc.end_image_url:
+            media_urls.append(str(sc.end_image_url))
+
+    uniq_urls: list[str] = []
+    seen: set[str] = set()
+    for raw in media_urls:
+        u = (raw or "").strip()
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        uniq_urls.append(u)
+    if not uniq_urls:
+        return
+
+    existing_rows = await db.execute(
+        text("SELECT public_url FROM generated_assets WHERE generation_job_id = :job_id"),
+        {"job_id": str(job.id)},
+    )
+    existing_urls = {str(r[0]) for r in existing_rows.fetchall() if r[0]}
+
+    for url in uniq_urls:
+        if url in existing_urls:
+            continue
+        asset_type, mime_type = _infer_asset_type_and_mime(url)
+        await db.execute(
+            text(
+                """
+                INSERT INTO generated_assets (
+                    generation_job_id, asset_type, storage_provider, object_key, public_url,
+                    mime_type, size_bytes, duration_seconds, width, height, checksum_sha256, status
+                ) VALUES (
+                    :generation_job_id, :asset_type, :storage_provider, :object_key, :public_url,
+                    :mime_type, :size_bytes, :duration_seconds, :width, :height, :checksum_sha256, 'ready'
+                )
+                """
+            ),
+            {
+                "generation_job_id": str(job.id),
+                "asset_type": asset_type,
+                "storage_provider": "url",
+                "object_key": _asset_object_key(url, asset_type, job.id),
+                "public_url": url,
+                "mime_type": mime_type,
+                "size_bytes": 0,
+                "duration_seconds": None,
+                "width": None,
+                "height": None,
+                "checksum_sha256": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+            },
+        )
 
 
 def build_multi_scene_prompt(scenes: list[GenerationScene], total_duration: int) -> str:
@@ -1069,7 +1153,10 @@ async def _step_video_generation(db, svc: GenerationJobService, job: GenerationJ
                 "step": "video_generation",
                 "scene_index": sc.scene_index,
             }
-            v_prompt = f"{sc.prompt} — short vertical clip, motion, coherent lighting."
+            v_prompt = (
+                f"{sc.prompt} — short vertical clip, slow camera movement only, "
+                "no subject movement, coherent lighting, cinematic aesthetic."
+            )
             dur = 5
             row: dict[str, Any] = {
                 "scene_index": sc.scene_index,

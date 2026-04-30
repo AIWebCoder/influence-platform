@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     JWT_EXPIRE_MINUTES: int = 1440  # 24h
     ENVIRONMENT: str = "development"
     CONTENT_QUEUE_NAME: str = "content:ready"
+    FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED: bool = False
+    PUBLISH_OUTBOX_POLL_INTERVAL_MS: int = 250
+    PUBLISH_OUTBOX_STALE_SENT_SECONDS: int = 300
 
     # Rough cost model for UI estimates (abstract credits; tune per provider)
     GENERATION_CREDITS_PER_IMAGE: float = 1.0
@@ -126,7 +129,7 @@ class Settings(BaseSettings):
         
         # Check required API keys for production
         if self.ENVIRONMENT == "production":
-            if not self.CLAUDE_API_KEY or self.CLAUDE_API_KEY.startswith("sk-"):
+            if not (self.CLAUDE_API_KEY or "").strip():
                 missing_required.append("CLAUDE_API_KEY must be set")
             
             if not self.ALLOWED_ORIGINS or self.ALLOWED_ORIGINS == "http://localhost:3000":
@@ -137,8 +140,6 @@ class Settings(BaseSettings):
                 raise ValueError(f"Production security violations: {', '.join(insecure_defaults)}")
             if missing_required:
                 raise ValueError(f"Production required fields: {', '.join(missing_required)}")
-            if not self.ADMIN_FALLBACK_ENABLED:
-                raise ValueError("ADMIN_FALLBACK_ENABLED must be True in production for initial setup")
         elif insecure_defaults:
             warnings.warn(f"Insecure configuration detected: {', '.join(insecure_defaults)}")
 

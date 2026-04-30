@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -40,6 +40,7 @@ import toast from "react-hot-toast";
 type ContentType = "post" | "reel" | "story";
 type Mode = "persona" | "faceless";
 type ExecutionMode = "scene_based" | "multi_scene_single_video";
+type PublishMode = "publish_now" | "save_for_later" | "scheduled";
 
 type DraftScene = {
   scene_index: number;
@@ -99,6 +100,30 @@ type DistributionAccount = {
   username?: string;
 };
 
+type GeneratedAsset = {
+  id: string;
+  generation_job_id: string;
+  asset_type: "image" | "video" | "thumbnail";
+  storage_provider: string;
+  object_key: string;
+  public_url: string;
+  mime_type: string;
+  size_bytes: number;
+  duration_seconds?: number | null;
+  width?: number | null;
+  height?: number | null;
+  checksum_sha256: string;
+  status: "ready";
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type PublishIntentResponse = {
+  intent_id: string;
+  status: string;
+  targets: Array<{ account_id: string; platform: string; status: string }>;
+};
+
 const NICHE_OPTIONS = ["fitness", "food", "travel", "business", "lifestyle"] as const;
 
 function statusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
@@ -115,6 +140,351 @@ function StepIcon({ status }: { status: string }) {
   if (status === "cancelled") return <Square className="h-4 w-4 text-muted-foreground" />;
   if (status === "running") return <Loader2 className="h-4 w-4 animate-spin text-amber-600" />;
   return <Circle className="h-4 w-4 text-muted-foreground" />;
+}
+
+function parseHashtags(value: string): string[] {
+  return value
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((x) => (x.startsWith("#") ? x : `#${x}`));
+}
+
+function PublishPanel({
+  jobId,
+  assets,
+  accounts,
+}: {
+  jobId: string;
+  assets: GeneratedAsset[];
+  accounts: Array<{ id: string; username: string }>;
+}) {
+  const reelEnabledRaw =
+    process.env.NEXT_PUBLIC_FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED ??
+    "false";
+  const reelEnabled = String(reelEnabledRaw).toLowerCase() === "true";
+
+  const defaultAssetId = useMemo(() => {
+    if (assets.length === 0) return "";
+    const firstVideo = assets.find((a) => a.asset_type === "video");
+    return firstVideo?.id || assets[0].id;
+  }, [assets]);
+
+  const [selectedAssetId, setSelectedAssetId] = useState<string>(defaultAssetId);
+  const [contentType, setContentType] = useState<ContentType>("post");
+  const [caption, setCaption] = useState("");
+  const [hashtagsInput, setHashtagsInput] = useState("");
+  const [mode, setMode] = useState<PublishMode>("publish_now");
+  const [scheduledFor, setScheduledFor] = useState<Date | undefined>(undefined);
+  const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [immediateLoading, setImmediateLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successResponse, setSuccessResponse] = useState<PublishIntentResponse | null>(null);
+  const postNowInFlightRef = useRef(false);
+  const lastPostNowKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setSelectedAssetId(defaultAssetId);
+  }, [defaultAssetId]);
+
+  const accountSummary = useMemo(() => {
+    if (selectedAccounts.length === 0) return "Select target accounts";
+    const labels = selectedAccounts
+      .map((id) => accounts.find((a) => a.id === id)?.username || id)
+      .filter(Boolean);
+    if (labels.length <= 2) return labels.join(", ");
+    return `${selectedAccounts.length} accounts selected`;
+  }, [selectedAccounts, accounts]);
+
+  const selectedAssetExists = useMemo(
+    () => Boolean(selectedAssetId) && assets.some((asset) => asset.id === selectedAssetId),
+    [assets, selectedAssetId]
+  );
+  const selectedAccountsValid = useMemo(
+    () => selectedAccounts.every((id) => accounts.some((acc) => acc.id === id)),
+    [accounts, selectedAccounts]
+  );
+  const hasScheduleError = mode === "scheduled" && (!scheduledFor || scheduledFor.getTime() <= Date.now());
+  const canSubmit =
+    selectedAssetExists &&
+    selectedAccounts.length > 0 &&
+    selectedAccountsValid &&
+    !hasScheduleError &&
+    !loading &&
+    !immediateLoading;
+
+  const parseApiError = (e: unknown, fallback: string) => {
+    const detail =
+      e && typeof e === "object" && "response" in e
+        ? (
+            (e as { response?: { data?: { detail?: string; error?: string } } }).response?.data?.detail ||
+            (e as { response?: { data?: { detail?: string; error?: string } } }).response?.data?.error
+          )
+        : null;
+    return typeof detail === "string" ? detail : fallback;
+  };
+
+  const buildIntentPayload = (payloadMode: PublishMode) => {
+    const finalContentType: ContentType = !reelEnabled && contentType === "reel" ? "post" : contentType;
+    return {
+      asset_id: selectedAssetId,
+      content_type: finalContentType,
+      caption: caption.trim(),
+      hashtags: parseHashtags(hashtagsInput),
+      mode: payloadMode,
+      scheduled_for: payloadMode === "scheduled" && scheduledFor ? scheduledFor.toISOString() : undefined,
+      target_account_ids: selectedAccounts,
+      idempotency_key: `intent-${jobId}-${Date.now()}`,
+    };
+  };
+
+  const buildPostNowIdempotencyKey = () => {
+    const accountKey = [...selectedAccounts].sort().join(",");
+    const captionKey = caption.trim();
+    const hashtagsKey = parseHashtags(hashtagsInput).join(",");
+    const finalContentType: ContentType = !reelEnabled && contentType === "reel" ? "post" : contentType;
+    return `post-now-${jobId}-${selectedAssetId}-${finalContentType}-${accountKey}-${captionKey}-${hashtagsKey}`;
+  };
+
+  const onCreateIntent = async () => {
+    if (!canSubmit) return;
+    if (hasScheduleError) {
+      const message = "Scheduled publish requires a future date/time.";
+      setError(message);
+      toast.error(message);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setSuccessResponse(null);
+    try {
+      const payloadMode: PublishMode =
+        mode === "scheduled" && !scheduledFor ? "publish_now" : mode;
+      const response = await api.generationJobs.createPublishIntent(jobId, buildIntentPayload(payloadMode));
+      setSuccessResponse(response);
+      toast.success("Publish intent created");
+    } catch (e: unknown) {
+      const message = parseApiError(e, "Could not create publish intent.");
+      setError(message);
+      toast.error(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onPostNow = async () => {
+    if (!canSubmit || postNowInFlightRef.current) return;
+    if (hasScheduleError) {
+      const message = "Scheduled publish requires a future date/time.";
+      setError(message);
+      toast.error(message);
+      return;
+    }
+    const duplicateKey = buildPostNowIdempotencyKey();
+    if (lastPostNowKeyRef.current === duplicateKey) {
+      const message = "Duplicate Post Now request ignored.";
+      setError(message);
+      toast.error(message);
+      return;
+    }
+    postNowInFlightRef.current = true;
+    lastPostNowKeyRef.current = duplicateKey;
+    setImmediateLoading(true);
+    setError(null);
+    setSuccessResponse(null);
+    try {
+      const intent = await api.generationJobs.createPublishIntent(jobId, {
+        ...buildIntentPayload("publish_now"),
+        idempotency_key: duplicateKey,
+      });
+      setSuccessResponse(intent);
+      const dispatched = await api.generationJobs.dispatchPublishIntent(intent.intent_id);
+      toast.success(`Posting started: ${dispatched.dispatched_targets} target(s) dispatched.`);
+    } catch (e: unknown) {
+      const message = parseApiError(e, "Could not post now.");
+      setError(message);
+      toast.error(message);
+    } finally {
+      setImmediateLoading(false);
+      postNowInFlightRef.current = false;
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Publish</CardTitle>
+        <CardDescription>Create a publish intent from generated assets.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="space-y-2">
+          <Label>Asset</Label>
+          {assets.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No generated assets found for this job.</p>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {assets.map((asset) => {
+                const selected = selectedAssetId === asset.id;
+                const isVideo = asset.asset_type === "video" || asset.mime_type.startsWith("video/");
+                return (
+                  <button
+                    key={asset.id}
+                    type="button"
+                    onClick={() => setSelectedAssetId(asset.id)}
+                    className={cn(
+                      "overflow-hidden rounded-md border text-left transition",
+                      selected ? "border-primary ring-1 ring-primary" : "border-border hover:border-primary/50"
+                    )}
+                  >
+                    <div className="aspect-video bg-black/60">
+                      {isVideo ? (
+                        <video src={asset.public_url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={asset.public_url} alt="" className="h-full w-full object-cover" />
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between px-2 py-1 text-xs">
+                      <span>{asset.asset_type}</span>
+                      <span className="font-mono">{asset.id.slice(0, 8)}…</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label>Content type</Label>
+            <Select value={contentType} onValueChange={(v) => setContentType(v as ContentType)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="post">Post</SelectItem>
+                <SelectItem value="story">Story</SelectItem>
+                <SelectItem value="reel" disabled={!reelEnabled}>
+                  Reel {!reelEnabled ? "(disabled)" : ""}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Target accounts</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" className="w-full justify-between font-normal">
+                  <span className="truncate text-left">{accountSummary}</span>
+                  <ChevronDown className="h-4 w-4 shrink-0 opacity-70" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)]">
+                <DropdownMenuLabel>Select one or more accounts</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {accounts.length === 0 ? (
+                  <div className="px-2 py-1.5 text-sm text-muted-foreground">No accounts found</div>
+                ) : (
+                  accounts.map((account) => (
+                    <DropdownMenuCheckboxItem
+                      key={account.id}
+                      checked={selectedAccounts.includes(account.id)}
+                      onCheckedChange={(checked) => {
+                        setSelectedAccounts((prev) =>
+                          checked
+                            ? Array.from(new Set([...prev, account.id]))
+                            : prev.filter((acc) => acc !== account.id)
+                        );
+                      }}
+                      onSelect={(event) => event.preventDefault()}
+                    >
+                      @{account.username}
+                    </DropdownMenuCheckboxItem>
+                  ))
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Caption</Label>
+          <textarea
+            className="min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+            value={caption}
+            onChange={(e) => setCaption(e.target.value)}
+            placeholder="Write your caption..."
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label>Hashtags (comma-separated)</Label>
+          <Input
+            value={hashtagsInput}
+            onChange={(e) => setHashtagsInput(e.target.value)}
+            placeholder="fitness, motivation, routine"
+          />
+        </div>
+
+        <div className="space-y-3">
+          <Label>Mode</Label>
+          <div className="flex flex-wrap gap-4">
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="radio" checked={mode === "publish_now"} onChange={() => setMode("publish_now")} />
+              Publish now
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="radio" checked={mode === "save_for_later"} onChange={() => setMode("save_for_later")} />
+              Save for later
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="radio" checked={mode === "scheduled"} onChange={() => setMode("scheduled")} />
+              Schedule
+            </label>
+          </div>
+          {mode === "scheduled" ? (
+            <div className="max-w-sm">
+              <DateTimePicker value={scheduledFor} onChange={setScheduledFor} placeholder="Pick date & time" />
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button type="button" disabled={!canSubmit} onClick={onCreateIntent}>
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Create Publish Intent
+          </Button>
+          <Button type="button" disabled={!canSubmit} onClick={onPostNow}>
+            {immediateLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Post to Instagram Now
+          </Button>
+        </div>
+
+        {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
+
+        {successResponse ? (
+          <div className="rounded-md border border-emerald-300/50 bg-emerald-50/40 p-3 text-sm dark:border-emerald-700/60 dark:bg-emerald-900/10">
+            <p className="font-medium text-emerald-700 dark:text-emerald-300">Publish intent created</p>
+            <p className="mt-1">
+              <span className="font-semibold">intent_id:</span> <span className="font-mono">{successResponse.intent_id}</span>
+            </p>
+            <p>
+              <span className="font-semibold">status:</span> {successResponse.status}
+            </p>
+            <div className="mt-2 space-y-1">
+              {successResponse.targets.map((t) => (
+                <p key={`${t.account_id}-${t.platform}`} className="text-xs">
+                  {t.account_id} · {t.platform} · {t.status}
+                </p>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function GenerationStudioPage() {
@@ -167,6 +537,11 @@ export default function GenerationStudioPage() {
         }))
         .filter((acc) => Boolean(acc.id) && Boolean(acc.username));
     }
+  );
+  const { data: generatedAssets = [], isLoading: assetsLoading } = useSWR<GeneratedAsset[]>(
+    jobId && job?.status === "completed" ? ["generation-job-assets", jobId] : null,
+    () => api.generationJobs.getJobAssets(jobId as string),
+    { refreshInterval: 0 }
   );
 
   useEffect(() => {
@@ -1009,6 +1384,20 @@ export default function GenerationStudioPage() {
             </CardContent>
           </Card>
         </div>
+        {jobId && job?.status === "completed" ? (
+          assetsLoading ? (
+            <Card>
+              <CardContent className="py-8">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading generated assets...
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <PublishPanel jobId={jobId} assets={generatedAssets} accounts={accountChoices} />
+          )
+        ) : null}
       </div>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>

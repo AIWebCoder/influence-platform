@@ -2,8 +2,10 @@ import asyncio
 import logging
 import os
 import re
+import shutil
+import time
 from dataclasses import dataclass
-from typing import List
+from typing import Any, List
 
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,7 @@ class DeviceManager:
         self.adb_path = adb_path or os.getenv("ADB_PATH", "adb")
         self.adb_host = os.getenv("ADB_HOST", "").strip()
         self.adb_port = os.getenv("ADB_PORT", "5037").strip()
+        self.emulator_path = os.getenv("EMULATOR_PATH", "emulator").strip()
 
     def _adb_base(self) -> list[str]:
         cmd = [self.adb_path]
@@ -31,7 +34,7 @@ class DeviceManager:
                 cmd.extend(["-P", self.adb_port])
         return cmd
 
-    async def list_connected_emulators(self) -> List[EmulatorDevice]:
+    async def list_connected_emulators(self, include_non_device: bool = False) -> List[EmulatorDevice]:
         proc = await asyncio.create_subprocess_exec(
             *self._adb_base(),
             "devices",
@@ -76,6 +79,8 @@ class DeviceManager:
             )
 
         logger.info("Detected %s emulator(s)", len(devices))
+        if include_non_device:
+            return devices
         return [d for d in devices if d.status == "device"]
 
     async def wait_for_device(self, serial: str, timeout_seconds: int = 60) -> bool:
@@ -95,6 +100,139 @@ class DeviceManager:
             proc.kill()
             await proc.communicate()
             return False
+
+    async def wait_for_status(self, serial: str, expected_status: str = "device", timeout_seconds: int = 90) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            devices = await self.list_connected_emulators(include_non_device=True)
+            for d in devices:
+                if d.serial == serial and d.status == expected_status:
+                    return True
+            await asyncio.sleep(2)
+        return False
+
+    async def get_emulator_avd_name(self, serial: str) -> str | None:
+        proc = await asyncio.create_subprocess_exec(
+            *self._adb_base(),
+            "-s",
+            serial,
+            "emu",
+            "avd",
+            "name",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await proc.communicate()
+        if proc.returncode != 0:
+            logger.warning(
+                "Could not resolve AVD name for serial=%s: %s",
+                serial,
+                err.decode(errors="ignore").strip(),
+            )
+            return None
+        value = out.decode(errors="ignore").strip()
+        return value or None
+
+    async def restart_emulator(self, serial: str, timeout_seconds: int = 120) -> dict[str, Any]:
+        started = time.monotonic()
+        devices = await self.list_connected_emulators(include_non_device=True)
+        known_serials = {d.serial for d in devices}
+        if serial not in known_serials:
+            raise ValueError(f"unknown_emulator_serial:{serial}")
+
+        avd_name = await self.get_emulator_avd_name(serial)
+        last_phase = "reboot"
+        try:
+            await self._adb(serial, "reboot")
+            if await self.wait_for_status(serial, expected_status="device", timeout_seconds=timeout_seconds):
+                return {
+                    "success": True,
+                    "serial": serial,
+                    "avd_name": avd_name,
+                    "phase": "completed",
+                    "message": "Emulator rebooted successfully",
+                    "elapsed_ms": int((time.monotonic() - started) * 1000),
+                }
+            return {
+                "success": False,
+                "serial": serial,
+                "avd_name": avd_name,
+                "phase": "timeout_waiting_device",
+                "message": "Reboot command sent but emulator did not return to device state before timeout",
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            }
+        except Exception as reboot_error:
+            last_phase = "kill_and_relaunch"
+            logger.warning("Emulator reboot failed for serial=%s: %s", serial, reboot_error)
+
+        try:
+            await self._adb(serial, "emu", "kill")
+        except Exception as kill_error:
+            return {
+                "success": False,
+                "serial": serial,
+                "avd_name": avd_name,
+                "phase": "kill_failed",
+                "message": str(kill_error),
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            }
+
+        resolved_emulator = shutil.which(self.emulator_path) if self.emulator_path else None
+        if not resolved_emulator:
+            return {
+                "success": False,
+                "serial": serial,
+                "avd_name": avd_name,
+                "phase": "launch_failed",
+                "message": "Emulator binary not found; set EMULATOR_PATH to enable relaunch",
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            }
+        if not avd_name:
+            return {
+                "success": False,
+                "serial": serial,
+                "avd_name": None,
+                "phase": "launch_failed",
+                "message": "Unable to resolve AVD name for relaunch",
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            }
+
+        launch_proc = await asyncio.create_subprocess_exec(
+            resolved_emulator,
+            "-avd",
+            avd_name,
+            "-no-snapshot-load",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        if launch_proc.returncode not in (None, 0):
+            return {
+                "success": False,
+                "serial": serial,
+                "avd_name": avd_name,
+                "phase": "launch_failed",
+                "message": f"Relaunch process exited immediately with code {launch_proc.returncode}",
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            }
+
+        if await self.wait_for_status(serial, expected_status="device", timeout_seconds=timeout_seconds):
+            return {
+                "success": True,
+                "serial": serial,
+                "avd_name": avd_name,
+                "phase": "completed",
+                "message": "Emulator relaunched successfully",
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            }
+
+        return {
+            "success": False,
+            "serial": serial,
+            "avd_name": avd_name,
+            "phase": "timeout_waiting_device",
+            "message": f"Reached timeout after phase {last_phase}",
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
 
     async def get_device_ip(self, serial: str) -> str | None:
         proc = await asyncio.create_subprocess_exec(

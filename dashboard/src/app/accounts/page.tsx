@@ -36,13 +36,24 @@ export default function AccountsPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const trimmedUsername = username.trim();
+    const trimmedPassword = password.trim();
+    const trimmedProxy = proxy.trim();
+    if (!trimmedUsername) {
+      showToast("Username is required.", "error");
+      return;
+    }
+    if (trimmedPassword.length < 8) {
+      showToast("Password must be at least 8 characters.", "error");
+      return;
+    }
     setLoading(true);
     try {
       await api.distribution.addAccount({
-        username,
-        password_encrypted: password,
+        username: trimmedUsername,
+        password_encrypted: trimmedPassword,
         status,
-        metadata: { proxy: proxy || null },
+        metadata: { proxy: trimmedProxy || null },
       });
       setOpen(false);
       setUsername("");
@@ -52,7 +63,11 @@ export default function AccountsPage() {
       showToast(text.accounts.success, "success");
       setRefreshTrigger((prev) => prev + 1);
     } catch (err: any) {
-      showToast(err.response?.data?.error || text.accounts.error, "error");
+      const serverMessage =
+        err?.response?.data?.detail ||
+        err?.response?.data?.error ||
+        err?.message;
+      showToast(serverMessage || text.accounts.error, "error");
     } finally {
       setLoading(false);
     }

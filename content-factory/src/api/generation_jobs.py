@@ -7,7 +7,7 @@ from typing import Any, Optional
 from google.api_core.exceptions import GoogleAPIError, RetryError
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import update
+from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
@@ -22,8 +22,10 @@ from src.services.generation_orchestrator import (
     run_retry_scene,
     generate_scene_preview,
 )
+from src.services.publish_dispatcher import dispatch_publish_intent
 
 router = APIRouter()
+publish_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
@@ -231,6 +233,126 @@ class GenerationJobCreateResponse(BaseModel):
     job_id: str
 
 
+class GeneratedAssetOut(BaseModel):
+    id: str
+    generation_job_id: str
+    asset_type: str
+    storage_provider: str
+    object_key: str
+    public_url: str
+    mime_type: str
+    size_bytes: int
+    duration_seconds: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    checksum_sha256: str
+    status: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class PublishIntentCreateRequest(BaseModel):
+    asset_id: str
+    content_type: str
+    caption: str = ""
+    hashtags: list[str] = Field(default_factory=list)
+    mode: str
+    scheduled_for: Optional[str] = None
+    target_account_ids: list[str]
+    idempotency_key: str
+
+
+class PublishIntentCreateResponse(BaseModel):
+    intent_id: str
+    status: str
+    targets: list[dict[str, str]]
+
+
+class PublishIntentDispatchResponse(BaseModel):
+    intent_id: str
+    status: str
+    dispatched_targets: int
+
+
+def _parse_optional_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if value is None:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _normalize_uuid_list(raw_values: list[str], field_name: str) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        token = (raw or "").strip()
+        if not token:
+            continue
+        try:
+            uid = str(uuid.UUID(token))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid UUID in {field_name}: {token}") from exc
+        if uid not in seen:
+            seen.add(uid)
+            unique.append(uid)
+    return unique
+
+
+async def _resolve_target_accounts(db: AsyncSession, raw_targets: list[str]) -> list[str]:
+    """Normalize target accounts to UUID strings (accept id, username, or email)."""
+    normalized: list[str] = []
+    unresolved: list[str] = []
+    seen: set[str] = set()
+
+    for raw in raw_targets:
+        token = (raw or "").strip()
+        if not token:
+            continue
+        try:
+            uid = str(uuid.UUID(token))
+            if uid not in seen:
+                seen.add(uid)
+                normalized.append(uid)
+            continue
+        except ValueError:
+            pass
+
+        result = await db.execute(
+            text(
+                """
+                SELECT id::text
+                FROM accounts
+                WHERE LOWER(username) = LOWER(:token)
+                   OR LOWER(COALESCE(email, '')) = LOWER(:token)
+                LIMIT 1
+                """
+            ),
+            {"token": token},
+        )
+        row = result.first()
+        if not row:
+            unresolved.append(token)
+            continue
+        uid = str(row[0])
+        if uid not in seen:
+            seen.add(uid)
+            normalized.append(uid)
+
+    if unresolved:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown target account(s): {', '.join(unresolved)}",
+        )
+    if not normalized:
+        raise HTTPException(status_code=400, detail="At least one valid target account is required.")
+    return normalized
+
+
 class GenerationStepOut(BaseModel):
     id: str
     step_name: str
@@ -355,6 +477,7 @@ async def create_generation_job(
         if body.execution_mode not in ("scene_based", "multi_scene_single_video"):
             raise HTTPException(status_code=400, detail="Invalid execution_mode")
         payload = body.model_dump(exclude_none=True)
+        payload["target_accounts"] = await _resolve_target_accounts(db, payload.get("target_accounts") or [])
         payload.setdefault("content_type", body.content_type)
         svc = GenerationJobService(db)
         job = await svc.create_job(payload, execution_mode=body.execution_mode)
@@ -378,6 +501,262 @@ async def create_generation_job(
             raise HTTPException(status_code=429, detail="Gemini Rate Limit Exceeded (5 RPM free tier). Please wait 30 seconds before creating a new job.")
         # Re-raise anything else up to the main 500 handler
         raise e
+
+
+async def _build_publish_intent_response(db: AsyncSession, intent_id: str) -> PublishIntentCreateResponse:
+    intent_row = await db.execute(
+        text("SELECT id::text, status FROM publication_intents WHERE id = :intent_id"),
+        {"intent_id": intent_id},
+    )
+    intent = intent_row.first()
+    if not intent:
+        raise HTTPException(status_code=404, detail="Publish intent not found")
+    target_rows = await db.execute(
+        text(
+            """
+            SELECT account_id::text, platform, status
+            FROM publication_targets
+            WHERE publication_intent_id = :intent_id
+            ORDER BY created_at ASC
+            """
+        ),
+        {"intent_id": intent_id},
+    )
+    targets = [
+        {"account_id": str(r[0]), "platform": str(r[1]), "status": str(r[2])}
+        for r in target_rows.fetchall()
+    ]
+    return PublishIntentCreateResponse(intent_id=str(intent[0]), status=str(intent[1]), targets=targets)
+
+
+@router.get("/{job_id}/assets", response_model=list[GeneratedAssetOut])
+async def list_generated_assets(job_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        jid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+
+    svc = GenerationJobService(db)
+    job = await svc.get_job(jid, with_children=False)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    rows = await db.execute(
+        text(
+            """
+            SELECT
+                id::text, generation_job_id::text, asset_type, storage_provider, object_key, public_url,
+                mime_type, size_bytes, duration_seconds, width, height, checksum_sha256, status,
+                created_at, updated_at
+            FROM generated_assets
+            WHERE generation_job_id = :job_id
+            ORDER BY created_at ASC
+            """
+        ),
+        {"job_id": str(jid)},
+    )
+    return [
+        GeneratedAssetOut(
+            id=str(r[0]),
+            generation_job_id=str(r[1]),
+            asset_type=str(r[2]),
+            storage_provider=str(r[3]),
+            object_key=str(r[4]),
+            public_url=str(r[5]),
+            mime_type=str(r[6]),
+            size_bytes=int(r[7] or 0),
+            duration_seconds=int(r[8]) if r[8] is not None else None,
+            width=int(r[9]) if r[9] is not None else None,
+            height=int(r[10]) if r[10] is not None else None,
+            checksum_sha256=str(r[11]),
+            status=str(r[12]),
+            created_at=r[13].isoformat() if r[13] else None,
+            updated_at=r[14].isoformat() if r[14] else None,
+        )
+        for r in rows.fetchall()
+    ]
+
+
+@router.post("/{job_id}/publish-intents", response_model=PublishIntentCreateResponse)
+async def create_publish_intent(job_id: str, body: PublishIntentCreateRequest, db: AsyncSession = Depends(get_db)):
+    try:
+        jid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+
+    svc = GenerationJobService(db)
+    job = await svc.get_job(jid, with_children=False)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    mode = (body.mode or "").strip()
+    if mode not in ("publish_now", "save_for_later", "scheduled"):
+        raise HTTPException(status_code=400, detail="Invalid mode")
+
+    content_type = (body.content_type or "").strip()
+    if content_type not in ("reel", "post", "story"):
+        raise HTTPException(status_code=400, detail="Invalid content_type")
+    if content_type == "reel" and not settings.FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED:
+        raise HTTPException(status_code=400, detail="Reel publishing not enabled")
+
+    scheduled_for = _parse_optional_iso_datetime(body.scheduled_for)
+    now_utc = datetime.now(timezone.utc)
+    if mode == "scheduled" and scheduled_for is None:
+        raise HTTPException(status_code=400, detail="scheduled_for is required when mode is scheduled")
+    if scheduled_for is not None and scheduled_for < now_utc:
+        mode = "publish_now"
+        scheduled_for = None
+
+    account_ids = _normalize_uuid_list(body.target_account_ids, "target_account_ids")
+    if not account_ids:
+        raise HTTPException(status_code=400, detail="At least 1 target_account_id is required")
+
+    idempotency_key = (body.idempotency_key or "").strip()
+    if not idempotency_key:
+        raise HTTPException(status_code=400, detail="idempotency_key is required")
+
+    existing_intent = await db.execute(
+        text("SELECT id::text FROM publication_intents WHERE idempotency_key = :idempotency_key LIMIT 1"),
+        {"idempotency_key": idempotency_key},
+    )
+    existing = existing_intent.first()
+    if existing:
+        return await _build_publish_intent_response(db, str(existing[0]))
+
+    try:
+        asset_uuid = str(uuid.UUID(body.asset_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid asset_id") from exc
+
+    asset_row = await db.execute(
+        text(
+            """
+            SELECT id::text
+            FROM generated_assets
+            WHERE id = :asset_id
+              AND generation_job_id = :job_id
+              AND status = 'ready'
+            LIMIT 1
+            """
+        ),
+        {"asset_id": asset_uuid, "job_id": str(jid)},
+    )
+    if not asset_row.first():
+        raise HTTPException(status_code=400, detail="asset_id must belong to job and be ready")
+
+    account_rows = await db.execute(
+        text(
+            """
+            SELECT id::text, COALESCE(platform, 'instagram') AS platform
+            FROM accounts
+            WHERE id = ANY(CAST(:account_ids AS uuid[]))
+            """
+        ),
+        {"account_ids": account_ids},
+    )
+    accounts_map = {str(r[0]): str(r[1]) for r in account_rows.fetchall()}
+    missing = [aid for aid in account_ids if aid not in accounts_map]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Unknown account(s): {', '.join(missing)}")
+
+    intent_status = "draft" if mode == "save_for_later" else "ready"
+    hashtags = [h for h in (body.hashtags or []) if isinstance(h, str)]
+
+    try:
+        new_intent = await db.execute(
+            text(
+                """
+                INSERT INTO publication_intents (
+                    generation_job_id, primary_asset_id, content_type, caption, hashtags,
+                    mode, scheduled_for, status, idempotency_key
+                ) VALUES (
+                    :generation_job_id, :primary_asset_id, :content_type, :caption, CAST(:hashtags AS jsonb),
+                    :mode, :scheduled_for, :status, :idempotency_key
+                )
+                RETURNING id::text
+                """
+            ),
+            {
+                "generation_job_id": str(jid),
+                "primary_asset_id": asset_uuid,
+                "content_type": content_type,
+                "caption": body.caption or "",
+                "hashtags": json.dumps(hashtags),
+                "mode": mode,
+                "scheduled_for": scheduled_for,
+                "status": intent_status,
+                "idempotency_key": idempotency_key,
+            },
+        )
+        intent_id = str(new_intent.scalar_one())
+
+        for account_id in account_ids:
+            await db.execute(
+                text(
+                    """
+                    INSERT INTO publication_targets (
+                        publication_intent_id, account_id, platform, status
+                    ) VALUES (
+                        :publication_intent_id, :account_id, :platform, 'pending'
+                    )
+                    """
+                ),
+                {
+                    "publication_intent_id": intent_id,
+                    "account_id": account_id,
+                    "platform": accounts_map[account_id],
+                },
+            )
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        if "publication_intents_idempotency_key_key" in str(exc):
+            existing_retry = await db.execute(
+                text("SELECT id::text FROM publication_intents WHERE idempotency_key = :idempotency_key LIMIT 1"),
+                {"idempotency_key": idempotency_key},
+            )
+            row = existing_retry.first()
+            if row:
+                return await _build_publish_intent_response(db, str(row[0]))
+        raise
+
+    return await _build_publish_intent_response(db, intent_id)
+
+
+@publish_router.post("/publication-intents/{intent_id}/dispatch", response_model=PublishIntentDispatchResponse)
+async def dispatch_intent(intent_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        iid = str(uuid.UUID(intent_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid intent id")
+
+    try:
+        result = await dispatch_publish_intent(iid, db)
+        return PublishIntentDispatchResponse(
+            intent_id=str(result["intent_id"]),
+            status=str(result["status"]),
+            dispatched_targets=int(result["dispatched_targets"]),
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "Publish intent not found":
+            raise HTTPException(status_code=404, detail=msg) from exc
+        try:
+            await db.execute(
+                text(
+                    """
+                    UPDATE publication_intents
+                    SET error_message = :error_message,
+                        updated_at = NOW()
+                    WHERE id = :intent_id
+                    """
+                ),
+                {"intent_id": iid, "error_message": msg[:8000]},
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+        raise HTTPException(status_code=400, detail=msg) from exc
 
 
 @router.post("/{job_id}/launch")

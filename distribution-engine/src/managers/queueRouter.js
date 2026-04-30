@@ -15,6 +15,22 @@ router.get('/stats', async (req, res) => {
     // Redis queue lengths
     const pendingInQueue = await redis.llen('content:ready').catch(() => 0);
     const delayedInQueue = await redis.zcard('content:delayed').catch(() => 0);
+    const publishCommandsPending = await redis.llen('publish:commands').catch(() => 0);
+    const publishFailedDlq = await redis.llen('publish:failed').catch(() => 0);
+    let publishProcessing = 0;
+    try {
+      let cursor = '0';
+      do {
+        const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', 'publish:processing:*', 'COUNT', 100);
+        cursor = nextCursor;
+        if (Array.isArray(keys) && keys.length > 0) {
+          const lengths = await Promise.all(keys.map((k) => redis.llen(k).catch(() => 0)));
+          publishProcessing += lengths.reduce((acc, x) => acc + Number(x || 0), 0);
+        }
+      } while (cursor !== '0');
+    } catch (_) {
+      publishProcessing = 0;
+    }
 
     // DB aggregates from publications table
     const dbResult = await pool.query(`
@@ -35,6 +51,9 @@ router.get('/stats', async (req, res) => {
       queue: {
         pending: pendingInQueue,
         delayed: delayedInQueue,
+        publish_commands_pending: publishCommandsPending,
+        publish_processing: publishProcessing,
+        publish_failed_dlq: publishFailedDlq,
       },
       publications: {
         total: parseInt(stats.total, 10),

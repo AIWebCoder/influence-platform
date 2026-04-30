@@ -200,70 +200,70 @@ Prepare platform for 500+ accounts with horizontal scaling.
 ```
 infra/init.sql                          # Add new tables
 content-factory/src/
-├── src/core/actionLimits.py           # Phase 6
-├── src/core/rbac.py                   # Phase 7
+├── src/core/actionLimits.py            # Phase 6
+├── src/core/rbac.py                    # Phase 7
 ├── src/core/cooldownManager.py         # Phase 6
 ├── src/middleware/rateLimiter.py       # Phase 7
 ├── src/middleware/safetyGuard.py       # Phase 6
 ├── src/services/
-│   ├── captionScorer.py               # Phase 9
-│   ├── abTestEngine.py                # Phase 9
-│   ├── promptOptimizer.py             # Phase 9
+│   ├── captionScorer.py                # Phase 9
+│   ├── abTestEngine.py                 # Phase 9
+│   ├── promptOptimizer.py              # Phase 9
 │   ├── contentAnalytics.py             # Phase 9
-│   ├── trendingDetector.py            # Phase 10
-│   ├── alertWebhook.py                # Phase 8
+│   ├── trendingDetector.py             # Phase 10
+│   ├── alertWebhook.py                 # Phase 8
 │   └── promptOptimizer.py              # Phase 10
 ├── src/metrics/                        # Phase 8
-└── src/api/analytics.py               # Phase 11
+└── src/api/analytics.py                # Phase 11
 
 distribution-engine/src/
 ├── src/core/
-│   ├── actionLimits.js                # Phase 6
-│   ├── cooldownManager.js             # Phase 6
-│   ├── priorityQueue.js               # Phase 12
-│   └── metrics.js                     # Expand - Phase 8
+│   ├── actionLimits.js                 # Phase 6
+│   ├── cooldownManager.js              # Phase 6
+│   ├── priorityQueue.js                # Phase 12
+│   └── metrics.js                      # Expand - Phase 8
 ├── src/metrics/
-│   ├── loginMetrics.js                # Phase 8
-│   ├── proxyMetrics.js                # Phase 8
-│   └── queueMetrics.js                # Phase 8
+│   ├── loginMetrics.js                 # Phase 8
+│   ├── proxyMetrics.js                 # Phase 8
+│   └── queueMetrics.js                 # Phase 8
 ├── src/services/
-│   ├── smartScheduler.js              # Phase 10
+│   ├── smartScheduler.js               # Phase 10
 │   ├── engagementPredictor.js          # Phase 10
 │   ├── frequencyOptimizer.js           # Phase 10
 │   └── healthPublisher.js              # Phase 10
 ├── src/proxy/
-│   └── proxyLoadBalancer.js           # Phase 12
+│   └── proxyLoadBalancer.js            # Phase 12
 ├── src/workers/
-│   ├── worker1.js                     # Phase 12
+│   ├── worker1.js                      # Phase 12
 │   └── worker2.js                      # Phase 12
 ├── src/middleware/
-│   └── safetyGuard.js                 # Phase 6
+│   └── safetyGuard.js                  # Phase 6
 └── src/utils/
-    └── humanizer.js                   # Phase 6
+    └── humanizer.js                    # Phase 6
 
 infra/
 ├── grafana/dashboards/
-│   ├── operations.json                # Phase 8
-│   ├── analytics.json                 # Phase 11
-│   └── scaling.json                   # Phase 12
+│   ├── operations.json                 # Phase 8
+│   ├── analytics.json                  # Phase 11
+│   └── scaling.json                    # Phase 12
 
 k8s/
-├── hpa.yaml                           # Phase 12
-├── deployment.yaml                    # Phase 12
-└── service.yaml                       # Phase 12
+├── hpa.yaml                            # Phase 12
+├── deployment.yaml                     # Phase 12
+└── service.yaml                        # Phase 12
 ```
 
 ### Files to Modify
 
 ```
-infra/init.sql                         # Add new tables
-content-factory/src/core/config.py     # Phase 7
-content-factory/src/core/security.py   # Phase 7
-content-factory/src/main.py            # Add middleware
-content-factory/requirements.txt        # Add new deps
-distribution-engine/src/core/metrics.js # Phase 8
-distribution-engine/package.json       # Add new deps
-docker-compose.prod.yml               # Phase 12
+infra/init.sql                            # Add new tables
+content-factory/src/core/config.py        # Phase 7
+content-factory/src/core/security.py      # Phase 7
+content-factory/src/main.py               # Add middleware
+content-factory/requirements.txt          # Add new deps
+distribution-engine/src/core/metrics.js   # Phase 8
+distribution-engine/package.json          # Add new deps
+docker-compose.prod.yml                   # Phase 12
 ```
 
 ---

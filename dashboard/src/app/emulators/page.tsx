@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Monitor, RefreshCw } from "lucide-react";
 
 type EmulatorInfo = {
@@ -20,9 +20,12 @@ type EmulatorResponse = {
 export default function EmulatorsPage() {
   const [data, setData] = useState<EmulatorResponse>({ count: 0, items: [] });
   const [loading, setLoading] = useState(true);
+  const [refreshingAll, setRefreshingAll] = useState(false);
   const [tick, setTick] = useState(0);
   const [controlEnabled, setControlEnabled] = useState(true);
   const [busyBySerial, setBusyBySerial] = useState<Record<string, boolean>>({});
+  const [restartingBySerial, setRestartingBySerial] = useState<Record<string, boolean>>({});
+  const [refreshingBySerial, setRefreshingBySerial] = useState<Record<string, boolean>>({});
   const [errorBySerial, setErrorBySerial] = useState<Record<string, string | undefined>>({});
   const [rippleBySerial, setRippleBySerial] = useState<
     Record<string, { x: number; y: number; key: number } | undefined>
@@ -30,33 +33,31 @@ export default function EmulatorsPage() {
   const dragStartRef = useRef<Record<string, { x: number; y: number; at: number }>>({});
   const lastActionAtRef = useRef<Record<string, number>>({});
 
-  useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      try {
-        const res = await fetch("/api/emulators", { cache: "no-store" });
-        if (!res.ok) {
-          throw new Error(`API returned status ${res.status}`);
-        }
-        const payload = (await res.json()) as EmulatorResponse;
-        if (mounted) setData(payload);
-      } catch {
-        if (mounted) setData({ count: 0, items: [], error: "Unable to fetch emulator list" });
-      } finally {
-        if (mounted) setLoading(false);
+  const loadEmulators = useCallback(async (): Promise<void> => {
+    try {
+      const res = await fetch("/api/emulators", { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error(`API returned status ${res.status}`);
       }
-    };
+      const payload = (await res.json()) as EmulatorResponse;
+      setData(payload);
+    } catch {
+      setData({ count: 0, items: [], error: "Unable to fetch emulator list" });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-    void load();
+  useEffect(() => {
+    void loadEmulators();
     const interval = setInterval(() => {
-      void load();
+      void loadEmulators();
       setTick((t) => t + 1);
     }, 5000);
     return () => {
-      mounted = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [loadEmulators]);
 
   const frameUrl = useMemo(
     () => (serial: string) => `/api/emulators/${encodeURIComponent(serial)}/frame?t=${tick}`,
@@ -113,6 +114,60 @@ export default function EmulatorsPage() {
       return false;
     } finally {
       setBusyBySerial((prev) => ({ ...prev, [serial]: false }));
+    }
+  };
+
+  const restartEmulator = async (serial: string) => {
+    if (restartingBySerial[serial]) return;
+    setErrorBySerial((prev) => ({ ...prev, [serial]: undefined }));
+    setRestartingBySerial((prev) => ({ ...prev, [serial]: true }));
+    try {
+      const res = await fetch("/api/emulators", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ serial }),
+        cache: "no-store",
+      });
+      const payload = (await res.json()) as {
+        success?: boolean;
+        message?: string;
+        phase?: string;
+      };
+      if (!res.ok || !payload.success) {
+        const msg = payload.message || payload.phase || "Restart failed";
+        setErrorBySerial((prev) => ({ ...prev, [serial]: msg }));
+      }
+    } catch {
+      setErrorBySerial((prev) => ({ ...prev, [serial]: "Network error during restart" }));
+    } finally {
+      setRestartingBySerial((prev) => ({ ...prev, [serial]: false }));
+      await loadEmulators();
+      setTick((t) => t + 1);
+    }
+  };
+
+  const refreshEmulator = async (serial: string) => {
+    if (refreshingBySerial[serial]) return;
+    setErrorBySerial((prev) => ({ ...prev, [serial]: undefined }));
+    setRefreshingBySerial((prev) => ({ ...prev, [serial]: true }));
+    try {
+      await loadEmulators();
+      setTick((t) => t + 1);
+    } catch {
+      setErrorBySerial((prev) => ({ ...prev, [serial]: "Failed to refresh emulator state" }));
+    } finally {
+      setRefreshingBySerial((prev) => ({ ...prev, [serial]: false }));
+    }
+  };
+
+  const refreshAllEmulators = async () => {
+    if (refreshingAll) return;
+    setRefreshingAll(true);
+    try {
+      await loadEmulators();
+      setTick((t) => t + 1);
+    } finally {
+      setRefreshingAll(false);
     }
   };
 
@@ -191,11 +246,12 @@ export default function EmulatorsPage() {
           </button>
           <button
             type="button"
-            onClick={() => setTick((t) => t + 1)}
-            className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            disabled={refreshingAll}
+            onClick={() => void refreshAllEmulators()}
+            className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
           >
-            <RefreshCw className="h-4 w-4" />
-            Refresh now
+            <RefreshCw className={`h-4 w-4 ${refreshingAll ? "animate-spin" : ""}`} />
+            {refreshingAll ? "Refreshing..." : "Refresh now"}
           </button>
         </div>
       </div>
@@ -221,9 +277,30 @@ export default function EmulatorsPage() {
                   <Monitor className="h-4 w-4" />
                   {emulator.serial}
                 </div>
-                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
-                  {emulator.status}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                    {emulator.status}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={Boolean(refreshingBySerial[emulator.serial])}
+                    onClick={() => void refreshEmulator(emulator.serial)}
+                    className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  >
+                    <RefreshCw
+                      className={`h-3.5 w-3.5 ${refreshingBySerial[emulator.serial] ? "animate-spin" : ""}`}
+                    />
+                    Refresh
+                  </button>
+                  <button
+                    type="button"
+                    disabled={Boolean(restartingBySerial[emulator.serial])}
+                    onClick={() => void restartEmulator(emulator.serial)}
+                    className="rounded-md border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  >
+                    {restartingBySerial[emulator.serial] ? "Restarting..." : "Restart emulator"}
+                  </button>
+                </div>
               </header>
               <div className="bg-zinc-100 dark:bg-zinc-950">
                 <div
