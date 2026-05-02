@@ -717,7 +717,7 @@ En bas de la barre latérale, tu vois le bouton "Se Déconnecter".
 
 1. Check the console (F12) for error messages / Vérifier la console (F12) pour les messages d'erreur
 2. Ask your technical team / Demander à ton équipe technique
-3. Check PROJECT_REPORT.md for technical details / Consulter PROJECT_REPORT.md pour les détails techniques
+3. Check `docs/project-status/project-report.md` for technical details / Consulter `docs/project-status/project-report.md` pour les détails techniques
 
 ---
 

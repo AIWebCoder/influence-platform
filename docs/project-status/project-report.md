@@ -48,7 +48,7 @@
 
 - **Dashboard**: Added Light/Dark/System theme support with persisted preference, a sidebar toggle, and a pre-hydration script to prevent theme flash.
 - **Content Factory**: Weekly export endpoint is available at `GET /reports/weekly?format=json|pdf|excel` (authenticated). PDF/Excel formats require `reportlab` / `openpyxl`.
-- **Docs**: Added implementation notes in `docs/DARK_MODE_IMPLEMENTATION.md`.
+- **Docs**: Added implementation notes in `docs/architecture/dark-mode-implementation.md`.
 
 ---
 
@@ -56,7 +56,7 @@
 
 - **Dashboard**: Added Light/Dark/System theme support with persisted preference, a sidebar toggle, and a pre-hydration script to prevent theme flash.
 - **Content Factory**: Weekly export endpoint is available at `GET /reports/weekly?format=json|pdf|excel` (authenticated). PDF/Excel formats require `reportlab` / `openpyxl`.
-- **Docs**: Added implementation notes in `docs/DARK_MODE_IMPLEMENTATION.md`.
+- **Docs**: Added implementation notes in `docs/architecture/dark-mode-implementation.md`.
 
 ---
 
