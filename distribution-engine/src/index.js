@@ -109,7 +109,7 @@ async function start() {
     startTokenExpiryCron();
 
     // Initialize Automated Services (after DB/Redis are READY)
-    
+
     // 1. Proxy Health Check (every 5 minutes)
     const ProxyManager = require('./proxy/ProxyManager');
     setInterval(async () => {
@@ -117,7 +117,7 @@ async function start() {
       await ProxyManager.runHealthCheckAll();
     }, 5 * 60 * 1000);
     // Initial run
-    ProxyManager.runHealthCheckAll().catch(err => 
+    ProxyManager.runHealthCheckAll().catch(err =>
       console.warn('[HealthCheck] Initial proxy check failed:', err.message)
     );
 

@@ -1,7 +1,10 @@
 ﻿const axios = require('axios');
 const { getValidToken } = require('../../services/tokenService');
+const { publishPipelineLog } = require('../../core/publishPipelineLog');
 
 const GRAPH_BASE = 'https://graph.instagram.com/v25.0';
+/** IG container status poll: `status` holds human-readable processing detail (incl. error codes when ERROR). */
+const CONTAINER_STATUS_FIELDS = 'id,status,status_code';
 const POLL_INTERVAL_MS = 10_000;
 const MAX_RETRIES = 20;
 const CONTAINER_TIMEOUT_SENTINEL = 'INSTAGRAM_CONTAINER_TIMEOUT';
@@ -38,20 +41,46 @@ async function createContainer({ igUserId, videoUrl, caption, accessToken }) {
   return containerId;
 }
 
+/**
+ * Polls GET /{container_id} until FINISHED, ERROR, or max attempts.
+ * @returns {{ status_detail: string | null, graph_response: object }}
+ */
 async function waitForContainer({ containerId, accessToken }) {
   const statusUrl = `${GRAPH_BASE}/${encodeURIComponent(containerId)}`;
+  let lastPayload = null;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const response = await axios.get(statusUrl, {
-      params: { fields: 'status_code', access_token: accessToken },
+      params: { fields: CONTAINER_STATUS_FIELDS, access_token: accessToken },
       timeout: 20_000,
     });
-    const statusCode = String(response?.data?.status_code || '').toUpperCase();
-    if (statusCode === 'FINISHED') return;
+    const data = response?.data && typeof response.data === 'object' ? response.data : {};
+    lastPayload = Object.keys(data).length ? data : lastPayload;
+    const statusCode = String(data.status_code || '').toUpperCase();
+    const statusDetail = typeof data.status === 'string' ? data.status.trim() : null;
+
+    if (statusCode === 'FINISHED') {
+      return { status_detail: statusDetail, graph_response: data };
+    }
     if (statusCode === 'ERROR') {
-      throw new Error(`Instagram container processing failed for ${containerId}`);
+      publishPipelineLog('instagram_graph_container_status_error', {
+        container_id: containerId,
+        poll_attempt: attempt,
+        max_poll_attempts: MAX_RETRIES,
+        status_code: data.status_code ?? null,
+        status_detail: statusDetail,
+        graph_response: data,
+      });
+      const suffix = statusDetail ? `: ${statusDetail}` : '';
+      throw new Error(`Instagram container processing failed for ${containerId}${suffix}`);
     }
     await sleep(POLL_INTERVAL_MS);
   }
+  publishPipelineLog('instagram_graph_container_status_timeout', {
+    container_id: containerId,
+    poll_attempts: MAX_RETRIES,
+    poll_interval_ms: POLL_INTERVAL_MS,
+    last_graph_response: lastPayload,
+  });
   const timeoutErr = new Error(`Instagram container timeout for ${containerId}`);
   timeoutErr.code = CONTAINER_TIMEOUT_SENTINEL;
   throw timeoutErr;
@@ -86,6 +115,20 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
   let currentStage = 'fetch_token';
   let containerId = null;
 
+  publishPipelineLog('instagram_adapter_start', {
+    account_id: accountId,
+    ig_user_id: igUserId,
+    mime_type: asset?.mime_type || null,
+    video_url_preview: videoUrl.length > 220 ? `${videoUrl.slice(0, 220)}…` : videoUrl,
+    caption_len: String(caption || '').length,
+    hashtag_count: Array.isArray(hashtags) ? hashtags.length : 0,
+    graph_request: {
+      endpoint: 'POST /{ig_user_id}/media',
+      media_type: 'REELS',
+      video_url_set: Boolean(videoUrl),
+    },
+  });
+
   try {
     const accessToken = await getValidToken(accountId);
     currentStage = 'create_container';
@@ -96,13 +139,28 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
       caption: fullCaption,
       accessToken,
     });
+    publishPipelineLog('instagram_graph_create_container_response', {
+      ig_user_id: igUserId,
+      container_id: containerId,
+      response_summary: { id: containerId },
+    });
     currentStage = 'wait_container';
-    await waitForContainer({ containerId, accessToken });
+    const containerReady = await waitForContainer({ containerId, accessToken });
+    publishPipelineLog('instagram_graph_container_status', {
+      container_id: containerId,
+      status_code: 'FINISHED',
+      status_detail: containerReady?.status_detail || null,
+    });
     currentStage = 'publish_container';
     const postId = await publishContainer({
       igUserId,
       creationId: containerId,
       accessToken,
+    });
+    publishPipelineLog('instagram_graph_media_publish_response', {
+      ig_user_id: igUserId,
+      creation_id: containerId,
+      response_summary: { id: postId },
     });
     return {
       success: true,
@@ -112,9 +170,18 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
       stage: 'published',
     };
   } catch (err) {
-    const msg = err?.response?.data
-      ? `Instagram API error: ${JSON.stringify(err.response.data)}`
+    const status = err?.response?.status;
+    const data = err?.response?.data;
+    const msg = data
+      ? `Instagram API error: ${JSON.stringify(data)}`
       : (err?.message || String(err));
+    publishPipelineLog('instagram_graph_error', {
+      stage: currentStage,
+      container_id: containerId,
+      http_status: status || null,
+      error_body: data || null,
+      message: err?.message || String(err),
+    });
     const unsafeToRetry =
       currentStage === 'wait_container' ||
       currentStage === 'publish_container' ||

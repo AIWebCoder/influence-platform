@@ -4,6 +4,7 @@ const { pushDelayed } = require('../core/redis');
 const SafetyGuard = require('../middleware/safetyGuard');
 const Humanizer = require('../utils/humanizer');
 const { isPublishDryRun, publishModeLabel, dryRunPostUrl } = require('../core/publishMode');
+const { publishPipelineLog } = require('../core/publishPipelineLog');
 
 const MAX_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 30 * 1000;
@@ -15,7 +16,6 @@ const PERMANENT_ERRORS = [
   'Account Disabled',
   'Login Required',
   'Invalid Credentials',
-  'Reel publish not implemented',
 ];
 
 const RETRYABLE_ERRORS = [
@@ -54,30 +54,100 @@ function publishAdapterTimeoutPromise(ms) {
 }
 
 class PublishingWorker {
-  async markIntentPublishSuccess(intentId, externalPostId) {
-    const pool = getPool();
-    await pool.query(
-      `UPDATE publication_intents
-       SET status = 'published',
-           platform_post_id = $2,
-           published_at = NOW(),
-           error_message = NULL,
-           updated_at = NOW()
-       WHERE id = $1::uuid`,
-      [intentId, externalPostId]
+  /**
+   * Mirror a terminal publication_targets row into publications (single UI source of truth).
+   * Call only when target status is published, failed, or uncertain — not during retries.
+   */
+  async syncPublicationRowForIntentTarget(pool, targetId) {
+    const { rows } = await pool.query(
+      `SELECT pt.id, pt.account_id, pt.status, pt.external_post_id, pt.published_at, pt.last_error,
+              pt.retry_count, pt.max_retries
+       FROM publication_targets pt
+       WHERE pt.id = $1::uuid`,
+      [targetId]
     );
-  }
+    if (!rows.length) return;
+    const t = rows[0];
+    const st = String(t.status || '');
+    if (!['published', 'failed', 'uncertain'].includes(st)) return;
 
-  async markIntentPublishFailure(intentId, errorMessage) {
-    const pool = getPool();
-    await pool.query(
-      `UPDATE publication_intents
-       SET status = 'failed',
-           error_message = $2,
-           updated_at = NOW()
-       WHERE id = $1::uuid`,
-      [intentId, String(errorMessage || '').slice(0, 8000)]
+    let status;
+    let failureType = null;
+    let errorMessage = null;
+    let instagramPostId = null;
+    let publishedAt = null;
+
+    if (st === 'published') {
+      status = 'published';
+      instagramPostId = t.external_post_id ? String(t.external_post_id).slice(0, 200) : null;
+      publishedAt = t.published_at || new Date();
+    } else if (st === 'uncertain') {
+      status = 'failed';
+      failureType = 'uncertain';
+      errorMessage = String(t.last_error || 'uncertain_publish_state').slice(0, 8000);
+    } else {
+      const maxR = parseInt(t.max_retries, 10);
+      const rc = parseInt(t.retry_count, 10);
+      const exhausted = Number.isFinite(rc) && Number.isFinite(maxR) && rc >= maxR;
+      status = exhausted ? 'permanently_failed' : 'failed';
+      failureType = exhausted ? 'max_retries_exhausted' : 'adapter_error';
+      errorMessage = String(t.last_error || 'publish_failed').slice(0, 8000);
+    }
+
+    const existing = await pool.query(
+      `SELECT id FROM publications WHERE publication_target_id = $1::uuid LIMIT 1`,
+      [targetId]
     );
+
+    if (existing.rows.length) {
+      await pool.query(
+        `UPDATE publications SET
+           status = $2,
+           instagram_post_id = CASE WHEN $2 = 'published' THEN COALESCE($3, instagram_post_id) ELSE instagram_post_id END,
+           published_at = CASE WHEN $2 = 'published' THEN COALESCE($4::timestamptz, published_at, NOW()) ELSE published_at END,
+           error_message = $5,
+           retry_count = $6,
+           max_retries = COALESCE($7, max_retries),
+           failure_type = $8,
+           next_retry_at = NULL,
+           updated_at = NOW()
+         WHERE id = $1::uuid`,
+        [
+          existing.rows[0].id,
+          status,
+          instagramPostId,
+          publishedAt,
+          errorMessage,
+          t.retry_count,
+          t.max_retries,
+          failureType,
+        ]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO publications (
+           id, account_id, content_packet_id, publication_target_id, status, instagram_post_id,
+           published_at, error_message, retry_count, max_retries, failure_type, next_retry_at, last_retry_at,
+           created_at, updated_at
+         ) VALUES (
+           gen_random_uuid(), $1, NULL, $2::uuid, $3, $4,
+           CASE WHEN $3 = 'published' THEN COALESCE($5::timestamptz, NOW()) ELSE NULL END,
+           $6, $7, COALESCE($8, 3), $9, NULL, NULL,
+           NOW(), NOW()
+         )`,
+        [
+          t.account_id,
+          targetId,
+          status,
+          instagramPostId,
+          publishedAt,
+          errorMessage,
+          t.retry_count,
+          t.max_retries,
+          failureType,
+        ]
+      );
+    }
   }
 
   /**
@@ -527,8 +597,14 @@ class PublishingWorker {
       });
       return url;
     }
-    logStructured('warn', { event: 'reel_not_implemented', accountId, packetId: packet.id });
-    throw new Error('Reel publish not implemented — set PUBLISH_DRY_RUN=true for demos or implement reel flow');
+    // Fallback: use the existing Playwright publish path so reel-type packets
+    // no longer fail permanently on the legacy queue pipeline.
+    logStructured('warn', {
+      event: 'reel_publish_fallback_to_instagram_bot',
+      accountId,
+      packetId: packet.id,
+    });
+    return await InstagramBot.publishContent(accountId, packet);
   }
 
   publishLog(level, payload) {
@@ -736,6 +812,8 @@ class PublishingWorker {
         ]
       );
 
+      await this.syncPublicationRowForIntentTarget(pool, targetId);
+
       await this.pushPublishDlq(redis, payload, allowRetry ? errMsg : `UNCERTAIN_PUBLISH_STATE: ${errMsg}`);
       await this.lremPublishProcessing(redis, processingKey, rawPayload);
 
@@ -856,8 +934,8 @@ class PublishingWorker {
       `SELECT
          COUNT(*)::int AS total,
          COUNT(*) FILTER (WHERE status = 'published')::int AS published_cnt,
-         COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_cnt,
-         COUNT(*) FILTER (WHERE status IN ('pending', 'publishing', 'uncertain'))::int AS open_cnt
+         COUNT(*) FILTER (WHERE status IN ('failed', 'uncertain'))::int AS failed_cnt,
+         COUNT(*) FILTER (WHERE status IN ('pending', 'publishing'))::int AS open_cnt
        FROM publication_targets
        WHERE publication_intent_id = $1::uuid`,
       [intentId]
@@ -875,7 +953,11 @@ class PublishingWorker {
     else return;
 
     await pool.query(
-      `UPDATE publication_intents SET status = $1, updated_at = NOW() WHERE id = $2::uuid`,
+      `UPDATE publication_intents
+       SET status = $1,
+           error_message = CASE WHEN $1 = 'published' THEN NULL ELSE error_message END,
+           updated_at = NOW()
+       WHERE id = $2::uuid`,
       [intentStatus, intentId]
     );
   }
@@ -935,6 +1017,12 @@ class PublishingWorker {
       intentId = payload.intent_id;
       targetId = payload.target_id;
 
+      publishPipelineLog('worker_command_parsed', {
+        intent_id: intentId,
+        target_id: targetId,
+        body: payload,
+      });
+
       if (!isUuid(targetId) || !isUuid(intentId)) {
         this.publishLog('warn', {
           event: 'publish_command_invalid_ids',
@@ -980,6 +1068,7 @@ class PublishingWorker {
           status: current,
           retry_count: rc,
         });
+        await this.syncPublicationRowForIntentTarget(pool, targetId);
         await safeLrem();
         return;
       }
@@ -992,6 +1081,7 @@ class PublishingWorker {
            WHERE id = $1::uuid AND status = 'publishing'`,
           [targetId]
         );
+        await this.syncPublicationRowForIntentTarget(pool, targetId);
         await safeLrem();
         await this.tryAggregateIntent(pool, intentId, { target_id: targetId, status: 'published' });
         this.publishLog('info', {
@@ -1081,6 +1171,7 @@ class PublishingWorker {
            WHERE id = $1::uuid AND status = 'publishing'`,
           [targetId]
         );
+        await this.syncPublicationRowForIntentTarget(pool, targetId);
         await safeLrem();
         await this.tryAggregateIntent(pool, intentId, { target_id: targetId, status: 'published' });
         this.publishLog('info', {
@@ -1120,6 +1211,11 @@ class PublishingWorker {
         ]);
       } catch (pubErr) {
         const em = pubErr && pubErr.message ? pubErr.message : String(pubErr);
+        publishPipelineLog('worker_adapter_exception', {
+          intent_id: intentId,
+          target_id: targetId,
+          error: em,
+        });
         const allowRetry = em !== 'PUBLISH_EXECUTION_TIMEOUT';
         await this.handlePublishFailure(pool, redis, rawPayload, payload, em, processingKey, allowRetry);
         return;
@@ -1132,9 +1228,14 @@ class PublishingWorker {
         if (result?.container_id) failureContext.push(`container_id=${result.container_id}`);
         if (result?.safe_to_retry === false) failureContext.push('safe_to_retry=false');
         const fullErrMsg = failureContext.length ? `${errMsg} (${failureContext.join(', ')})` : errMsg;
+        publishPipelineLog('worker_adapter_returned_failure', {
+          intent_id: intentId,
+          target_id: targetId,
+          adapter_result: result || null,
+          full_error: fullErrMsg,
+        });
         payload.publish_stage = result?.stage || null;
         payload.provider_container_id = result?.container_id || null;
-        await this.markIntentPublishFailure(intentId, errMsg);
         const allowRetry = Boolean(result?.safe_to_retry !== false);
         await this.handlePublishFailure(pool, redis, rawPayload, payload, fullErrMsg, processingKey, allowRetry);
         return;
@@ -1158,8 +1259,16 @@ class PublishingWorker {
         return;
       }
 
+      publishPipelineLog('worker_publish_db_updated', {
+        intent_id: intentId,
+        target_id: targetId,
+        external_post_id: result.external_post_id,
+        external_post_url: result.external_post_url,
+        container_id: result.container_id || null,
+      });
+
+      await this.syncPublicationRowForIntentTarget(pool, targetId);
       await this.lremPublishProcessing(redis, processingKey, rawPayload);
-      await this.markIntentPublishSuccess(intentId, result.external_post_id);
 
       this.publishLog('info', {
         event: 'publish_command_success',
@@ -1173,11 +1282,6 @@ class PublishingWorker {
       await this.tryAggregateIntent(pool, intentId, { target_id: targetId, status: 'published' });
     } catch (err) {
       const msg = err && err.message ? err.message : String(err);
-      if (intentId && isUuid(intentId)) {
-        try {
-          await this.markIntentPublishFailure(intentId, msg);
-        } catch (_) {}
-      }
       this.publishLog('error', {
         event: 'publish_command_exception',
         intent_id: intentId,

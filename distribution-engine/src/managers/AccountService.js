@@ -6,24 +6,45 @@ class AccountService {
   async getAccounts(skip = 0, limit = 100) {
     const pool = getPool();
     const result = await pool.query(
-      'SELECT id, username, status, health_score, metadata, created_at FROM accounts ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+      `
+      SELECT
+        a.id,
+        a.username,
+        a.status,
+        a.health_score,
+        a.metadata,
+        a.created_at,
+        COALESCE(NULLIF(TRIM(a.platform), ''), 'instagram') AS platform,
+        COALESCE(
+          NULLIF(TRIM(a.metadata->> 'proxy'), ''),
+          CASE
+            WHEN p.id IS NOT NULL THEN CONCAT('http://', p.host, ':', p.port::text)
+            ELSE NULL
+          END
+        ) AS proxy_url
+      FROM accounts a
+      LEFT JOIN proxies p ON p.id = a.proxy_id
+      ORDER BY a.created_at DESC
+      LIMIT $1 OFFSET $2
+      `,
       [limit, skip]
     );
     return result.rows;
   }
 
-  async createAccount(username, password, status = 'warming', proxy = null) {
+  async createAccount(username, password, status = 'warming', proxy = null, platform = 'instagram') {
     const pool = getPool();
     const id = uuidv4();
     const salt = await bcrypt.genSalt(10);
     const passwordEncrypted = await bcrypt.hash(password, salt);
     const healthScore = 100;
+    const plat = (platform || 'instagram').toLowerCase().trim() || 'instagram';
 
     const result = await pool.query(
-      `INSERT INTO accounts (id, username, password_encrypted, status, health_score, metadata) 
-       VALUES ($1, $2, $3, $4, $5, $6) 
-       RETURNING id, username, status, health_score, metadata`,
-      [id, username, passwordEncrypted, status, healthScore, JSON.stringify({ proxy: proxy || null })]
+      `INSERT INTO accounts (id, username, password_encrypted, status, health_score, metadata, platform)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, username, status, health_score, metadata, platform`,
+      [id, username, passwordEncrypted, status, healthScore, JSON.stringify({ proxy: proxy || null }), plat]
     );
     return result.rows[0];
   }

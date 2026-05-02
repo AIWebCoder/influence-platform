@@ -44,7 +44,25 @@ function decryptProxyPassword(passwordEncrypted) {
 router.get('/', async (req, res) => {
   try {
     const pool = getPool();
-    const result = await pool.query('SELECT id, username, status, health_score, metadata, created_at FROM accounts');
+    const result = await pool.query(`
+      SELECT
+        a.id,
+        a.username,
+        a.status,
+        a.health_score,
+        a.metadata,
+        a.created_at,
+        COALESCE(NULLIF(TRIM(a.platform), ''), 'instagram') AS platform,
+        COALESCE(
+          NULLIF(TRIM(a.metadata->> 'proxy'), ''),
+          CASE
+            WHEN p.id IS NOT NULL THEN CONCAT('http://', p.host, ':', p.port::text)
+            ELSE NULL
+          END
+        ) AS proxy_url
+      FROM accounts a
+      LEFT JOIN proxies p ON p.id = a.proxy_id
+    `);
     res.json(result.rows);
   } catch (error) {
     console.error('Erreur GET /accounts:', error);
@@ -55,7 +73,29 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const pool = getPool();
-    const result = await pool.query('SELECT id, username, status, health_score, metadata, created_at FROM accounts WHERE id = $1', [req.params.id]);
+    const result = await pool.query(
+      `
+      SELECT
+        a.id,
+        a.username,
+        a.status,
+        a.health_score,
+        a.metadata,
+        a.created_at,
+        COALESCE(NULLIF(TRIM(a.platform), ''), 'instagram') AS platform,
+        COALESCE(
+          NULLIF(TRIM(a.metadata->> 'proxy'), ''),
+          CASE
+            WHEN p.id IS NOT NULL THEN CONCAT('http://', p.host, ':', p.port::text)
+            ELSE NULL
+          END
+        ) AS proxy_url
+      FROM accounts a
+      LEFT JOIN proxies p ON p.id = a.proxy_id
+      WHERE a.id = $1
+      `,
+      [req.params.id]
+    );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
     res.json(result.rows[0]);
   } catch (error) {
@@ -163,15 +203,37 @@ router.post('/:id/execute', async (req, res) => {
   }
 });
 
+const ALLOWED_PLATFORMS = new Set([
+  'instagram',
+  'tiktok',
+  'twitter',
+  'x',
+  'facebook',
+  'linkedin',
+]);
+
 router.post('/', async (req, res) => {
   try {
-    const { username, password_encrypted, status, metadata } = req.body;
+    const { username, password_encrypted, status, metadata, platform: rawPlatform } = req.body;
     if (!username || !password_encrypted) {
       return res.status(400).json({ error: 'Username and password are required' });
     }
     const proxyUrl = metadata?.proxy || null;
     const accountStatus = status || 'warming';
-    const account = await AccountService.createAccount(username, password_encrypted, accountStatus, proxyUrl);
+    const platformToken = (rawPlatform || 'instagram').toLowerCase().trim() || 'instagram';
+    if (!ALLOWED_PLATFORMS.has(platformToken)) {
+      return res.status(400).json({
+        error: 'Invalid platform',
+        detail: `platform must be one of: ${[...ALLOWED_PLATFORMS].join(', ')}`,
+      });
+    }
+    const account = await AccountService.createAccount(
+      username,
+      password_encrypted,
+      accountStatus,
+      proxyUrl,
+      platformToken
+    );
     res.status(201).json(account);
   } catch (err) {
     // Handle unique constraint violations etc if needed
