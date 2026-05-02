@@ -69,6 +69,32 @@ distributionClient.interceptors.response.use((response) => response, handleUnaut
 contentClient.interceptors.response.use((response) => response, handleUnauthorizedError);
 contentClientLongTimeout.interceptors.response.use((response) => response, handleUnauthorizedError);
 
+/**
+ * Maps axios / FastAPI errors to a single string for toasts (timeouts, network, detail, validation arrays).
+ */
+export function formatContentApiError(error: unknown, fallback: string): string {
+  if (!axios.isAxiosError(error)) return fallback;
+  if (error.code === "ECONNABORTED" || error.message?.toLowerCase().includes("timeout")) {
+    return "Request timed out. The Content API may be slow or unreachable — try again.";
+  }
+  if (!error.response) {
+    return "Cannot reach Content API. Check NEXT_PUBLIC_CONTENT_API_URL (from the browser it must resolve, e.g. http://localhost:8000).";
+  }
+  const data = error.response.data as { detail?: unknown; error?: string } | undefined;
+  if (data?.detail !== undefined) {
+    if (typeof data.detail === "string") return data.detail;
+    if (Array.isArray(data.detail)) {
+      const msgs = data.detail.map((item) => {
+        if (item && typeof item === "object" && "msg" in item) return String((item as { msg: string }).msg);
+        return JSON.stringify(item);
+      });
+      if (msgs.length) return msgs.join(" ");
+    }
+  }
+  if (typeof data?.error === "string") return data.error;
+  return fallback;
+}
+
 export const api = {
   distribution: {
     getAccounts: async () => {
@@ -83,7 +109,13 @@ export const api = {
       const response = await distributionClient.get(`/accounts/${id}/safety`);
       return response.data;
     },
-    addAccount: async (payload: { username: string; password_encrypted: string; status: string; metadata?: any }) => {
+    addAccount: async (payload: {
+      username: string;
+      password_encrypted: string;
+      status: string;
+      platform?: string;
+      metadata?: Record<string, unknown>;
+    }) => {
       const response = await distributionClient.post('/accounts', payload);
       return response.data;
     },
@@ -197,6 +229,16 @@ export const api = {
     },
   },
   content: {
+    generateCaption: async (data: {
+      niche: string;
+      topic?: string;
+      content_type?: string;
+      variant_style?: string;
+    }) => {
+      // LLM calls routinely exceed the default 5s contentClient timeout
+      const response = await contentClientLongTimeout.post('/content/caption/generate', data);
+      return response.data as { caption: string; hashtags: string[] };
+    },
     scoreCaption: async (caption: string, hashtags?: string[]) => {
       const response = await contentClient.post('/analytics/caption/score', { caption, hashtags });
       return response.data;

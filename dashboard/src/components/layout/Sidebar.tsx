@@ -42,7 +42,7 @@ export function Sidebar() {
     {
       label: text.nav.groupOverview,
       items: [
-        { name: text.nav.dashboard, href: "/", icon: LayoutDashboard, comingSoon: true },
+        { name: text.nav.dashboard, href: "/", icon: LayoutDashboard },
         { name: text.nav.analytics, href: "/analytics", icon: BarChart3, comingSoon: true },
       ],
     },
@@ -58,9 +58,7 @@ export function Sidebar() {
     },
     {
       label: text.nav.groupIntelligence,
-      items: [
-        { name: text.nav.abTesting, href: "/ab-tests", icon: Split, comingSoon: true },
-      ],
+      items: [{ name: text.nav.abTesting, href: "/ab-tests", icon: Split, comingSoon: true }],
     },
   ];
 
@@ -94,14 +92,10 @@ export function Sidebar() {
           </div>
         </div>
       </div>
-
       <div className="flex-1 overflow-y-auto px-3 py-4">
         <nav className="space-y-5">
           {navGroups.map((group, index) => (
-            <section
-              key={group.label}
-              className={cn(index > 0 && "border-t border-border/50 pt-4")}
-            >
+            <section key={group.label} className={cn(index > 0 && "border-t border-border/50 pt-4")}>
               <div className="mb-2 flex items-center justify-between px-2">
                 <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                   {group.label}
@@ -111,7 +105,6 @@ export function Sidebar() {
                 {group.items.map((item) => {
                   const isActive = pathname === item.href;
                   const isDisabled = Boolean(item.comingSoon);
-
                   return (
                     <Link
                       key={item.href}
@@ -123,8 +116,8 @@ export function Sidebar() {
                         isDisabled
                           ? "cursor-not-allowed opacity-70 text-muted-foreground"
                           : isActive
-                          ? "bg-muted text-foreground"
-                          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                            ? "bg-muted text-foreground"
+                            : "text-muted-foreground hover:bg-muted hover:text-foreground"
                       )}
                     >
                       <span
@@ -137,21 +130,14 @@ export function Sidebar() {
                       >
                         <item.icon className="h-4 w-4" />
                       </span>
-
                       <div className="min-w-0 flex-1">
                         <p className={cn("truncate text-sm", isActive ? "font-semibold text-foreground" : "font-medium")}>
                           {item.name}
                         </p>
-                        <p
-                          className={cn(
-                            "truncate text-xs",
-                            isActive ? "text-foreground/70" : "text-muted-foreground"
-                          )}
-                        >
+                        <p className={cn("truncate text-xs", isActive ? "text-foreground/70" : "text-muted-foreground")}>
                           {item.comingSoon ? "Coming soon" : group.label}
                         </p>
                       </div>
-
                       <ChevronRight
                         className={cn(
                           "h-3.5 w-3.5 shrink-0 transition-all duration-200",
@@ -168,7 +154,6 @@ export function Sidebar() {
           ))}
         </nav>
       </div>
-
       <div className="border-t border-border p-3">
         <div className="rounded-md bg-muted/50 p-2">
           <div className="flex items-center gap-3 rounded-md px-2 py-2 text-foreground">
@@ -180,7 +165,6 @@ export function Sidebar() {
               <p className="text-xs text-muted-foreground">{text.sidebar.profileRole}</p>
             </div>
           </div>
-
           <div className="mt-2 border-t border-border/50 pt-2">
             <button
               onClick={() => signOut({ callbackUrl: "/login" })}

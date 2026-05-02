@@ -1,7 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { Monitor, RefreshCw } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Monitor,
+  RefreshCw,
+  RotateCcw,
+  Smartphone,
+} from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
 
 type EmulatorInfo = {
   serial: string;
@@ -16,6 +28,33 @@ type EmulatorResponse = {
   items: EmulatorInfo[];
   error?: string;
 };
+
+function StatCard({
+  title,
+  value,
+  icon: Icon,
+  sub,
+}: {
+  title: string;
+  value: number | string;
+  icon: React.ElementType;
+  sub?: string;
+}) {
+  return (
+    <Card>
+      <CardContent className="pt-6">
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-xs text-muted-foreground uppercase tracking-wide">{title}</p>
+            <p className="text-2xl font-semibold mt-1">{value}</p>
+            {sub ? <p className="text-xs text-muted-foreground mt-1">{sub}</p> : null}
+          </div>
+          <Icon className="h-5 w-5 text-muted-foreground" />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function EmulatorsPage() {
   const [data, setData] = useState<EmulatorResponse>({ count: 0, items: [] });
@@ -223,126 +262,171 @@ export default function EmulatorsPage() {
     });
   };
 
+  const onlineCount = useMemo(
+    () =>
+      data.items.filter((item) => {
+        const s = (item.status || "").toLowerCase();
+        return s === "online" || s === "ready" || s === "connected" || s === "running";
+      }).length,
+    [data.items]
+  );
+
+  const busyCount = useMemo(
+    () =>
+      data.items.filter((item) => item.busy || busyBySerial[item.serial] || restartingBySerial[item.serial])
+        .length,
+    [data.items, busyBySerial, restartingBySerial]
+  );
+
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">Emulator Displays</h1>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+            <Monitor className="h-6 w-6 text-primary" />
+            Emulator Displays
+          </h1>
+          <p className="text-sm text-muted-foreground">
             Live UI previews from connected Android emulators.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button
+          <Button
             type="button"
+            variant={controlEnabled ? "default" : "outline"}
             onClick={() => setControlEnabled((v) => !v)}
-            className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium ${
-              controlEnabled
-                ? "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-                : "border-zinc-200 bg-white text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
-            }`}
           >
             Control: {controlEnabled ? "ON" : "OFF"}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="outline"
             disabled={refreshingAll}
             onClick={() => void refreshAllEmulators()}
-            className="inline-flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
           >
             <RefreshCw className={`h-4 w-4 ${refreshingAll ? "animate-spin" : ""}`} />
             {refreshingAll ? "Refreshing..." : "Refresh now"}
-          </button>
+          </Button>
         </div>
       </div>
 
+      {data.error ? (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Emulator API Error</AlertTitle>
+          <AlertDescription>{data.error}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <StatCard title="Connected" value={data.count} icon={Smartphone} />
+        <StatCard title="Online" value={onlineCount} icon={CheckCircle2} />
+        <StatCard title="Busy" value={busyCount} icon={RotateCcw} />
+      </div>
+
       {loading ? (
-        <div className="rounded-2xl border border-zinc-200 bg-white p-8 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
-          Loading emulator previews...
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 2xl:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i}>
+              <CardHeader>
+                <Skeleton className="h-5 w-40" />
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Skeleton className="h-[420px] w-full" />
+                <Skeleton className="h-4 w-56" />
+              </CardContent>
+            </Card>
+          ))}
         </div>
       ) : data.items.length === 0 ? (
-        <div className="rounded-2xl border border-zinc-200 bg-white p-8 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
-          No connected emulators found. Start Android emulators and ensure ADB sees them.
-          {data.error ? <div className="mt-2 text-red-500">{data.error}</div> : null}
-        </div>
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">
+            <Smartphone className="h-8 w-8 mx-auto mb-2" />
+            <p className="font-medium">No connected emulators found.</p>
+            <p className="text-sm mt-1">
+              Start Android emulators and ensure ADB sees them.
+            </p>
+          </CardContent>
+        </Card>
       ) : (
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 2xl:grid-cols-3">
           {data.items.map((emulator) => (
-            <article
-              key={emulator.serial}
-              className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
-            >
-              <header className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
-                <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-100">
-                  <Monitor className="h-4 w-4" />
-                  {emulator.serial}
+            <Card key={emulator.serial} className="overflow-hidden">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between gap-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Monitor className="h-4 w-4 text-muted-foreground" />
+                    {emulator.serial}
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary">{emulator.status}</Badge>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={Boolean(refreshingBySerial[emulator.serial])}
+                      onClick={() => void refreshEmulator(emulator.serial)}
+                    >
+                      <RefreshCw
+                        className={`mr-1 h-3.5 w-3.5 ${refreshingBySerial[emulator.serial] ? "animate-spin" : ""}`}
+                      />
+                      Refresh
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={Boolean(restartingBySerial[emulator.serial])}
+                      onClick={() => void restartEmulator(emulator.serial)}
+                    >
+                      {restartingBySerial[emulator.serial] ? "Restarting..." : "Restart"}
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
-                    {emulator.status}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={Boolean(refreshingBySerial[emulator.serial])}
-                    onClick={() => void refreshEmulator(emulator.serial)}
-                    className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="bg-zinc-100 dark:bg-zinc-950 rounded-md overflow-hidden">
+                  <div
+                    className={`relative h-[520px] w-full ${
+                      controlEnabled ? "cursor-crosshair" : "cursor-default"
+                    }`}
+                    onMouseDown={(event) => onMouseDown(emulator.serial, event)}
+                    onMouseUp={(event) => void onMouseUp(emulator, event)}
                   >
-                    <RefreshCw
-                      className={`h-3.5 w-3.5 ${refreshingBySerial[emulator.serial] ? "animate-spin" : ""}`}
+                    <img
+                      src={frameUrl(emulator.serial)}
+                      alt={`Live frame for ${emulator.serial}`}
+                      className="h-[520px] w-full select-none object-contain"
+                      draggable={false}
                     />
-                    Refresh
-                  </button>
-                  <button
-                    type="button"
-                    disabled={Boolean(restartingBySerial[emulator.serial])}
-                    onClick={() => void restartEmulator(emulator.serial)}
-                    className="rounded-md border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                  >
-                    {restartingBySerial[emulator.serial] ? "Restarting..." : "Restart emulator"}
-                  </button>
+                    {(busyBySerial[emulator.serial] || emulator.busy) && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/25 text-xs font-medium text-white">
+                        Executing action...
+                      </div>
+                    )}
+                    {rippleBySerial[emulator.serial] && (
+                      <span
+                        key={rippleBySerial[emulator.serial]?.key}
+                        className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-cyan-400"
+                        style={{
+                          left: rippleBySerial[emulator.serial]?.x,
+                          top: rippleBySerial[emulator.serial]?.y,
+                        }}
+                      />
+                    )}
+                  </div>
                 </div>
-              </header>
-              <div className="bg-zinc-100 dark:bg-zinc-950">
-                <div
-                  className={`relative h-[520px] w-full ${
-                    controlEnabled ? "cursor-crosshair" : "cursor-default"
-                  }`}
-                  onMouseDown={(event) => onMouseDown(emulator.serial, event)}
-                  onMouseUp={(event) => void onMouseUp(emulator, event)}
-                >
-                  <img
-                    src={frameUrl(emulator.serial)}
-                    alt={`Live frame for ${emulator.serial}`}
-                    className="h-[520px] w-full select-none object-contain"
-                    draggable={false}
-                  />
-                  {(busyBySerial[emulator.serial] || emulator.busy) && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/25 text-xs font-medium text-white">
-                      Executing action...
-                    </div>
-                  )}
-                  {rippleBySerial[emulator.serial] && (
-                    <span
-                      key={rippleBySerial[emulator.serial]?.key}
-                      className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-cyan-400"
-                      style={{
-                        left: rippleBySerial[emulator.serial]?.x,
-                        top: rippleBySerial[emulator.serial]?.y,
-                      }}
-                    />
-                  )}
-                </div>
-              </div>
-              <footer className="px-4 py-2 text-xs text-zinc-500 dark:text-zinc-400">
-                Model: {emulator.model || "unknown"}
-                {emulator.screen_size
-                  ? ` | ${emulator.screen_size.width}x${emulator.screen_size.height}`
-                  : ""}
-                {errorBySerial[emulator.serial] ? (
-                  <span className="ml-2 text-red-500">{errorBySerial[emulator.serial]}</span>
-                ) : null}
-              </footer>
-            </article>
+                <p className="text-xs text-muted-foreground">
+                  Model: {emulator.model || "unknown"}
+                  {emulator.screen_size
+                    ? ` | ${emulator.screen_size.width}x${emulator.screen_size.height}`
+                    : ""}
+                  {errorBySerial[emulator.serial] ? (
+                    <span className="ml-2 text-destructive">{errorBySerial[emulator.serial]}</span>
+                  ) : null}
+                </p>
+              </CardContent>
+            </Card>
           ))}
         </div>
       )}

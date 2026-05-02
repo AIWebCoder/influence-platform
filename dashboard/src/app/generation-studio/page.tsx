@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { api } from "@/lib/api";
+import { api, formatContentApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -34,8 +35,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CheckCircle2, ChevronDown, Circle, GripVertical, Loader2, RefreshCw, Rocket, Square, Video, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  Circle,
+  GripVertical,
+  Loader2,
+  RefreshCw,
+  Rocket,
+  SkipForward,
+  Sparkles,
+  Square,
+  Video,
+  XCircle,
+} from "lucide-react";
 import toast from "react-hot-toast";
+import { addTrackedGenerationJobId } from "@/lib/generation-job-tracking";
 
 type ContentType = "post" | "reel" | "story";
 type Mode = "persona" | "faceless";
@@ -91,6 +106,9 @@ type GenerationJobDetail = {
   cost_estimate?: {
     total_credits: number;
     currency: string;
+    model?: string;
+    provider?: string;
+    estimate_note?: string;
     breakdown: Array<{ line: string; units: number; unit_credits: number; subtotal: number }>;
   } | null;
 };
@@ -126,6 +144,14 @@ type PublishIntentResponse = {
 
 const NICHE_OPTIONS = ["fitness", "food", "travel", "business", "lifestyle"] as const;
 
+const TOPIC_PLACEHOLDER_BY_NICHE: Record<(typeof NICHE_OPTIONS)[number], string> = {
+  fitness: "e.g. morning mobility routine for desk workers",
+  food: "e.g. high-protein meal prep under 30 minutes",
+  travel: "e.g. long weekend in Lisbon on a budget",
+  business: "e.g. first marketing hires for a B2B startup",
+  lifestyle: "e.g. simple habits for a calmer morning",
+};
+
 function statusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
   if (status === "completed" || status === "queued") return "default";
   if (status === "failed") return "destructive";
@@ -134,7 +160,45 @@ function statusBadgeVariant(status: string): "default" | "secondary" | "destruct
   return "outline";
 }
 
-function StepIcon({ status }: { status: string }) {
+function stepMetadataSkipped(metadata: Record<string, unknown> | undefined): boolean {
+  return metadata?.skipped === true;
+}
+
+function pipelineStepSkipHint(metadata: Record<string, unknown> | undefined): string | null {
+  if (!stepMetadataSkipped(metadata)) return null;
+  const reason = metadata?.reason;
+  if (reason === "single_seedance_video_path") {
+    return "Not used in Seedance single-video mode (one video pass, no per-scene images).";
+  }
+  if (reason === "single_video_no_assembly_required") {
+    return "Not used — final output is a single clip with no assembly step.";
+  }
+  if (typeof reason === "string" && reason.length > 0) {
+    return reason;
+  }
+  return "Skipped for this execution mode.";
+}
+
+/** Local wall-clock time (24h) from step metadata ISO timestamp set when video_generation begins. */
+function formatVideoGenExecutionStart(metadata: Record<string, unknown> | undefined): string | null {
+  const raw = metadata?.execution_started_at;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function StepIcon({ status, skipped }: { status: string; skipped?: boolean }) {
+  if (status === "completed" && skipped) {
+    return (
+      <SkipForward className="h-4 w-4 text-muted-foreground" title="Skipped for this execution mode" />
+    );
+  }
   if (status === "completed") return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
   if (status === "failed") return <XCircle className="h-4 w-4 text-red-600" />;
   if (status === "cancelled") return <Square className="h-4 w-4 text-muted-foreground" />;
@@ -154,14 +218,18 @@ function PublishPanel({
   jobId,
   assets,
   accounts,
+  publishNiche,
+  publishTopic,
 }: {
   jobId: string;
   assets: GeneratedAsset[];
   accounts: Array<{ id: string; username: string }>;
+  publishNiche: string;
+  publishTopic: string;
 }) {
   const reelEnabledRaw =
     process.env.NEXT_PUBLIC_FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED ??
-    "false";
+    "true";
   const reelEnabled = String(reelEnabledRaw).toLowerCase() === "true";
 
   const defaultAssetId = useMemo(() => {
@@ -179,10 +247,10 @@ function PublishPanel({
   const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [immediateLoading, setImmediateLoading] = useState(false);
+  const [captionGenLoading, setCaptionGenLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successResponse, setSuccessResponse] = useState<PublishIntentResponse | null>(null);
   const postNowInFlightRef = useRef(false);
-  const lastPostNowKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     setSelectedAssetId(defaultAssetId);
@@ -214,37 +282,70 @@ function PublishPanel({
     !loading &&
     !immediateLoading;
 
-  const parseApiError = (e: unknown, fallback: string) => {
-    const detail =
-      e && typeof e === "object" && "response" in e
-        ? (
-            (e as { response?: { data?: { detail?: string; error?: string } } }).response?.data?.detail ||
-            (e as { response?: { data?: { detail?: string; error?: string } } }).response?.data?.error
-          )
-        : null;
-    return typeof detail === "string" ? detail : fallback;
+  const parseApiError = (e: unknown, fallback: string) => formatContentApiError(e, fallback);
+
+  const effectiveContentTypeForCopy: ContentType = useMemo(
+    () => (!reelEnabled && contentType === "reel" ? "post" : contentType),
+    [reelEnabled, contentType]
+  );
+
+  const onGenerateCaption = async () => {
+    const nicheKey = (publishNiche || "").trim() || "lifestyle";
+    setCaptionGenLoading(true);
+    setError(null);
+    try {
+      const { caption: generated, hashtags } = await api.content.generateCaption({
+        niche: nicheKey,
+        topic: (publishTopic || "").trim() || undefined,
+        content_type: effectiveContentTypeForCopy,
+      });
+      setCaption(generated);
+      setHashtagsInput(hashtags.map((h) => h.replace(/^#/, "").trim()).filter(Boolean).join(", "));
+      toast.success("Caption and hashtags generated");
+    } catch (e: unknown) {
+      const message = parseApiError(e, "Could not generate caption.");
+      setError(message);
+      toast.error(message);
+    } finally {
+      setCaptionGenLoading(false);
+    }
+  };
+
+  /**
+   * Stable idempotency: same job + asset + type + accounts + caption + hashtags (+ schedule slot)
+   * must map to ONE publication_intent. Avoids duplicate Instagram posts when double-clicking or
+   * mixing "Create Publish Intent" with "Post to Instagram Now" for the same payload.
+   */
+  const buildPublishIdempotencyKey = (payloadMode: PublishMode) => {
+    const finalContentType: ContentType = !reelEnabled && contentType === "reel" ? "post" : contentType;
+    const accountKey = [...selectedAccounts].sort().join(",");
+    const captionKey = caption.trim();
+    const hashtagsKey = parseHashtags(hashtagsInput).join(",");
+    const base = `studio-${jobId}-${selectedAssetId}-${finalContentType}-${accountKey}-${captionKey}-${hashtagsKey}`;
+    if (payloadMode === "scheduled" && scheduledFor) {
+      return `${base}-sched-${scheduledFor.getTime()}`;
+    }
+    if (payloadMode === "save_for_later") {
+      return `${base}-draft`;
+    }
+    return `${base}-now`;
   };
 
   const buildIntentPayload = (payloadMode: PublishMode) => {
+    const payloadModeResolved: PublishMode =
+      payloadMode === "scheduled" && !scheduledFor ? "publish_now" : payloadMode;
     const finalContentType: ContentType = !reelEnabled && contentType === "reel" ? "post" : contentType;
     return {
       asset_id: selectedAssetId,
       content_type: finalContentType,
       caption: caption.trim(),
       hashtags: parseHashtags(hashtagsInput),
-      mode: payloadMode,
-      scheduled_for: payloadMode === "scheduled" && scheduledFor ? scheduledFor.toISOString() : undefined,
+      mode: payloadModeResolved,
+      scheduled_for:
+        payloadModeResolved === "scheduled" && scheduledFor ? scheduledFor.toISOString() : undefined,
       target_account_ids: selectedAccounts,
-      idempotency_key: `intent-${jobId}-${Date.now()}`,
+      idempotency_key: buildPublishIdempotencyKey(payloadModeResolved),
     };
-  };
-
-  const buildPostNowIdempotencyKey = () => {
-    const accountKey = [...selectedAccounts].sort().join(",");
-    const captionKey = caption.trim();
-    const hashtagsKey = parseHashtags(hashtagsInput).join(",");
-    const finalContentType: ContentType = !reelEnabled && contentType === "reel" ? "post" : contentType;
-    return `post-now-${jobId}-${selectedAssetId}-${finalContentType}-${accountKey}-${captionKey}-${hashtagsKey}`;
   };
 
   const onCreateIntent = async () => {
@@ -259,8 +360,7 @@ function PublishPanel({
     setError(null);
     setSuccessResponse(null);
     try {
-      const payloadMode: PublishMode =
-        mode === "scheduled" && !scheduledFor ? "publish_now" : mode;
+      const payloadMode: PublishMode = mode === "scheduled" && !scheduledFor ? "publish_now" : mode;
       const response = await api.generationJobs.createPublishIntent(jobId, buildIntentPayload(payloadMode));
       setSuccessResponse(response);
       toast.success("Publish intent created");
@@ -281,23 +381,12 @@ function PublishPanel({
       toast.error(message);
       return;
     }
-    const duplicateKey = buildPostNowIdempotencyKey();
-    if (lastPostNowKeyRef.current === duplicateKey) {
-      const message = "Duplicate Post Now request ignored.";
-      setError(message);
-      toast.error(message);
-      return;
-    }
     postNowInFlightRef.current = true;
-    lastPostNowKeyRef.current = duplicateKey;
     setImmediateLoading(true);
     setError(null);
     setSuccessResponse(null);
     try {
-      const intent = await api.generationJobs.createPublishIntent(jobId, {
-        ...buildIntentPayload("publish_now"),
-        idempotency_key: duplicateKey,
-      });
+      const intent = await api.generationJobs.createPublishIntent(jobId, buildIntentPayload("publish_now"));
       setSuccessResponse(intent);
       const dispatched = await api.generationJobs.dispatchPublishIntent(intent.intent_id);
       toast.success(`Posting started: ${dispatched.dispatched_targets} target(s) dispatched.`);
@@ -315,7 +404,10 @@ function PublishPanel({
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Publish</CardTitle>
-        <CardDescription>Create a publish intent from generated assets.</CardDescription>
+        <CardDescription>
+          One intent per unique asset + caption + accounts (double-clicks won’t create duplicates).
+          Use either create intent or post now — they share the same idempotency for “publish now”.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="space-y-2">
@@ -410,12 +502,25 @@ function PublishPanel({
         </div>
 
         <div className="space-y-2">
-          <Label>Caption</Label>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Label className="mb-0">Caption</Label>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="gap-1.5"
+              disabled={captionGenLoading}
+              onClick={() => void onGenerateCaption()}
+            >
+              {captionGenLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              Generate caption & hashtags
+            </Button>
+          </div>
           <textarea
             className="min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
             value={caption}
             onChange={(e) => setCaption(e.target.value)}
-            placeholder="Write your caption..."
+            placeholder="Write your caption or use Generate…"
           />
         </div>
 
@@ -487,7 +592,9 @@ function PublishPanel({
   );
 }
 
-export default function GenerationStudioPage() {
+function GenerationStudioPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [contentType, setContentType] = useState<ContentType>("reel");
   const [mode, setMode] = useState<Mode>("faceless");
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("multi_scene_single_video");
@@ -516,11 +623,23 @@ export default function GenerationStudioPage() {
 
   const [dragSceneId, setDragSceneId] = useState<string | null>(null);
 
+  useEffect(() => {
+    const q = searchParams.get("job");
+    if (q && /^[0-9a-f-]{36}$/i.test(q.trim())) {
+      setJobId(q.trim());
+    }
+  }, [searchParams]);
+
   const fetchJob = useCallback(async (id: string) => {
     return api.generationJobs.get(id) as Promise<GenerationJobDetail>;
   }, []);
 
-  const { data: job, mutate } = useSWR<GenerationJobDetail | undefined>(
+  const {
+    data: job,
+    mutate,
+    isLoading: jobLoading,
+    error: jobError,
+  } = useSWR<GenerationJobDetail | undefined>(
     jobId ? ["generation-job", jobId] : null,
     () => fetchJob(jobId as string),
     { refreshInterval: jobId ? 2000 : 0 }
@@ -543,6 +662,13 @@ export default function GenerationStudioPage() {
     () => api.generationJobs.getJobAssets(jobId as string),
     { refreshInterval: 0 }
   );
+
+  const finalPlayableUrl = useMemo(() => {
+    if (!job || job.status !== "completed") return null;
+    if (job.output_url) return job.output_url;
+    const v = generatedAssets.find((a) => a.asset_type === "video");
+    return v?.public_url ?? null;
+  }, [job, generatedAssets]);
 
   useEffect(() => {
     setOpenSceneVideoId(null);
@@ -592,6 +718,7 @@ export default function GenerationStudioPage() {
       });
       setDraftScenes(plan);
       setJobId(null);
+      router.replace("/generation-studio", { scroll: false });
       toast.success("Scene preview ready (not saved as a job).");
     } catch {
       toast.error("Preview failed. Check Content API and Claude configuration.");
@@ -618,6 +745,8 @@ export default function GenerationStudioPage() {
         video_duration: executionMode === "multi_scene_single_video" ? videoDuration : undefined,
       });
       setJobId(res.job_id);
+      addTrackedGenerationJobId(res.job_id);
+      router.replace(`/generation-studio?job=${encodeURIComponent(res.job_id)}`, { scroll: false });
       toast.success("Draft job created with scenes. Edit, preview, then launch.");
     } catch (e: unknown) {
       const msg =
@@ -641,6 +770,7 @@ export default function GenerationStudioPage() {
     setLaunchLoading(true);
     try {
       await api.generationJobs.launch(jobId);
+      addTrackedGenerationJobId(jobId);
       await mutate();
       toast.success("Pipeline started.");
     } catch (e: unknown) {
@@ -841,6 +971,18 @@ export default function GenerationStudioPage() {
   const logs = job?.logs ?? [];
   const maxDur = Math.max(1, ...sortedScenes.map((s) => s.duration || 1));
 
+  const topicPlaceholder = useMemo(() => {
+    const key = NICHE_OPTIONS.includes(niche as (typeof NICHE_OPTIONS)[number])
+      ? (niche as (typeof NICHE_OPTIONS)[number])
+      : "lifestyle";
+    return TOPIC_PLACEHOLDER_BY_NICHE[key];
+  }, [niche]);
+
+  const topicSuggestion = useMemo(
+    () => topicPlaceholder.replace(/^e\.g\.\s*/i, "").trim(),
+    [topicPlaceholder]
+  );
+
   return (
     <div className="flex-1 min-h-screen bg-neutral-50 p-6 dark:bg-neutral-950">
       <div className="mx-auto max-w-[1600px] space-y-6">
@@ -939,7 +1081,29 @@ export default function GenerationStudioPage() {
               ) : null}
               <div className="space-y-2">
                 <Label>Topic</Label>
-                <Input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="e.g. morning mobility routine" />
+                <div className="relative flex items-center">
+                  <Input
+                    value={topic}
+                    onChange={(e) => setTopic(e.target.value)}
+                    placeholder={topicPlaceholder}
+                    className="pr-10"
+                    aria-describedby="topic-suggestion-hint"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-0.5 top-1/2 h-8 w-8 shrink-0 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    title={`Use suggestion: ${topicSuggestion}`}
+                    aria-label="Fill topic with placeholder suggestion"
+                    onClick={() => setTopic(topicSuggestion)}
+                  >
+                    <Sparkles className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p id="topic-suggestion-hint" className="sr-only">
+                  Sparkles button inserts the example topic for the selected niche.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label>Accounts</Label>
@@ -1035,14 +1199,27 @@ export default function GenerationStudioPage() {
               {job?.cost_estimate ? (
                 <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs">
                   <p className="font-semibold text-foreground">Cost estimate (credits)</p>
+                  {job.cost_estimate.model ? (
+                    <p className="mt-1 text-muted-foreground">
+                      {job.cost_estimate.model}
+                      {job.cost_estimate.provider ? ` · ${job.cost_estimate.provider}` : ""}
+                    </p>
+                  ) : null}
                   <p className="mt-1 text-lg font-bold">{job.cost_estimate.total_credits}</p>
                   <ul className="mt-2 space-y-1 text-muted-foreground">
                     {job.cost_estimate.breakdown.map((b) => (
                       <li key={b.line}>
-                        {b.line}: {b.units} × {b.unit_credits} = {b.subtotal}
+                        {job.cost_estimate.model
+                          ? `${b.line}: ${b.units}s × ${b.unit_credits} credits/s = ${b.subtotal}`
+                          : `${b.line}: ${b.units} × ${b.unit_credits} = ${b.subtotal}`}
                       </li>
                     ))}
                   </ul>
+                  {job.cost_estimate.estimate_note ? (
+                    <p className="mt-2 border-t border-border pt-2 text-[11px] leading-snug text-muted-foreground">
+                      {job.cost_estimate.estimate_note}
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
             </CardContent>
@@ -1057,7 +1234,12 @@ export default function GenerationStudioPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {sortedScenes.length === 0 ? (
+              {jobId && jobLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                  Loading job scenes…
+                </div>
+              ) : sortedScenes.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Create a draft job or run a stateless preview.</p>
               ) : (
                 <>
@@ -1218,8 +1400,17 @@ export default function GenerationStudioPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {!jobId || !job ? (
+              {!jobId ? (
                 <p className="text-sm text-muted-foreground">Create a draft job to inspect status, cost, and steps.</p>
+              ) : jobLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                  Loading job status…
+                </div>
+              ) : jobError ? (
+                <p className="text-sm text-destructive">Could not load this job. Check the ID or try again.</p>
+              ) : !job ? (
+                <p className="text-sm text-muted-foreground">No job data returned.</p>
               ) : job.status === "draft" || job.status === "ready" ? (
                 <div className="space-y-3 text-sm text-muted-foreground">
                   <span>
@@ -1259,21 +1450,28 @@ export default function GenerationStudioPage() {
                     </div>
                   </div>
 
-                  {job.output_url ? (
+                  {finalPlayableUrl ? (
                     <div className="overflow-hidden rounded-md border bg-black">
                       <video
-                        key={job.output_url}
-                        src={job.output_url}
+                        key={finalPlayableUrl}
+                        src={finalPlayableUrl}
                         className="aspect-[9/16] max-h-[320px] w-full object-contain"
                         controls
                         playsInline
                       />
                     </div>
+                  ) : job.status === "completed" && assetsLoading ? (
+                    <div className="flex aspect-video items-center justify-center gap-2 rounded-md border border-dashed px-3 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading final output…
+                    </div>
                   ) : (
                     <div className="flex aspect-video items-center justify-center rounded-md border border-dashed px-3 text-center text-xs text-muted-foreground">
                       {jobIsCancelled
                         ? "Job was cancelled. Partial scene media is preserved; no final assembly was run."
-                        : "Final video appears when assembly completes."}
+                        : job.status === "completed"
+                          ? "No final video URL yet. If assets exist below, use Publish or scene previews."
+                          : "Final video appears when assembly completes."}
                     </div>
                   )}
 
@@ -1289,6 +1487,12 @@ export default function GenerationStudioPage() {
                     <TabsContent value="steps" className="mt-3 space-y-2">
                       {job.steps.map((s) => {
                         const ctrl = pipelineStepControl(s.step_name, s.status);
+                        const stepSkipped = stepMetadataSkipped(s.metadata);
+                        const skipHint = pipelineStepSkipHint(s.metadata);
+                        const videoGenStartedAt =
+                          s.step_name === "video_generation"
+                            ? formatVideoGenExecutionStart(s.metadata)
+                            : null;
                         const showCancel = ctrl !== "completed" && s.status !== "completed";
                         const cancelDisabled =
                           job.status === "draft" ||
@@ -1305,10 +1509,38 @@ export default function GenerationStudioPage() {
                             className="flex items-start justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm"
                           >
                             <div className="flex min-w-0 flex-1 items-start gap-2">
-                              <StepIcon status={s.status} />
+                              <StepIcon status={s.status} skipped={stepSkipped} />
                               <div className="min-w-0">
                                 <p className="font-medium leading-none">{s.step_name}</p>
-                                <p className="text-xs text-muted-foreground">{s.progress}%</p>
+                                {stepSkipped && s.status === "completed" ? (
+                                  <p className="text-xs text-muted-foreground">Skipped</p>
+                                ) : (
+                                  <>
+                                    <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                                      <span>{s.progress}%</span>
+                                      {videoGenStartedAt ? (
+                                        <span>Generation started {videoGenStartedAt}</span>
+                                      ) : null}
+                                    </p>
+                                    {typeof s.metadata?.video_scenes_completed === "number" &&
+                                    typeof s.metadata?.video_scenes_total === "number" ? (
+                                      <p className="text-xs text-muted-foreground">
+                                        Scenes {s.metadata.video_scenes_completed}/
+                                        {s.metadata.video_scenes_total}
+                                      </p>
+                                    ) : null}
+                                    {s.status === "running" &&
+                                    s.step_name === "video_generation" &&
+                                    typeof s.metadata?.phase === "string" ? (
+                                      <p className="text-xs text-muted-foreground">
+                                        {String(s.metadata.phase).replace(/_/g, " ")}
+                                      </p>
+                                    ) : null}
+                                  </>
+                                )}
+                                {skipHint ? (
+                                  <p className="mt-1 text-xs text-muted-foreground">{skipHint}</p>
+                                ) : null}
                                 {ctrl === "cancelling" ? (
                                   <p className="mt-1 text-xs text-amber-700">Cancelling…</p>
                                 ) : null}
@@ -1395,7 +1627,13 @@ export default function GenerationStudioPage() {
               </CardContent>
             </Card>
           ) : (
-            <PublishPanel jobId={jobId} assets={generatedAssets} accounts={accountChoices} />
+            <PublishPanel
+              jobId={jobId}
+              assets={generatedAssets}
+              accounts={accountChoices}
+              publishNiche={String(job?.input_payload?.niche ?? niche ?? "lifestyle")}
+              publishTopic={String(job?.input_payload?.topic ?? topic ?? "")}
+            />
           )
         ) : null}
       </div>
@@ -1450,5 +1688,20 @@ export default function GenerationStudioPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+export default function GenerationStudioPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-[40vh] items-center justify-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          Loading studio…
+        </div>
+      }
+    >
+      <GenerationStudioPageInner />
+    </Suspense>
   );
 }
