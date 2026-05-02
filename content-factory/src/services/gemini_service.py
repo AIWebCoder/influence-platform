@@ -63,6 +63,7 @@ class GeminiService:
         niche: str,
         variant_style: Optional[str] = None,
         topic: Optional[str] = None,
+        content_type: Optional[str] = None,
         trace: Optional[dict[str, Any]] = None,
     ) -> dict:
         """
@@ -79,8 +80,14 @@ class GeminiService:
 
         style_instruction = f" Use a {variant_style} style." if variant_style else ""
         topic_instruction = f" Focus on this topic: {topic}." if topic else ""
+        ct = (content_type or "").strip().lower()
+        format_instruction = (
+            f" Tailor length and tone for an Instagram {ct}."
+            if ct in ("post", "reel", "story")
+            else ""
+        )
         user_prompt = (
-            f"Write a highly engaging Instagram caption for the '{niche}' niche.{style_instruction}{topic_instruction} "
+            f"Write a highly engaging Instagram caption for the '{niche}' niche.{style_instruction}{topic_instruction}{format_instruction} "
             "Include a hook, body, and call-to-action. Provide 5-10 highly relevant hashtags."
         )
 

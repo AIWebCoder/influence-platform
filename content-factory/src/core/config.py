@@ -27,13 +27,19 @@ class Settings(BaseSettings):
     JWT_EXPIRE_MINUTES: int = 1440  # 24h
     ENVIRONMENT: str = "development"
     CONTENT_QUEUE_NAME: str = "content:ready"
-    FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED: bool = False
+    # Server-side gate for publish-intent validation (must match ops intent; dashboard uses NEXT_PUBLIC_*).
+    FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED: bool = True
     PUBLISH_OUTBOX_POLL_INTERVAL_MS: int = 250
     PUBLISH_OUTBOX_STALE_SENT_SECONDS: int = 300
 
     # Rough cost model for UI estimates (abstract credits; tune per provider)
     GENERATION_CREDITS_PER_IMAGE: float = 1.0
     GENERATION_CREDITS_PER_VIDEO: float = 4.0
+    # Seedance 2.0 (bytedance/seedance-2 on api.kie.ai) — used only for execution_mode
+    # multi_scene_single_video. Matches SeedanceService: 720p, generate_audio=False, duration 4–15s.
+    # Kie dashboard billing for 15s clips is often ~615 credits → 41 credits per output second (tune via env).
+    # Docs (model + params): https://docs.kie.ai/market/bytedance/seedance-2
+    SEEDANCE_ESTIMATE_CREDITS_PER_SECOND: float = 41.0
     # Target ratio for "full" video success; below this the pipeline still continues if ≥1 video
     # (demo-friendly). Production can set to 1.0 to require all scenes.
     GENERATION_MIN_VIDEO_SUCCESS_RATIO: float = 1.0
@@ -50,6 +56,9 @@ class Settings(BaseSettings):
     GENERATION_DEMO_PIN_OUTPUT_URL_AFTER_VIDEO: bool = True
     # Kie task polling cap (each poll waits POLL_INTERVAL_SECONDS in KieService)
     GENERATION_KIE_MAX_POLLS: int = 60
+    # Seedance (createTask + recordInfo): Kie wall time for 15s output can exceed ~9m (e.g. 548s).
+    # Poll interval is 5s in SeedanceService → 144 polls ≈ 12m ceiling before client TIMEOUT.
+    GENERATION_SEEDANCE_MAX_POLLS: int = 144
     # When DEMO_MODE, effective polls are min(KIE_MAX_POLLS, DEMO_KIE_MAX_POLLS)
     GENERATION_DEMO_KIE_MAX_POLLS: int = 30
     # Parallel Kie video calls (DB commits remain sequential on one session)

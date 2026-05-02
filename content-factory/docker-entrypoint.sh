@@ -7,4 +7,8 @@ if ! alembic upgrade head; then
   alembic stamp head || true
 fi
 echo "Starting Content Factory..."
-exec uvicorn src.main:app --host 0.0.0.0 --port 8000
+if [ "${UVICORN_RELOAD}" = "1" ] || [ "${UVICORN_RELOAD}" = "true" ]; then
+  exec uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+else
+  exec uvicorn src.main:app --host 0.0.0.0 --port 8000
+fi

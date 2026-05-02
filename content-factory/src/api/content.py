@@ -1,5 +1,6 @@
 import uuid
 import json
+import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from src.services.gemini_service import GeminiService
 from src.models.content import ContentPacket as DBContentPacket
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────
@@ -54,6 +56,27 @@ class BulkGenerateRequest(BaseModel):
     type: str = "post"
     target_accounts: list[str]
     count: int = 1
+
+
+class CaptionGenerateRequest(BaseModel):
+    niche: str
+    topic: Optional[str] = None
+    content_type: Optional[str] = None
+    variant_style: Optional[str] = None
+
+
+class CaptionGenerateResponse(BaseModel):
+    caption: str
+    hashtags: list[str]
+
+
+def _prefer_anthropic_for_caption() -> bool:
+    if str(getattr(settings, "TEXT_PROVIDER_PRIMARY", "gemini")).strip().lower() == "anthropic":
+        return bool((settings.resolved_anthropic_api_key() or "").strip())
+    if (settings.GEMINI_API_KEY or "").strip():
+        return False
+    return bool((settings.resolved_anthropic_api_key() or "").strip())
+
 
 @router.post("/generate", response_model=ContentPacket)
 async def generate_content(
@@ -161,6 +184,58 @@ async def generate_bulk_content(
     background_tasks.add_task(generate_bulk_content_task, requests, packet_ids)
     
     return packets
+
+
+@router.post("/caption/generate", response_model=CaptionGenerateResponse)
+async def generate_caption_for_publish(request: CaptionGenerateRequest):
+    """Generate caption + hashtags for manual publish flows (dashboard, tools)."""
+    from src.services.anthropic_service import AnthropicService
+
+    use_anthropic = _prefer_anthropic_for_caption()
+    if use_anthropic and not (settings.resolved_anthropic_api_key() or "").strip():
+        raise HTTPException(
+            status_code=503,
+            detail="Anthropic API key is not configured (set ANTHROPIC_API_KEY or CLAUDE_API_KEY).",
+        )
+    if not use_anthropic and not (settings.GEMINI_API_KEY or "").strip():
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini API key is not configured (set GEMINI_API_KEY) or enable Anthropic as TEXT_PROVIDER_PRIMARY.",
+        )
+
+    niche = (request.niche or "").strip() or "lifestyle"
+    topic_raw = (request.topic or "").strip()
+    topic = topic_raw or None
+    content_type = (request.content_type or "").strip() or None
+    try:
+        if use_anthropic:
+            svc = AnthropicService()
+            result = await svc.generate_caption(
+                niche,
+                variant_style=request.variant_style,
+                topic=topic,
+                content_type=content_type,
+            )
+        else:
+            svc = GeminiService()
+            result = await svc.generate_caption(
+                niche,
+                variant_style=request.variant_style,
+                topic=topic,
+                content_type=content_type,
+                trace={"step": "caption_generate_api"},
+            )
+    except Exception as e:
+        logger.exception("caption_generate_failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    caption = result.get("caption")
+    hashtags_raw = result.get("hashtags")
+    if not isinstance(caption, str) or not isinstance(hashtags_raw, list):
+        raise HTTPException(status_code=502, detail="Invalid model response shape")
+    hashtags = [str(h).lstrip("#").strip() for h in hashtags_raw if str(h).strip()]
+    return CaptionGenerateResponse(caption=caption.strip(), hashtags=hashtags)
+
 
 @router.post("/generate/ab-test", response_model=list[ContentPacket])
 async def generate_ab_test(

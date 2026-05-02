@@ -7,6 +7,8 @@ from prometheus_client import Counter
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.services.publish_pipeline_log import log_publish_event, summarize_public_url
+
 PUBLISH_COMMANDS_QUEUE = "publish:commands"
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,13 @@ async def dispatch_publish_intent(intent_id: str, db: AsyncSession) -> dict[str,
                 {"intent_id": intent_id},
             )
             count = int(count_res.scalar_one() or 0)
+            log_publish_event(
+                "publish_dispatch_idempotent_already_queued",
+                intent_id=str(intent[0]),
+                publication_intent_status="queued",
+                target_count=count,
+                note="Dispatch skipped: intent already queued (no duplicate outbox flush).",
+            )
             return {
                 "intent_id": str(intent[0]),
                 "status": "queued",
@@ -141,6 +150,21 @@ async def dispatch_publish_intent(intent_id: str, db: AsyncSession) -> dict[str,
                 "hashtags": hashtags,
                 "created_at": created_at,
             }
+            log_publish_event(
+                "outbox_row_payload_built",
+                intent_id=message["intent_id"],
+                target_id=message["target_id"],
+                account_id=message["account_id"],
+                platform=message["platform"],
+                ig_user_id=message["ig_user_id"],
+                content_type=message["content_type"],
+                asset_mime_type=message["asset"].get("mime_type"),
+                asset_url_summary=summarize_public_url(str(asset[1])),
+                caption_len=len(message["caption"] or ""),
+                caption_preview=(message["caption"][:200] + "…") if len(message["caption"] or "") > 200 else message["caption"],
+                hashtags=hashtags,
+                queue_message=message,
+            )
             await db.execute(
                 text(
                     """

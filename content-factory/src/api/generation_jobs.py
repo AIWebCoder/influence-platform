@@ -23,6 +23,7 @@ from src.services.generation_orchestrator import (
     generate_scene_preview,
 )
 from src.services.publish_dispatcher import dispatch_publish_intent
+from src.services.publish_pipeline_log import log_publish_event
 
 router = APIRouter()
 publish_router = APIRouter()
@@ -403,10 +404,53 @@ class GenerationJobDetailOut(BaseModel):
     updated_at: str
 
 
+def _multi_scene_seedance_duration_seconds(job) -> int:
+    """Align with orchestrator _step_multi_scene_single_video (4..15s)."""
+    payload = job.input_payload or {}
+    scenes = sorted(job.scenes, key=lambda x: x.scene_index)
+    total_from_scenes = sum(int(getattr(sc, "duration", None) or 4) for sc in scenes)
+    vd = payload.get("video_duration")
+    try:
+        if vd is not None:
+            selected = int(vd)
+        else:
+            selected = int(total_from_scenes)
+    except Exception:
+        selected = int(total_from_scenes)
+    return max(4, min(15, selected))
+
+
 def _compute_cost_estimate(job) -> dict[str, Any]:
     scenes = sorted(job.scenes, key=lambda x: x.scene_index)
     n = len(scenes)
     payload = job.input_payload or {}
+    execution_mode = str(getattr(job, "execution_mode", "scene_based") or "scene_based")
+
+    if execution_mode == "multi_scene_single_video":
+        d = _multi_scene_seedance_duration_seconds(job)
+        per_sec = float(settings.SEEDANCE_ESTIMATE_CREDITS_PER_SECOND)
+        sub = round(d * per_sec, 2)
+        return {
+            "total_credits": sub,
+            "currency": "credits",
+            "model": "bytedance/seedance-2",
+            "provider": "api.kie.ai",
+            "resolution": "720p",
+            "generate_audio": False,
+            "estimate_note": (
+                f"One Seedance call (multi-scene narrative still = one {d}s output). "
+                f"Estimate uses {per_sec:g} credits/s output duration; align SEEDANCE_ESTIMATE_CREDITS_PER_SECOND with Kie.ai."
+            ),
+            "breakdown": [
+                {
+                    "line": f"Seedance 2.0 — 720p, no audio (single {d}s video; scene count does not multiply cost)",
+                    "units": d,
+                    "unit_credits": per_sec,
+                    "subtotal": sub,
+                },
+            ],
+        }
+
     ctype = str(payload.get("content_type") or payload.get("type") or "reel")
     images_total = n * 2
     videos_total = n if ctype == "reel" else 0
@@ -659,6 +703,48 @@ async def create_publish_intent(job_id: str, body: PublishIntentCreateRequest, d
     if missing:
         raise HTTPException(status_code=400, detail=f"Unknown account(s): {', '.join(missing)}")
 
+    # One active publish_now intent per (job, primary asset, account set). Prevents multiple
+    # Instagram posts when idempotency_key drifts (caption edits, old clients, double clicks).
+    if mode == "publish_now":
+        cand = await db.execute(
+            text(
+                """
+                SELECT pi.id::text
+                FROM publication_intents pi
+                WHERE pi.generation_job_id = CAST(:job_id AS uuid)
+                  AND pi.primary_asset_id = CAST(:asset_id AS uuid)
+                  AND pi.mode = 'publish_now'
+                  AND pi.status IN ('ready', 'queued')
+                ORDER BY pi.created_at DESC
+                LIMIT 30
+                """
+            ),
+            {"job_id": str(jid), "asset_id": asset_uuid},
+        )
+        req_sorted = sorted(account_ids)
+        for (pid,) in cand.fetchall():
+            acc_res = await db.execute(
+                text(
+                    """
+                    SELECT account_id::text
+                    FROM publication_targets
+                    WHERE publication_intent_id = CAST(:pid AS uuid)
+                    ORDER BY account_id
+                    """
+                ),
+                {"pid": pid},
+            )
+            got = [r[0] for r in acc_res.fetchall()]
+            if got == req_sorted:
+                log_publish_event(
+                    "publish_intent_deduped_job_asset_accounts",
+                    job_id=str(jid),
+                    intent_id=pid,
+                    primary_asset_id=asset_uuid,
+                    requested_idempotency_key=idempotency_key,
+                )
+                return await _build_publish_intent_response(db, pid)
+
     intent_status = "draft" if mode == "save_for_later" else "ready"
     hashtags = [h for h in (body.hashtags or []) if isinstance(h, str)]
 
@@ -708,6 +794,22 @@ async def create_publish_intent(job_id: str, body: PublishIntentCreateRequest, d
                 },
             )
         await db.commit()
+        log_publish_event(
+            "publish_intent_created",
+            job_id=str(jid),
+            intent_id=intent_id,
+            request_body={
+                "content_type": content_type,
+                "mode": mode,
+                "intent_status": intent_status,
+                "primary_asset_id": asset_uuid,
+                "target_account_ids": account_ids,
+                "caption": body.caption or "",
+                "hashtags": hashtags,
+                "scheduled_for": scheduled_for.isoformat() if scheduled_for else None,
+                "idempotency_key": idempotency_key,
+            },
+        )
     except Exception as exc:
         await db.rollback()
         if "publication_intents_idempotency_key_key" in str(exc):
@@ -732,6 +834,11 @@ async def dispatch_intent(intent_id: str, db: AsyncSession = Depends(get_db)):
 
     try:
         result = await dispatch_publish_intent(iid, db)
+        log_publish_event(
+            "publish_dispatch_http_ok",
+            intent_id=iid,
+            dispatch_response=result,
+        )
         return PublishIntentDispatchResponse(
             intent_id=str(result["intent_id"]),
             status=str(result["status"]),
@@ -740,7 +847,17 @@ async def dispatch_intent(intent_id: str, db: AsyncSession = Depends(get_db)):
     except ValueError as exc:
         msg = str(exc)
         if msg == "Publish intent not found":
+            log_publish_event(
+                "publish_dispatch_http_not_found",
+                intent_id=iid,
+                error=msg,
+            )
             raise HTTPException(status_code=404, detail=msg) from exc
+        log_publish_event(
+            "publish_dispatch_http_rejected",
+            intent_id=iid,
+            error=msg,
+        )
         try:
             await db.execute(
                 text(

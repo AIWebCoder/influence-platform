@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 
 from prometheus_client import Counter
@@ -8,6 +9,7 @@ from src.core.config import settings
 from src.core.database import AsyncSessionLocal
 from src.core.redis import push_to_queue
 from src.services.publish_dispatcher import PUBLISH_COMMANDS_QUEUE
+from src.services.publish_pipeline_log import log_publish_event
 
 logger = logging.getLogger(__name__)
 PUBLISH_OUTBOX_RECOVERED_TOTAL = Counter(
@@ -34,8 +36,9 @@ async def _recover_stale_sent_rows() -> int:
                     WHERE po.target_id = pt.id
                       AND po.status = 'sent'
                       AND pt.status = 'pending'
+                      AND pt.retry_count = 0
                       AND po.updated_at < NOW() - (:stale_seconds::text || ' seconds')::interval
-                    RETURNING po.id
+                    RETURNING po.id, po.intent_id, po.target_id
                     """
                 ),
                 {"stale_seconds": str(stale_seconds)},
@@ -44,11 +47,29 @@ async def _recover_stale_sent_rows() -> int:
             recovered = len(rows)
     if recovered > 0:
         PUBLISH_OUTBOX_RECOVERED_TOTAL.inc(recovered)
+        sample = [
+            {
+                "outbox_id": str(r[0]),
+                "intent_id": str(r[1]) if r[1] is not None else None,
+                "target_id": str(r[2]) if r[2] is not None else None,
+            }
+            for r in rows[:8]
+        ]
         logger.warning(
-            "publish_outbox recovered %s stale sent row(s) to pending (threshold=%ss)",
+            "publish_outbox recovered %s stale sent row(s) to pending (threshold=%ss) sample=%s",
             recovered,
             stale_seconds,
+            sample,
         )
+        for row in rows[:20]:
+            log_publish_event(
+                "publish_outbox_stale_sent_recovered",
+                outbox_id=str(row[0]),
+                intent_id=str(row[1]) if row[1] is not None else None,
+                target_id=str(row[2]) if row[2] is not None else None,
+                stale_seconds=stale_seconds,
+                note="Outbox row reset to pending for re-flush; check duplicate-publish risk if worker also retried.",
+            )
     return recovered
 
 
@@ -72,6 +93,16 @@ async def _flush_one_batch() -> int:
                 return 0
             ob_id, payload_json = row[0], row[1]
             await push_to_queue(PUBLISH_COMMANDS_QUEUE, payload_json)
+            try:
+                parsed = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+            except Exception:
+                parsed = None
+            log_publish_event(
+                "redis_publish_commands_push",
+                redis_queue=PUBLISH_COMMANDS_QUEUE,
+                outbox_row_id=str(ob_id),
+                payload=parsed if isinstance(parsed, dict) else {"raw_preview": str(payload_json)[:500]},
+            )
             await session.execute(
                 text(
                     """

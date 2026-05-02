@@ -46,6 +46,11 @@ class StepCancelled(Exception):
         super().__init__(step_name)
 
 
+def _seedance_result_is_local_poll_timeout(result: dict[str, Any]) -> bool:
+    """True when SeedanceService gave up polling; Kie may still be processing the same task."""
+    return "TIMEOUT" in str(result.get("error") or "").upper()
+
+
 def _step_control_dict(job: GenerationJob) -> dict[str, str]:
     names = {name for name, _ in PIPELINE_STEPS}
     raw = dict(job.step_control or {})
@@ -544,6 +549,10 @@ async def _execute_pipeline(db, job_id: uuid.UUID) -> Optional[str]:
         step.status = "running"
         step.error_message = None
         step.progress = 0
+        if step_name == "video_generation":
+            md = dict(step.step_metadata or {})
+            md["execution_started_at"] = datetime.now(timezone.utc).isoformat()
+            step.step_metadata = md
         svc.touch(job)
         await svc.append_log(job, f"Step started: {step_name}")
         await db.commit()
@@ -1138,6 +1147,8 @@ async def _step_video_generation(db, svc: GenerationJobService, job: GenerationJ
     scenes = list(res.scalars().all())
     await _abort_if_job_or_step_cancelling(db, svc, job, step, "video_generation")
     n = len(scenes)
+    if n == 0:
+        raise RuntimeError("No scenes for video generation")
     required = max(1, math.ceil(settings.GENERATION_MIN_VIDEO_SUCCESS_RATIO * n))
     kie = KieService()
     conc = max(1, int(getattr(settings, "GENERATION_VIDEO_MAX_CONCURRENCY", 3)))
@@ -1249,7 +1260,31 @@ async def _step_video_generation(db, svc: GenerationJobService, job: GenerationJ
             return row
 
     await _abort_if_job_or_step_cancelling(db, svc, job, step, "video_generation")
-    rows = await asyncio.gather(*[run_kie_for_scene(s) for s in scenes])
+    total_scenes = max(1, n)
+    scene_tasks = [asyncio.create_task(run_kie_for_scene(s)) for s in scenes]
+    rows_accum: list[dict[str, Any]] = []
+    done_count = 0
+    try:
+        for finished in asyncio.as_completed(scene_tasks):
+            row = await finished
+            rows_accum.append(row)
+            done_count += 1
+            step.progress = min(99, int(100 * done_count / total_scenes))
+            md = dict(step.step_metadata or {})
+            md["video_scenes_completed"] = done_count
+            md["video_scenes_total"] = n
+            step.step_metadata = md
+            svc.touch(job)
+            await db.commit()
+    except Exception:
+        for t in scene_tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*scene_tasks, return_exceptions=True)
+        raise
+
+    rows_by_sid = {str(r["scene_id"]): r for r in rows_accum}
+    rows = [rows_by_sid[str(s.id)] for s in scenes]
 
     await _abort_if_step_cancelling(db, svc, job, "video_generation")
 
@@ -1448,8 +1483,29 @@ async def _step_multi_scene_single_video(db, svc: GenerationJobService, job: Gen
     seedance = SeedanceService()
     t0 = time.perf_counter()
     max_attempts = 3
+    step.progress = 5
+    md0 = dict(step.step_metadata or {})
+    md0.update(
+        {
+            "execution_mode": "multi_scene_single_video",
+            "phase": "seedance_prepare",
+            "scene_count": len(scenes),
+            "selected_duration": selected_duration,
+        }
+    )
+    step.step_metadata = md0
+    svc.touch(job)
+    await db.commit()
     result: dict[str, Any] = {"video_url": None, "status": "failed", "error": "not_attempted"}
     for attempt in range(max_attempts):
+        # Coarse progress: one provider job (no per-scene granularity in this mode).
+        step.progress = min(92, 10 + int(82 * attempt / max_attempts))
+        md = dict(step.step_metadata or {})
+        md["seedance_attempt"] = attempt + 1
+        md["phase"] = "seedance_generating"
+        step.step_metadata = md
+        svc.touch(job)
+        await db.commit()
         emit(
             "seedance_attempt",
             job_id=gid,
@@ -1470,6 +1526,24 @@ async def _step_multi_scene_single_video(db, svc: GenerationJobService, job: Gen
         if result.get("status") == "success" and result.get("video_url"):
             break
         if attempt < max_attempts - 1:
+            # Do not call createTask again after a local poll TIMEOUT: the first Kie job often keeps
+            # running and a retry spawns a second billed task (duplicate "running" rows on kie.ai/logs).
+            if _seedance_result_is_local_poll_timeout(result):
+                emit(
+                    "seedance_retry_skipped_after_poll_timeout",
+                    job_id=gid,
+                    step="video_generation",
+                    execution_mode="multi_scene_single_video",
+                    attempt=attempt + 1,
+                    max_attempts=max_attempts,
+                    error=result.get("error"),
+                    total_duration=total_duration,
+                    number_of_scenes=len(scenes),
+                    selected_duration=selected_duration,
+                    level="warning",
+                    note="Kie task may still complete on their side; use pipeline retry or check Kie logs before re-running.",
+                )
+                break
             emit(
                 "seedance_retry_scheduled",
                 job_id=gid,

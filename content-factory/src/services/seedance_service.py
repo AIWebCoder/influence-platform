@@ -150,9 +150,16 @@ class SeedanceService:
                     return {"video_url": None, "status": "failed", "error": f"NO_TASK_ID:{msg}"}
 
                 poll_url = f"{self.base_url}/api/v1/jobs/recordInfo?taskId={task_id}"
-                max_polls = max(1, int(getattr(settings, "GENERATION_KIE_MAX_POLLS", 60)))
+                max_polls = max(
+                    1,
+                    int(getattr(settings, "GENERATION_SEEDANCE_MAX_POLLS", 144)),
+                )
+                poll_interval_s = 5
+                http_error_polls = 0
+                invalid_json_polls = 0
+                last_poll: dict[str, Any] = {}
                 for attempt in range(max_polls):
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(poll_interval_s)
                     poll_resp = await client.get(poll_url, headers=self.headers)
                     poll_body = (poll_resp.text or "")[:1200]
                     emit(
@@ -164,10 +171,21 @@ class SeedanceService:
                         status_code=poll_resp.status_code,
                         body_preview=poll_body,
                     )
+                    last_poll = {
+                        "attempt": attempt + 1,
+                        "http_status": poll_resp.status_code,
+                        "body_preview": poll_body,
+                    }
                     if poll_resp.status_code >= 400:
+                        http_error_polls += 1
                         continue
-                    pdata = poll_resp.json()
+                    try:
+                        pdata = poll_resp.json()
+                    except Exception:
+                        invalid_json_polls += 1
+                        continue
                     if not isinstance(pdata, dict):
+                        invalid_json_polls += 1
                         continue
 
                     data_obj = pdata.get("data") or {}
@@ -178,6 +196,8 @@ class SeedanceService:
                         or pdata.get("state")
                     )
                     normalized_status = str(raw_status or "").strip().upper()
+                    last_poll["raw_status"] = raw_status
+                    last_poll["normalized_status"] = normalized_status or None
 
                     if normalized_status in ("SUCCESS", "SUCCEEDED", "DONE", "COMPLETED"):
                         video_url = _extract_video_url_from_payload(pdata)
@@ -196,7 +216,34 @@ class SeedanceService:
                     if normalized_status in ("FAILED", "FAIL", "ERROR", "CANCELED", "CANCELLED"):
                         return {"video_url": None, "status": "failed", "error": f"TASK_{normalized_status}"}
 
-                return {"video_url": None, "status": "failed", "error": "TIMEOUT"}
+                emit(
+                    "seedance_video_poll_exhausted",
+                    job_id=tb.get("job_id"),
+                    step=tb.get("step"),
+                    task_id=task_id,
+                    max_polls=max_polls,
+                    poll_interval_s=poll_interval_s,
+                    http_error_polls=http_error_polls,
+                    invalid_json_polls=invalid_json_polls,
+                    last_poll=last_poll,
+                    level="warning",
+                    hint=(
+                        "Kie never returned SUCCESS+URL or TASK_FAILED within the poll budget. "
+                        "Check last_poll.normalized_status (e.g. stuck PENDING/PROCESSING) or HTTP/body issues."
+                    ),
+                )
+                ns = last_poll.get("normalized_status")
+                rs = last_poll.get("raw_status")
+                detail_bits = [
+                    f"polls={max_polls}×{poll_interval_s}s",
+                    f"last_http={last_poll.get('http_status')}",
+                    f"http_errors={http_error_polls}",
+                    f"bad_json={invalid_json_polls}",
+                ]
+                if ns or rs:
+                    detail_bits.append(f"last_status={rs!r}" if rs else f"last_status={ns!r}")
+                detail = "; ".join(str(x) for x in detail_bits)
+                return {"video_url": None, "status": "failed", "error": f"TIMEOUT ({detail})"}
         except Exception as e:
             logger.error("Seedance video generation failed: %s", e)
             emit(
