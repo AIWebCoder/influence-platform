@@ -29,6 +29,17 @@ docker-compose up -d
 docker-compose ps
 ```
 
+## Local development (no rebuild for every edit)
+
+App services **mount your repo** into the container (`./dashboard`, `./distribution-engine`, `./content-factory`). For normal code edits you **do not** need `docker compose build`.
+
+| Service | What happens |
+|--------|----------------|
+| **Dashboard** | Runs `next dev`; save files and refresh the browser. |
+| **Distribution engine** | Runs **`npm run dev`** (nodemon); restarts the Node process when you change JS. **One** `docker compose build distribution-engine` (or fresh `up --build`) may be needed after pulling this setup so `nodemon` is installed in the image `node_modules` volume. |
+| **Content factory** | Compose defaults to **`UVICORN_RELOAD=0`** (stable API; reload can kill in-flight requests → **`net::ERR_EMPTY_RESPONSE`**). Set **`UVICORN_RELOAD=1`** in `.env` only when you want Python hot-reload and can accept occasional dropped requests. |
+| **When you still must build** | Changed **`package.json` / `requirements.txt`**, **Dockerfile**, or you need a clean `node_modules` / image — then rebuild **that** service only, e.g. `docker compose build dashboard && docker compose up -d dashboard`. |
+
 ## Main Endpoints
 
 |        Service       |            URL             |
@@ -98,3 +109,8 @@ docker-compose restart emulator-controller
 # Stop all
 docker-compose down
 ```
+
+
+8,434 credits befor
+7,819 credits after 
+615 credit 

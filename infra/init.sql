@@ -438,3 +438,9 @@ CREATE INDEX IF NOT EXISTS idx_publications_retry_count ON publications(retry_co
 CREATE INDEX IF NOT EXISTS idx_publications_failure_type ON publications(failure_type);
 CREATE INDEX IF NOT EXISTS idx_publications_next_retry_at ON publications(next_retry_at) WHERE next_retry_at IS NOT NULL;
 
+-- Intent / publication_targets → publications (monitoring)
+ALTER TABLE publications ADD COLUMN IF NOT EXISTS publication_target_id UUID REFERENCES publication_targets(id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_publications_publication_target_id
+  ON publications (publication_target_id)
+  WHERE publication_target_id IS NOT NULL;
+

@@ -99,12 +99,19 @@ services:
       KIE_API_KEY: ${KIE_API_KEY:-}
       SEEDANCE_API_KEY: ${SEEDANCE_API_KEY:-}
       SEEDANCE_BASE_URL: ${SEEDANCE_BASE_URL:-https://api.kie.ai}
+      # Seedance poll budget: 144 × 5s ≈ 12 min (Kie wall time can be ~9m+ for 15s output)
+      GENERATION_SEEDANCE_MAX_POLLS: ${GENERATION_SEEDANCE_MAX_POLLS:-144}
+      # UI cost estimate for multi_scene_single_video: credits per second of output (15s × 41 ≈ 615 Kie)
+      SEEDANCE_ESTIMATE_CREDITS_PER_SECOND: ${SEEDANCE_ESTIMATE_CREDITS_PER_SECOND:-41}
       JWT_SECRET: ${JWT_SECRET:-changeme_in_production}
+      FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED: ${FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED:-true}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       SENTRY_DSN: ${SENTRY_DSN:-}
+      # 0 = stable API. Uvicorn --reload restarts the worker and can drop active requests → net::ERR_EMPTY_RESPONSE in the browser.
+      UVICORN_RELOAD: ${UVICORN_RELOAD:-0}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -159,6 +166,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Bind-mounted ./distribution-engine + nodemon: edit JS on the host, no image rebuild.
+    command: ["npm", "run", "dev"]
     volumes:
       # Full tree: local `src/` (and tests) are what the container runs
       - ./distribution-engine:/app
@@ -247,6 +256,11 @@ services:
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
       NEXT_PUBLIC_SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_DSN: ${SENTRY_DSN:-}
+      NEXT_PUBLIC_FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED: ${NEXT_PUBLIC_FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED:-true}
+      # File watching over bind mounts (Docker Desktop / Windows / macOS)
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+      NEXT_WEBPACK_USEPOLLING: "1"
     depends_on:
       content-factory:
         condition: service_healthy
@@ -258,7 +272,6 @@ services:
       # Full tree: next.config, tailwind, src, public, etc. stay in sync with local
       - ./dashboard:/app
       - /app/node_modules
-      - /app/.next
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1"]
       interval: 30s
