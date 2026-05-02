@@ -24,6 +24,16 @@ redis_data/
 .vscode/
 .idea/
 *.swp
+.cursor/
+
+# TypeScript build info (local incremental)
+*.tsbuildinfo
+
+# Playwright / e2e output
+dashboard/test-results/
+
+# Optional local asset catalogs
+/poses.json
 
 # Logs
 *.log
