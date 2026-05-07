@@ -109,8 +109,3 @@ docker-compose restart emulator-controller
 # Stop all
 docker-compose down
 ```
-
-
-8,434 credits befor
-7,819 credits after 
-615 credit 

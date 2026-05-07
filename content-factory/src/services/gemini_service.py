@@ -151,15 +151,13 @@ class GeminiService:
         Returns a list of scene dicts: scene_index, prompt, duration (seconds 3–5), role (hook|motion|detail).
         Raw JSON only from the model.
         """
-        n = scene_count if scene_count in range(6, 9) else random.randint(6, 8)
+        sc = int(scene_count)
+        if sc == 1:
+            n = 1
+        else:
+            n = sc if sc in range(6, 9) else random.randint(6, 8)
 
-        system_prompt = (
-            "You are a director for short-form vertical video (Instagram Reels/Stories). "
-            f"Output a raw JSON object with a single key 'scenes' whose value is an array of exactly {n} objects. "
-            "Each object must have: 'scene_index' (integer starting at 0), 'prompt' (string, vivid visual direction), "
-            "'duration' (integer seconds, must be 3, 4, or 5 only), "
-            "'role' (string, one of: hook, motion, detail — distribute roles across the sequence). "
-            "Do NOT use markdown or code fences. Output raw JSON only."
+        strict_rules = (
             "STRICT RULES for writing each scene prompt:"
             "1. NEVER describe human body parts in motion (no hands reaching, no feet walking, no arms moving)."
             "2. NEVER describe physics-based actions (no liquid pouring, no objects falling, no splashing)."
@@ -179,10 +177,35 @@ class GeminiService:
             "- 'A glass of water with lemon slices and ice cubes on a marble surface, high contrast lighting, fresh aesthetic'"
             "- 'Yoga mat unrolled near a sunlit window, peaceful bedroom, soft shadows, gentle camera drift'"
         )
-        user_prompt = (
-            f"Niche: {niche}. Topic: {topic}. Content type: {content_type}. Creator mode: {mode}. "
-            f"Produce exactly {n} scenes for one cohesive short video."
-        )
+        if n == 1:
+            system_prompt = (
+                "You are a director for short-form vertical video (Instagram Reels/Stories). "
+                "Output a raw JSON object with a single key 'scenes' whose value is an array of exactly 1 object. "
+                "The object must have: 'scene_index' (0), 'prompt' (string, one vivid continuous-shot brief for AI image-to-video), "
+                "'duration' (integer seconds, must be 3, 4, or 5 only), "
+                "'role' (must be exactly 'motion'). "
+                "The prompt should read as one uninterrupted clip (about 5–10 seconds of final video): setting, mood, key visual, optional camera drift. "
+                "Do NOT use markdown or code fences. Output raw JSON only."
+                + strict_rules
+            )
+            user_prompt = (
+                f"Niche: {niche}. Topic: {topic}. Content type: {content_type}. Creator mode: {mode}. "
+                "Write one rich scene description for a single generative video (not a multi-beat storyboard)."
+            )
+        else:
+            system_prompt = (
+                "You are a director for short-form vertical video (Instagram Reels/Stories). "
+                f"Output a raw JSON object with a single key 'scenes' whose value is an array of exactly {n} objects. "
+                "Each object must have: 'scene_index' (integer starting at 0), 'prompt' (string, vivid visual direction), "
+                "'duration' (integer seconds, must be 3, 4, or 5 only), "
+                "'role' (string, one of: hook, motion, detail — distribute roles across the sequence). "
+                "Do NOT use markdown or code fences. Output raw JSON only."
+                + strict_rules
+            )
+            user_prompt = (
+                f"Niche: {niche}. Topic: {topic}. Content type: {content_type}. Creator mode: {mode}. "
+                f"Produce exactly {n} scenes for one cohesive short video."
+            )
 
         try:
             emit(
@@ -230,6 +253,10 @@ class GeminiService:
                         "role": str(s.get("role", "motion")).strip()[:32],
                     }
                 )
+            if n == 1:
+                if len(normalized) < 1:
+                    raise ContentGenerationError("Too few scenes returned from AI model")
+                return normalized[:1]
             if len(normalized) < 6:
                 raise ContentGenerationError("Too few scenes returned from AI model")
             return normalized[:8]

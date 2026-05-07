@@ -54,7 +54,7 @@ import { addTrackedGenerationJobId } from "@/lib/generation-job-tracking";
 
 type ContentType = "post" | "reel" | "story";
 type Mode = "persona" | "faceless";
-type ExecutionMode = "scene_based" | "multi_scene_single_video";
+type ExecutionMode = "scene_based" | "multi_scene_single_video" | "ailiveai_single_video";
 type PublishMode = "publish_now" | "save_for_later" | "scheduled";
 
 type DraftScene = {
@@ -169,6 +169,9 @@ function pipelineStepSkipHint(metadata: Record<string, unknown> | undefined): st
   const reason = metadata?.reason;
   if (reason === "single_seedance_video_path") {
     return "Not used in Seedance single-video mode (one video pass, no per-scene images).";
+  }
+  if (reason === "ailiveai_single_video_path") {
+    return "Not used in AILIVEAI single-video mode (one video pass, no per-scene images).";
   }
   if (reason === "single_video_no_assembly_required") {
     return "Not used — final output is a single clip with no assembly step.";
@@ -630,6 +633,13 @@ function GenerationStudioPageInner() {
     }
   }, [searchParams]);
 
+  useEffect(() => {
+    if (executionMode === "ailiveai_single_video") {
+      setMode("persona");
+      setVideoDuration((d) => (d === 5 ? 5 : 10));
+    }
+  }, [executionMode]);
+
   const fetchJob = useCallback(async (id: string) => {
     return api.generationJobs.get(id) as Promise<GenerationJobDetail>;
   }, []);
@@ -712,9 +722,10 @@ function GenerationStudioPageInner() {
     try {
       const plan = await api.generationJobs.previewScenes({
         content_type: contentType,
-        mode,
+        mode: executionMode === "ailiveai_single_video" ? "persona" : mode,
         niche,
         topic: topic.trim(),
+        execution_mode: executionMode,
       });
       setDraftScenes(plan);
       setJobId(null);
@@ -742,7 +753,10 @@ function GenerationStudioPageInner() {
         topic: topic.trim(),
         target_accounts: selectedAccounts,
         scheduled_at: schedule ? schedule.toISOString() : undefined,
-        video_duration: executionMode === "multi_scene_single_video" ? videoDuration : undefined,
+        video_duration:
+          executionMode === "multi_scene_single_video" || executionMode === "ailiveai_single_video"
+            ? videoDuration
+            : undefined,
       });
       setJobId(res.job_id);
       addTrackedGenerationJobId(res.job_id);
@@ -1035,6 +1049,7 @@ function GenerationStudioPageInner() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="multi_scene_single_video">Multi-scene single video (Seedance)</SelectItem>
+                      <SelectItem value="ailiveai_single_video">Single video (AILIVEAI)</SelectItem>
                       <SelectItem value="scene_based">Scene-based (Kie)</SelectItem>
                     </SelectContent>
                   </Select>
@@ -1054,29 +1069,45 @@ function GenerationStudioPageInner() {
                   </SelectContent>
                 </Select>
               </div>
-              {executionMode === "multi_scene_single_video" ? (
+              {executionMode === "multi_scene_single_video" || executionMode === "ailiveai_single_video" ? (
                 <div className="space-y-2">
-                  <Label>Video duration (Seedance)</Label>
-                  <Select value={String(videoDuration)} onValueChange={(v) => setVideoDuration(Number(v))}>
+                  <Label>Video duration (single clip)</Label>
+                  <Select
+                    value={String(videoDuration)}
+                    onValueChange={(v) => setVideoDuration(Number(v))}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="4">4s</SelectItem>
-                      <SelectItem value="5">5s</SelectItem>
-                      <SelectItem value="6">6s</SelectItem>
-                      <SelectItem value="7">7s</SelectItem>
-                      <SelectItem value="8">8s</SelectItem>
-                      <SelectItem value="9">9s</SelectItem>
-                      <SelectItem value="10">10s</SelectItem>
-                      <SelectItem value="11">11s</SelectItem>
-                      <SelectItem value="12">12s</SelectItem>
-                      <SelectItem value="13">13s</SelectItem>
-                      <SelectItem value="14">14s</SelectItem>
-                      <SelectItem value="15">15s</SelectItem>
+                      {executionMode === "ailiveai_single_video" ? (
+                        <>
+                          <SelectItem value="5">~5s (AliveAI SHORT)</SelectItem>
+                          <SelectItem value="10">~10s (AliveAI MEDIUM)</SelectItem>
+                        </>
+                      ) : (
+                        <>
+                          <SelectItem value="4">4s</SelectItem>
+                          <SelectItem value="5">5s</SelectItem>
+                          <SelectItem value="6">6s</SelectItem>
+                          <SelectItem value="7">7s</SelectItem>
+                          <SelectItem value="8">8s</SelectItem>
+                          <SelectItem value="9">9s</SelectItem>
+                          <SelectItem value="10">10s</SelectItem>
+                          <SelectItem value="11">11s</SelectItem>
+                          <SelectItem value="12">12s</SelectItem>
+                          <SelectItem value="13">13s</SelectItem>
+                          <SelectItem value="14">14s</SelectItem>
+                          <SelectItem value="15">15s</SelectItem>
+                        </>
+                      )}
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground">Seedance supports 4 to 15 seconds.</p>
+                  <p className="text-xs text-muted-foreground">
+                    {executionMode === "ailiveai_single_video"
+                      ? "AliveAI: a blocking persona image is generated first, then image-to-video (always persona mode)."
+                      : "Seedance supports 4 to 15 seconds."}
+                  </p>
                 </div>
               ) : null}
               <div className="space-y-2">

@@ -320,7 +320,7 @@ export const api = {
       };
     },
     create: async (data: {
-      execution_mode?: "scene_based" | "multi_scene_single_video";
+      execution_mode?: "scene_based" | "multi_scene_single_video" | "ailiveai_single_video";
       content_type: string;
       mode: string;
       niche: string;
@@ -331,6 +331,12 @@ export const api = {
       campaign_id?: string;
       scene_count?: number;
       video_duration?: number;
+      ailiveai_media_id?: string;
+      ailiveai_video_model?: string;
+      ailiveai_scene?: string;
+      ailiveai_server_id?: string;
+      ailiveai_last_frame_media_id?: string;
+      ailiveai_video_quality?: string;
     }) => {
       const payload = {
         execution_mode: data.execution_mode ?? "multi_scene_single_video",
@@ -369,6 +375,7 @@ export const api = {
       niche: string;
       topic: string;
       scene_count?: number;
+      execution_mode?: 'scene_based' | 'multi_scene_single_video' | 'ailiveai_single_video';
     }) => {
       const response = await contentClientLongTimeout.post('/generation-jobs/preview-scenes', data);
       return response.data as Array<{

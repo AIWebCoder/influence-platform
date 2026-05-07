@@ -29,6 +29,7 @@ from src.services.gemini_service import GeminiService
 from src.services.generation_job_service import PIPELINE_STEPS, GenerationJobService, default_step_control
 from src.services.kie_service import KieService
 from src.services.seedance_service import SeedanceService
+from src.services.ailiveai_service import AiliveaiService
 from src.services.pipeline_trace import emit
 
 logger = logging.getLogger(__name__)
@@ -263,8 +264,13 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
     emit("draft_populate_start", job_id=gid, step="populate_draft")
     use_anthropic = _prefer_anthropic()
     text_svc = AnthropicService() if use_anthropic else GeminiService()
-    raw_scene_count = max(1, int(payload.get("scene_count") or 7))
-    scene_count = _capped_scene_count(payload)
+    exec_mode = str(getattr(job, "execution_mode", "") or "").strip()
+    if exec_mode == "ailiveai_single_video":
+        raw_scene_count = 1
+        scene_count = 1
+    else:
+        raw_scene_count = max(1, int(payload.get("scene_count") or 7))
+        scene_count = _capped_scene_count(payload)
     if settings.GENERATION_DEMO_MODE and scene_count < raw_scene_count:
         emit(
             "demo_scene_count_capped",
@@ -563,21 +569,25 @@ async def _execute_pipeline(db, job_id: uuid.UUID) -> Optional[str]:
             if step_name == "scene_generation":
                 await _step_scene_generation(db, svc, job, step)
             elif step_name == "image_generation":
-                if execution_mode == "multi_scene_single_video":
+                if execution_mode in ("multi_scene_single_video", "ailiveai_single_video"):
                     step.step_metadata = {
                         "skipped": True,
                         "execution_mode": execution_mode,
-                        "reason": "single_seedance_video_path",
+                        "reason": "single_seedance_video_path"
+                        if execution_mode == "multi_scene_single_video"
+                        else "ailiveai_single_video_path",
                     }
                 else:
                     await _step_image_generation(db, svc, job, step)
             elif step_name == "video_generation":
                 if execution_mode == "multi_scene_single_video":
                     await _step_multi_scene_single_video(db, svc, job, step)
+                elif execution_mode == "ailiveai_single_video":
+                    await _step_ailiveai_single_video(db, svc, job, step)
                 else:
                     await _step_video_generation(db, svc, job, step)
             elif step_name == "assembly":
-                if execution_mode == "multi_scene_single_video":
+                if execution_mode in ("multi_scene_single_video", "ailiveai_single_video"):
                     step.step_metadata = {
                         "skipped": True,
                         "execution_mode": execution_mode,
@@ -1587,6 +1597,180 @@ async def _step_multi_scene_single_video(db, svc: GenerationJobService, job: Gen
     step.step_metadata = {
         "execution_mode": "multi_scene_single_video",
         "provider": "seedance",
+        "scene_count": len(scenes),
+        "total_duration": total_duration,
+        "selected_duration": selected_duration,
+        "attempts": attempt + 1,
+        "duration_ms": elapsed,
+        "aspect_ratio": aspect,
+    }
+    step.progress = 100
+    job.progress = 65
+    svc.touch(job)
+    await db.commit()
+
+
+async def _step_ailiveai_single_video(db, svc: GenerationJobService, job: GenerationJob, step: GenerationStep) -> None:
+    gid = str(job.id)
+    res = await db.execute(
+        select(GenerationScene)
+        .where(GenerationScene.job_id == job.id)
+        .order_by(GenerationScene.scene_index)
+    )
+    scenes = list(res.scalars().all())
+    if not scenes:
+        raise RuntimeError("No scenes available for AILIVEAI single-video generation")
+
+    total_duration = sum(int(sc.duration or 4) for sc in scenes)
+    payload = job.input_payload or {}
+    requested_video_duration = payload.get("video_duration")
+    try:
+        selected_duration = int(requested_video_duration) if requested_video_duration is not None else int(total_duration)
+    except Exception:
+        selected_duration = int(total_duration)
+    # AliveAI video length: only SHORT (~5s) or MEDIUM (~10s).
+    selected_duration = 10 if int(selected_duration) > 5 else 5
+    prompt = build_multi_scene_prompt(scenes, total_duration=selected_duration)
+    emit(
+        "ailiveai_prompt_built",
+        job_id=gid,
+        step="video_generation",
+        execution_mode="ailiveai_single_video",
+        prompt_preview=(prompt[:500] + "…") if len(prompt) > 500 else prompt,
+        scene_count=len(scenes),
+        number_of_scenes=len(scenes),
+        total_duration=total_duration,
+        selected_duration=selected_duration,
+    )
+    ctype = payload.get("content_type") or payload.get("type") or "reel"
+    aspect = "9:16" if ctype in ("reel", "story") else "1:1"
+    media_id_opt = str(
+        payload.get("ailiveai_media_id")
+        or payload.get("media_id")
+        or payload.get("aliveai_media_id")
+        or (getattr(settings, "AILIVEAI_MEDIA_ID", None) or "")
+    ).strip() or None
+    aliveai_aspect = "PORTRAIT" if ctype in ("reel", "story") else "LANDSCAPE"
+    image_name = str(payload.get("topic") or payload.get("niche") or "Character").strip()[:200]
+    image_app = str(payload.get("ailiveai_image_appearance") or "").strip() or prompt
+    scene_extra = str(payload.get("ailiveai_scene") or "").strip() or None
+    if not scene_extra and scenes:
+        scene_extra = (scenes[0].prompt or "")[:600] or None
+    ailiveai = AiliveaiService()
+    t0 = time.perf_counter()
+    max_attempts = 3
+    step.progress = 5
+    md0 = dict(step.step_metadata or {})
+    md0.update(
+        {
+            "execution_mode": "ailiveai_single_video",
+            "phase": "ailiveai_prepare",
+            "scene_count": len(scenes),
+            "selected_duration": selected_duration,
+        }
+    )
+    step.step_metadata = md0
+    svc.touch(job)
+    await db.commit()
+    result: dict[str, Any] = {"video_url": None, "status": "failed", "error": "not_attempted"}
+    for attempt in range(max_attempts):
+        step.progress = min(92, 10 + int(82 * attempt / max_attempts))
+        md = dict(step.step_metadata or {})
+        md["ailiveai_attempt"] = attempt + 1
+        md["phase"] = "ailiveai_generating"
+        step.step_metadata = md
+        svc.touch(job)
+        await db.commit()
+        emit(
+            "ailiveai_attempt",
+            job_id=gid,
+            step="video_generation",
+            execution_mode="ailiveai_single_video",
+            attempt=attempt + 1,
+            max_attempts=max_attempts,
+            total_duration=total_duration,
+            number_of_scenes=len(scenes),
+            selected_duration=selected_duration,
+        )
+        result = await ailiveai.generate_video(
+            prompt=prompt,
+            aspect_ratio=aspect,
+            duration=selected_duration,
+            media_id=media_id_opt,
+            image_name=image_name,
+            image_appearance=image_app,
+            image_detail_level=str(payload.get("ailiveai_detail_level") or "MEDIUM").strip() or None,
+            image_gender=str(payload.get("ailiveai_gender") or "FEMALE").strip() or None,
+            aliveai_aspect=aliveai_aspect,
+            video_model=str(payload.get("ailiveai_video_model") or "").strip() or None,
+            scene=scene_extra,
+            server_id=str(payload.get("ailiveai_server_id") or "").strip() or None,
+            last_frame_media_id=str(payload.get("ailiveai_last_frame_media_id") or "").strip() or None,
+            video_quality=str(payload.get("ailiveai_video_quality") or "").strip() or None,
+            trace={"job_id": gid, "step": "video_generation"},
+        )
+        if result.get("status") == "completed" and result.get("video_url"):
+            break
+        if attempt < max_attempts - 1:
+            if _seedance_result_is_local_poll_timeout(result):
+                emit(
+                    "ailiveai_retry_skipped_after_poll_timeout",
+                    job_id=gid,
+                    step="video_generation",
+                    execution_mode="ailiveai_single_video",
+                    attempt=attempt + 1,
+                    max_attempts=max_attempts,
+                    error=result.get("error"),
+                    total_duration=total_duration,
+                    number_of_scenes=len(scenes),
+                    selected_duration=selected_duration,
+                    level="warning",
+                    note="Provider task may still complete on their side; use pipeline retry or check provider logs before re-running.",
+                )
+                break
+            emit(
+                "ailiveai_retry_scheduled",
+                job_id=gid,
+                step="video_generation",
+                execution_mode="ailiveai_single_video",
+                attempt=attempt + 1,
+                next_attempt=attempt + 2,
+                error=result.get("error"),
+                total_duration=total_duration,
+                number_of_scenes=len(scenes),
+                selected_duration=selected_duration,
+                level="warning",
+            )
+    elapsed = int((time.perf_counter() - t0) * 1000)
+    emit(
+        "ailiveai_single_video_result",
+        job_id=gid,
+        step="video_generation",
+        execution_mode="ailiveai_single_video",
+        status=result.get("status"),
+        has_url=bool(result.get("video_url")),
+        error=result.get("error"),
+        attempts=max_attempts if not (result.get("status") == "completed" and result.get("video_url")) else attempt + 1,
+        total_duration=total_duration,
+        number_of_scenes=len(scenes),
+        selected_duration=selected_duration,
+        duration_ms=elapsed,
+    )
+    if result.get("status") != "completed" or not result.get("video_url"):
+        msg = str(result.get("error") or "AILIVEAI generation failed")
+        await svc.append_log(job, f"AILIVEAI single video failed: {msg}", "error")
+        svc.touch(job)
+        await db.commit()
+        raise RuntimeError(f"AILIVEAI generation failed: {msg}")
+
+    job.output_url = str(result["video_url"])
+    for sc in scenes:
+        md = dict(sc.scene_metadata or {})
+        md["generated_via"] = "ailiveai_single"
+        sc.scene_metadata = md
+    step.step_metadata = {
+        "execution_mode": "ailiveai_single_video",
+        "provider": "ailiveai",
         "scene_count": len(scenes),
         "total_duration": total_duration,
         "selected_duration": selected_duration,

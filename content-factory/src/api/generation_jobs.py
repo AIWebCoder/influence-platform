@@ -35,7 +35,11 @@ class PreviewScenesBody(BaseModel):
     mode: str = "faceless"
     niche: str
     topic: str
-    scene_count: Optional[int] = Field(default=None, ge=6, le=8)
+    scene_count: Optional[int] = Field(default=None, ge=1, le=8)
+    execution_mode: Optional[str] = Field(
+        default=None,
+        description="When ailiveai_single_video, returns exactly 1 scene (single-shot narrative for image-to-video).",
+    )
 
 
 def _is_quota_error(err: Exception) -> bool:
@@ -118,7 +122,13 @@ async def preview_scenes(body: PreviewScenesBody, request: Request):
         )
 
     model_svc = AnthropicService() if use_anthropic else GeminiService()
-    n = body.scene_count or 7
+    exec_mode = (body.execution_mode or "").strip()
+    if exec_mode == "ailiveai_single_video":
+        n = 1
+    elif body.scene_count is not None:
+        n = int(body.scene_count)
+    else:
+        n = 7
     try:
         if use_anthropic:
             plan = await model_svc.generate_scene_plan(
@@ -217,7 +227,10 @@ async def preview_scenes(body: PreviewScenesBody, request: Request):
 
 
 class GenerationJobCreateRequest(BaseModel):
-    execution_mode: str = Field(default="scene_based", description="scene_based | multi_scene_single_video")
+    execution_mode: str = Field(
+        default="scene_based",
+        description="scene_based | multi_scene_single_video | ailiveai_single_video",
+    )
     content_type: str = Field(default="reel", description="post | reel | story")
     mode: str = Field(default="faceless", description="persona | faceless")
     niche: str
@@ -228,6 +241,22 @@ class GenerationJobCreateRequest(BaseModel):
     campaign_id: Optional[str] = None
     scene_count: Optional[int] = Field(default=None, ge=6, le=8)
     video_duration: Optional[int] = Field(default=None, ge=4, le=15)
+    ailiveai_media_id: Optional[str] = Field(
+        default=None,
+        description="Optional: skip blocking image step when set (existing AliveAI image mediaId).",
+    )
+    ailiveai_image_appearance: Optional[str] = Field(
+        default=None,
+        max_length=1500,
+        description="Optional override for POST /prompts appearance; defaults to combined scene narrative.",
+    )
+    ailiveai_detail_level: Optional[str] = Field(default=None, description="MEDIUM or HIGH for blocking image")
+    ailiveai_gender: Optional[str] = Field(default=None, description="MALE|FEMALE|TRANS for blocking image")
+    ailiveai_video_model: Optional[str] = Field(default=None, description="DEFAULT|AUDIO|GROK|SEEDANCE")
+    ailiveai_scene: Optional[str] = Field(default=None, max_length=600)
+    ailiveai_server_id: Optional[str] = None
+    ailiveai_last_frame_media_id: Optional[str] = None
+    ailiveai_video_quality: Optional[str] = Field(default=None, description="V_480P|V_720P when videoModel is GROK")
 
 
 class GenerationJobCreateResponse(BaseModel):
@@ -420,6 +449,17 @@ def _multi_scene_seedance_duration_seconds(job) -> int:
     return max(4, min(15, selected))
 
 
+def _ailiveai_video_seconds(job) -> int:
+    """AliveAI output is only ~5s (SHORT) or ~10s (MEDIUM)."""
+    payload = job.input_payload or {}
+    vd = payload.get("video_duration")
+    try:
+        v = int(vd) if vd is not None else 10
+    except Exception:
+        v = 10
+    return 10 if v > 5 else 5
+
+
 def _compute_cost_estimate(job) -> dict[str, Any]:
     scenes = sorted(job.scenes, key=lambda x: x.scene_index)
     n = len(scenes)
@@ -444,6 +484,31 @@ def _compute_cost_estimate(job) -> dict[str, Any]:
             "breakdown": [
                 {
                     "line": f"Seedance 2.0 — 720p, no audio (single {d}s video; scene count does not multiply cost)",
+                    "units": d,
+                    "unit_credits": per_sec,
+                    "subtotal": sub,
+                },
+            ],
+        }
+
+    if execution_mode == "ailiveai_single_video":
+        d = _ailiveai_video_seconds(job)
+        per_sec = float(settings.SEEDANCE_ESTIMATE_CREDITS_PER_SECOND)
+        sub = round(d * per_sec, 2)
+        return {
+            "total_credits": sub,
+            "currency": "credits",
+            "model": str(getattr(settings, "AILIVEAI_VIDEO_MODEL", "SEEDANCE") or "SEEDANCE"),
+            "provider": "ailiveai",
+            "resolution": "720p",
+            "generate_audio": False,
+            "estimate_note": (
+                f"AliveAI image (blocking) + image-to-video; output SHORT (~5s) or MEDIUM (~10s), here ~{d}s. "
+                f"Rough credits/s uses SEEDANCE_ESTIMATE_CREDITS_PER_SECOND until a dedicated AliveAI rate is configured."
+            ),
+            "breakdown": [
+                {
+                    "line": f"AliveAI — ~{d}s output (estimate only; includes blocking image step)",
                     "units": d,
                     "unit_credits": per_sec,
                     "subtotal": sub,
@@ -518,9 +583,20 @@ async def create_generation_job(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        if body.execution_mode not in ("scene_based", "multi_scene_single_video"):
+        if body.execution_mode not in ("scene_based", "multi_scene_single_video", "ailiveai_single_video"):
             raise HTTPException(status_code=400, detail="Invalid execution_mode")
-        payload = body.model_dump(exclude_none=True)
+        body_effective = body
+        if body.execution_mode == "ailiveai_single_video":
+            vd = body.video_duration
+            try:
+                vi = int(vd) if vd is not None else 10
+            except Exception:
+                vi = 10
+            coerced = 10 if vi > 5 else 5
+            body_effective = body.model_copy(update={"video_duration": coerced, "mode": "persona"})
+        payload = body_effective.model_dump(exclude_none=True)
+        if body.execution_mode == "ailiveai_single_video":
+            payload["mode"] = "persona"
         payload["target_accounts"] = await _resolve_target_accounts(db, payload.get("target_accounts") or [])
         payload.setdefault("content_type", body.content_type)
         svc = GenerationJobService(db)

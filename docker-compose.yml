@@ -99,8 +99,17 @@ services:
       KIE_API_KEY: ${KIE_API_KEY:-}
       SEEDANCE_API_KEY: ${SEEDANCE_API_KEY:-}
       SEEDANCE_BASE_URL: ${SEEDANCE_BASE_URL:-https://api.kie.ai}
+      AILIVEAI_API_KEY: ${AILIVEAI_API_KEY:-}
+      AILIVEAI_API_TOKEN: ${AILIVEAI_API_TOKEN:-}
+      AILIVEAI_MEDIA_ID: ${AILIVEAI_MEDIA_ID:-}
+      AILIVEAI_BASE_URL: ${AILIVEAI_BASE_URL:-https://api.aliveai.app}
+      AILIVEAI_POLL_BASE_URL: ${AILIVEAI_POLL_BASE_URL:-https://api-server.aliveai.app}
+      AILIVEAI_VIDEO_MODEL: ${AILIVEAI_VIDEO_MODEL:-SEEDANCE}
+      AILIVEAI_AUTH_MODE: ${AILIVEAI_AUTH_MODE:-auto}
+      AILIVEAI_REQUEST_BLOCKING: ${AILIVEAI_REQUEST_BLOCKING:-false}
       # Seedance poll budget: 144 × 5s ≈ 12 min (Kie wall time can be ~9m+ for 15s output)
       GENERATION_SEEDANCE_MAX_POLLS: ${GENERATION_SEEDANCE_MAX_POLLS:-144}
+      GENERATION_AILIVEAI_MAX_POLLS: ${GENERATION_AILIVEAI_MAX_POLLS:-60}
       # UI cost estimate for multi_scene_single_video: credits per second of output (15s × 41 ≈ 615 Kie)
       SEEDANCE_ESTIMATE_CREDITS_PER_SECOND: ${SEEDANCE_ESTIMATE_CREDITS_PER_SECOND:-41}
       JWT_SECRET: ${JWT_SECRET:-changeme_in_production}

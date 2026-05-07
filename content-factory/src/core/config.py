@@ -22,6 +22,18 @@ class Settings(BaseSettings):
     KIE_API_KEY: str = ""
     SEEDANCE_API_KEY: str = ""
     SEEDANCE_BASE_URL: str = "https://api.kie.ai"
+    AILIVEAI_API_KEY: str = ""
+    AILIVEAI_API_TOKEN: str = ""  # preferred env name; falls back to AILIVEAI_API_KEY
+    # AliveAI: POST /prompts* must use api.aliveai.app. Do not set BASE to api-server (405). Poll GET uses api-server.
+    AILIVEAI_BASE_URL: str = "https://api.aliveai.app"
+    AILIVEAI_POLL_BASE_URL: str = "https://api-server.aliveai.app"
+    AILIVEAI_VIDEO_MODEL: str = "SEEDANCE"  # DEFAULT | AUDIO | GROK | SEEDANCE
+    # Applies when using AILIVEAI_API_KEY only (no AILIVEAI_API_TOKEN): key | bearer | auto (JWT → Bearer).
+    # If AILIVEAI_API_TOKEN is set, Authorization is always Bearer regardless of this value.
+    AILIVEAI_AUTH_MODE: str = "auto"
+    AILIVEAI_REQUEST_BLOCKING: bool = False  # dev: sync create when supported
+    # Optional default AliveAI image media id (skips blocking POST /prompts when set).
+    AILIVEAI_MEDIA_ID: str = ""
     JWT_SECRET: str = "changeme"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 1440  # 24h
@@ -59,6 +71,7 @@ class Settings(BaseSettings):
     # Seedance (createTask + recordInfo): Kie wall time for 15s output can exceed ~9m (e.g. 548s).
     # Poll interval is 5s in SeedanceService → 144 polls ≈ 12m ceiling before client TIMEOUT.
     GENERATION_SEEDANCE_MAX_POLLS: int = 144
+    GENERATION_AILIVEAI_MAX_POLLS: int = 60
     # When DEMO_MODE, effective polls are min(KIE_MAX_POLLS, DEMO_KIE_MAX_POLLS)
     GENERATION_DEMO_KIE_MAX_POLLS: int = 30
     # Parallel Kie video calls (DB commits remain sequential on one session)
@@ -114,6 +127,26 @@ class Settings(BaseSettings):
         if k:
             return k
         return (self.KIE_API_KEY or "").strip()
+
+    def ailiveai_using_api_token_env(self) -> bool:
+        """True when ``AILIVEAI_API_TOKEN`` is set (member access token path; use Bearer unless AILIVEAI_AUTH_MODE=key)."""
+        return bool((self.AILIVEAI_API_TOKEN or "").strip())
+
+    def resolved_ailiveai_api_key(self) -> str:
+        """Prefer AILIVEAI_API_TOKEN; fall back to AILIVEAI_API_KEY. Strips accidental ``Bearer `` / ``Key `` prefixes."""
+        def _strip_prefix(raw: str) -> str:
+            v = (raw or "").strip()
+            low = v.lower()
+            if low.startswith("bearer "):
+                return v[7:].strip()
+            if low.startswith("key "):
+                return v[4:].strip()
+            return v
+
+        t = _strip_prefix(self.AILIVEAI_API_TOKEN or "")
+        if t:
+            return t
+        return _strip_prefix(self.AILIVEAI_API_KEY or "")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
