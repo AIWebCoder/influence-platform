@@ -1,7 +1,7 @@
 import json
 import logging
 import random
-from typing import Optional
+from typing import Any, Optional
 from anthropic import AsyncAnthropic, APIError, APITimeoutError, RateLimitError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -99,6 +99,112 @@ class AnthropicService:
         retry=retry_if_exception_type((APITimeoutError, RateLimitError, APIError)),
         reraise=True,
     )
+    async def generate_ailiveai_persona_profile(
+        self,
+        niche: str,
+        topic: str,
+        mode: str,
+        persona_gender: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Structured on-camera persona for AliveAI blocking /prompts ``appearance``.
+        Returns JSON-compatible dict with casting fields plus ``appearance_for_image_model``.
+        """
+        pg = (persona_gender or "FEMALE").strip().upper()
+        if pg not in ("MALE", "FEMALE", "TRANS"):
+            pg = "FEMALE"
+        system_prompt = (
+            "You are a casting director for AliveAI image generation (Create Prompt API). "
+            "Output one raw JSON object with these keys (all string values required unless noted; no markdown, no code fences):\n"
+            "- full_name: realistic Western-style given name and family name (two words). API uses this to influence the face.\n"
+            "- face_details: max ~950 characters. Only facial detail for the face-improve step: eye shape and color, eyelids, "
+            "eyebrow shape and density, nose bridge and tip, lips shape, jawline and chin, cheekbones, overall face shape "
+            "(oval/heart/square etc.), visible skin texture on the face, any freckles or beauty marks. Be specific and concrete.\n"
+            "- character_appearance: max ~1450 characters. Full-body character description for the main appearance field: "
+            "apparent age, nationality or regional heritage as subtle visual cues, height and build (e.g. athletic, curvy, slim, "
+            "stocky, petite), shoulder and hip line, posture, full hair description (length, cut, color, texture), skin tone on "
+            "body, hands, wardrobe head-to-toe, jewelry if any. Do not repeat the entire face_details block verbatim; "
+            "reference that the face matches full_name. Cohesive prose, no bullet lists.\n"
+            "- age: short phrase (e.g. late 20s).\n"
+            "- nationalities: heritage/nationality for casting tone.\n"
+            "- height: verbal (e.g. 5'6\" or 168cm).\n"
+            "- body_shape: one line (athletic / curvy / slim / average / stocky / etc.).\n"
+            "- hair: one line summary (also covered in character_appearance).\n"
+            "- skin_tone: one line.\n"
+            "- wardrobe_style: one line.\n"
+            "- expressions_grimaces: typical micro-expressions on camera.\n"
+            "- face: one short line summary of face type for UI (not a duplicate of face_details).\n"
+            "- image_background: max ~600 characters; environment behind subject (soft light, shallow depth of field, "
+            "non-distracting).\n"
+            "- image_scene: max ~500 characters; optional lighting/pose-atmosphere for the still (not a storyboard).\n"
+            "- from_location: max 80 characters; city or region vibe if relevant, else empty string.\n"
+            "- negative_details: max ~400 characters; things to avoid (e.g. extra fingers, warped eyes, text overlays).\n"
+            "- block_explicit_content: boolean, true for general social-safe content.\n"
+            f"The on-screen subject gender is fixed to {pg} (AliveAI enum MALE|FEMALE|TRANS). "
+            "full_name, face_details, character_appearance, and wardrobe must consistently match that gender.\n"
+            "Align energy with niche and topic; do not paste the topic as spoken dialogue."
+        )
+        user_prompt = (
+            f"Niche: {niche}. Topic (for tone only): {topic}. Creator mode: {mode}. "
+            f"Mandatory persona gender: {pg}. Invent one believable on-screen persona suited to this niche; "
+            "every visual and naming choice must match this gender."
+        )
+        response = await self.client.messages.create(
+            model=self.model,
+            max_tokens=2400,
+            temperature=0.65,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        content_text = response.content[0].text
+        if content_text.startswith("```json"):
+            content_text = content_text[7:-3].strip()
+        elif content_text.startswith("```"):
+            content_text = content_text[3:-3].strip()
+        parsed = json.loads(content_text)
+        if not isinstance(parsed, dict):
+            raise ContentGenerationError("Invalid persona profile payload from AI model")
+        required = (
+            "full_name",
+            "face_details",
+            "character_appearance",
+            "age",
+            "nationalities",
+            "height",
+            "body_shape",
+            "face",
+            "expressions_grimaces",
+            "hair",
+            "skin_tone",
+            "wardrobe_style",
+            "image_background",
+            "image_scene",
+            "from_location",
+            "negative_details",
+        )
+        allow_empty = frozenset({"from_location", "image_scene"})
+        for key in required:
+            if key not in parsed:
+                raise ContentGenerationError(f"Persona profile missing key: {key}")
+            if key in allow_empty:
+                continue
+            if not str(parsed.get(key) or "").strip():
+                raise ContentGenerationError(f"Persona profile empty key: {key}")
+        bec = parsed.get("block_explicit_content")
+        if isinstance(bec, str) and bec.strip().lower() in ("true", "1", "yes"):
+            parsed["block_explicit_content"] = True
+        elif isinstance(bec, str) and bec.strip().lower() in ("false", "0", "no"):
+            parsed["block_explicit_content"] = False
+        elif not isinstance(bec, bool):
+            parsed["block_explicit_content"] = True
+        return parsed
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((APITimeoutError, RateLimitError, APIError)),
+        reraise=True,
+    )
     async def generate_scene_plan(
         self,
         niche: str,
@@ -106,6 +212,7 @@ class AnthropicService:
         content_type: str,
         mode: str,
         scene_count: int,
+        ailiveai_on_camera_topic_scene: bool = False,
     ) -> list[dict]:
         """
         Returns a list of scene dicts: scene_index, prompt, duration (seconds 3–5), role (hook|motion|detail).
@@ -137,7 +244,16 @@ class AnthropicService:
             "- 'A glass of water with lemon slices and ice cubes on a marble surface, high contrast lighting, fresh aesthetic'"
             "- 'Yoga mat unrolled near a sunlit window, peaceful bedroom, soft shadows, gentle camera drift'"
         )
+        ailive_rules = (
+            "RULES for this on-camera image-to-video shot (a reference portrait of the talent is generated separately):"
+            "1. Anchor the beat to the TOPIC and NICHE — setting, props, situation, and emotional arc for one clip."
+            "2. You may describe subtle facial expressions, head movement, reactions, and light upper-body gestures that fit the topic."
+            "3. Do NOT restate a full casting sheet (no exhaustive measurements list); assume likeness is fixed from the reference image."
+            "4. One continuous 5–10 second shot: coherent lighting, vertical framing, readable composition."
+            "5. Avoid explicit sexual content, gore, or hateful stereotypes."
+        )
         if n == 1:
+            rules_block = ailive_rules if ailiveai_on_camera_topic_scene else strict_rules
             system_prompt = (
                 "You are a director for short-form vertical video (Instagram Reels/Stories). "
                 "Output a raw JSON object with a single key 'scenes' whose value is an array of exactly 1 object. "
@@ -146,11 +262,15 @@ class AnthropicService:
                 "'role' (must be exactly 'motion'). "
                 "The prompt should read as one uninterrupted clip (about 5–10 seconds of final video): setting, mood, key visual, optional camera drift. "
                 "Do NOT use markdown or code fences. Output raw JSON only."
-                + strict_rules
+                + rules_block
             )
             user_prompt = (
                 f"Niche: {niche}. Topic: {topic}. Content type: {content_type}. Creator mode: {mode}. "
-                "Write one rich scene description for a single generative video (not a multi-beat storyboard)."
+                + (
+                    "Write one scene focused on what happens in the video given the topic — not a full character design sheet."
+                    if ailiveai_on_camera_topic_scene
+                    else "Write one rich scene description for a single generative video (not a multi-beat storyboard)."
+                )
             )
         else:
             system_prompt = (

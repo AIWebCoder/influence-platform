@@ -138,6 +138,108 @@ class GeminiService:
         retry=retry_if_exception(_is_gemini_retryable),
         reraise=True,
     )
+    async def generate_ailiveai_persona_profile(
+        self,
+        niche: str,
+        topic: str,
+        mode: str,
+        trace: Optional[dict[str, Any]] = None,
+        persona_gender: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Structured on-camera persona for AliveAI blocking /prompts ``appearance``.
+        """
+        pg = (persona_gender or "FEMALE").strip().upper()
+        if pg not in ("MALE", "FEMALE", "TRANS"):
+            pg = "FEMALE"
+        system_prompt = (
+            "You are a casting director for AliveAI image generation (Create Prompt API). "
+            "Output one raw JSON object with these keys (all string values required unless noted; no markdown, no code fences):\n"
+            "- full_name: realistic Western-style given name and family name (two words). API uses this to influence the face.\n"
+            "- face_details: max ~950 characters. Only facial detail for the face-improve step: eye shape and color, eyelids, "
+            "eyebrow shape and density, nose bridge and tip, lips shape, jawline and chin, cheekbones, overall face shape, "
+            "visible skin texture on the face. Be specific.\n"
+            "- character_appearance: max ~1450 characters. Full-body description: apparent age, nationality cues, height and "
+            "build (athletic, curvy, slim, stocky, petite, etc.), posture, hair (length, cut, color), skin on body, wardrobe "
+            "head-to-toe. Face matches full_name; do not paste face_details verbatim.\n"
+            "- age, nationalities, height, body_shape, hair, skin_tone, wardrobe_style, expressions_grimaces, face (short UI summary).\n"
+            "- image_background: max ~600 characters; soft backdrop, lighting.\n"
+            "- image_scene: max ~500 characters; still atmosphere (may be empty string).\n"
+            "- from_location: max 80 characters or empty string.\n"
+            "- negative_details: max ~400 characters (artifacts to avoid).\n"
+            "- block_explicit_content: boolean, true for social-safe content.\n"
+            f"The on-screen subject gender is fixed to {pg} (AliveAI MALE|FEMALE|TRANS). "
+            "All fields must consistently match that gender.\n"
+            "Align with niche and topic tone; no spoken dialogue from the topic."
+        )
+        user_prompt = (
+            f"Niche: {niche}. Topic (for tone only): {topic}. Creator mode: {mode}. "
+            f"Mandatory persona gender: {pg}. Invent one believable on-screen persona; every visual detail must match."
+        )
+        emit(
+            "gemini_request_start",
+            operation="generate_ailiveai_persona_profile",
+            prompt_chars=len(system_prompt) + len(user_prompt),
+            **self._trace_kwargs(trace),
+        )
+        response = await self.model.generate_content_async(
+            contents=[{"role": "user", "parts": [system_prompt, user_prompt]}],
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.65,
+                response_mime_type="application/json",
+            ),
+        )
+        self._log_gemini_usage("generate_ailiveai_persona_profile", response, trace)
+        emit("gemini_request_success", operation="generate_ailiveai_persona_profile", **self._trace_kwargs(trace))
+        content_text = response.text
+        if content_text.startswith("```json"):
+            content_text = content_text[7:-3].strip()
+        elif content_text.startswith("```"):
+            content_text = content_text[3:-3].strip()
+        parsed = json.loads(content_text)
+        if not isinstance(parsed, dict):
+            raise ContentGenerationError("Invalid persona profile payload from AI model")
+        required = (
+            "full_name",
+            "face_details",
+            "character_appearance",
+            "age",
+            "nationalities",
+            "height",
+            "body_shape",
+            "face",
+            "expressions_grimaces",
+            "hair",
+            "skin_tone",
+            "wardrobe_style",
+            "image_background",
+            "image_scene",
+            "from_location",
+            "negative_details",
+        )
+        allow_empty = frozenset({"from_location", "image_scene"})
+        for key in required:
+            if key not in parsed:
+                raise ContentGenerationError(f"Persona profile missing key: {key}")
+            if key in allow_empty:
+                continue
+            if not str(parsed.get(key) or "").strip():
+                raise ContentGenerationError(f"Persona profile empty key: {key}")
+        bec = parsed.get("block_explicit_content")
+        if isinstance(bec, str) and bec.strip().lower() in ("true", "1", "yes"):
+            parsed["block_explicit_content"] = True
+        elif isinstance(bec, str) and bec.strip().lower() in ("false", "0", "no"):
+            parsed["block_explicit_content"] = False
+        elif not isinstance(bec, bool):
+            parsed["block_explicit_content"] = True
+        return parsed
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception(_is_gemini_retryable),
+        reraise=True,
+    )
     async def generate_scene_plan(
         self,
         niche: str,
@@ -146,6 +248,7 @@ class GeminiService:
         mode: str,
         scene_count: int,
         trace: Optional[dict[str, Any]] = None,
+        ailiveai_on_camera_topic_scene: bool = False,
     ) -> list[dict]:
         """
         Returns a list of scene dicts: scene_index, prompt, duration (seconds 3–5), role (hook|motion|detail).
@@ -177,7 +280,16 @@ class GeminiService:
             "- 'A glass of water with lemon slices and ice cubes on a marble surface, high contrast lighting, fresh aesthetic'"
             "- 'Yoga mat unrolled near a sunlit window, peaceful bedroom, soft shadows, gentle camera drift'"
         )
+        ailive_rules = (
+            "RULES for this on-camera image-to-video shot (a reference portrait of the talent is generated separately):"
+            "1. Anchor the beat to the TOPIC and NICHE — setting, props, situation, and emotional arc for one clip."
+            "2. You may describe subtle facial expressions, head movement, reactions, and light upper-body gestures that fit the topic."
+            "3. Do NOT restate a full casting sheet (no exhaustive measurements list); assume likeness is fixed from the reference image."
+            "4. One continuous 5–10 second shot: coherent lighting, vertical framing, readable composition."
+            "5. Avoid explicit sexual content, gore, or hateful stereotypes."
+        )
         if n == 1:
+            rules_block = ailive_rules if ailiveai_on_camera_topic_scene else strict_rules
             system_prompt = (
                 "You are a director for short-form vertical video (Instagram Reels/Stories). "
                 "Output a raw JSON object with a single key 'scenes' whose value is an array of exactly 1 object. "
@@ -186,11 +298,15 @@ class GeminiService:
                 "'role' (must be exactly 'motion'). "
                 "The prompt should read as one uninterrupted clip (about 5–10 seconds of final video): setting, mood, key visual, optional camera drift. "
                 "Do NOT use markdown or code fences. Output raw JSON only."
-                + strict_rules
+                + rules_block
             )
             user_prompt = (
                 f"Niche: {niche}. Topic: {topic}. Content type: {content_type}. Creator mode: {mode}. "
-                "Write one rich scene description for a single generative video (not a multi-beat storyboard)."
+                + (
+                    "Write one scene focused on what happens in the video given the topic — not a full character design sheet."
+                    if ailiveai_on_camera_topic_scene
+                    else "Write one rich scene description for a single generative video (not a multi-beat storyboard)."
+                )
             )
         else:
             system_prompt = (

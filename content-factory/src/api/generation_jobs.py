@@ -123,6 +123,7 @@ async def preview_scenes(body: PreviewScenesBody, request: Request):
 
     model_svc = AnthropicService() if use_anthropic else GeminiService()
     exec_mode = (body.execution_mode or "").strip()
+    ailive_scene = exec_mode == "ailiveai_single_video"
     if exec_mode == "ailiveai_single_video":
         n = 1
     elif body.scene_count is not None:
@@ -137,6 +138,7 @@ async def preview_scenes(body: PreviewScenesBody, request: Request):
                 content_type=body.content_type,
                 mode=body.mode,
                 scene_count=n,
+                ailiveai_on_camera_topic_scene=ailive_scene,
             )
         else:
             plan = await model_svc.generate_scene_plan(
@@ -145,6 +147,7 @@ async def preview_scenes(body: PreviewScenesBody, request: Request):
                 content_type=body.content_type,
                 mode=body.mode,
                 scene_count=n,
+                ailiveai_on_camera_topic_scene=ailive_scene,
             )
     except (AnthropicContentGenerationError, GeminiContentGenerationError) as e:
         if (
@@ -161,6 +164,7 @@ async def preview_scenes(body: PreviewScenesBody, request: Request):
                     content_type=body.content_type,
                     mode=body.mode,
                     scene_count=n,
+                    ailiveai_on_camera_topic_scene=ailive_scene,
                 )
                 for idx, row in enumerate(plan):
                     if isinstance(row, dict):
@@ -199,6 +203,7 @@ async def preview_scenes(body: PreviewScenesBody, request: Request):
                     content_type=body.content_type,
                     mode=body.mode,
                     scene_count=n,
+                    ailiveai_on_camera_topic_scene=ailive_scene,
                 )
                 for idx, row in enumerate(plan):
                     if isinstance(row, dict):
@@ -257,6 +262,25 @@ class GenerationJobCreateRequest(BaseModel):
     ailiveai_server_id: Optional[str] = None
     ailiveai_last_frame_media_id: Optional[str] = None
     ailiveai_video_quality: Optional[str] = Field(default=None, description="V_480P|V_720P when videoModel is GROK")
+    ailiveai_seed: Optional[str] = Field(
+        default=None,
+        max_length=18,
+        description="Optional numeric seed (max 18 digits) for POST /prompts and /prompts/image-to-video.",
+    )
+    ailiveai_custom_image: Optional[bool] = Field(
+        default=None,
+        description="Alive image-to-video customImage: true when mediaId refers to an external/custom upload flow.",
+    )
+    ailiveai_video_frame_rate: Optional[str] = Field(
+        default=None,
+        description="Alive videoFrameRate: LOW | MEDIUM | HIGH",
+    )
+    ailiveai_motion_strength: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=6,
+        description="Alive motionStrength (0–6). Only applied when videoModel is DEFAULT.",
+    )
 
 
 class GenerationJobCreateResponse(BaseModel):

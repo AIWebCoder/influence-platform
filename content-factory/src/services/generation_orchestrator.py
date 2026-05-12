@@ -195,6 +195,90 @@ def _is_anthropic_credit_error(err: Exception) -> bool:
     return "credit balance is too low" in msg or "plans & billing" in msg
 
 
+def _ailive_appearance_from_profile(profile: dict[str, Any]) -> str:
+    ca = str(profile.get("character_appearance") or "").strip()
+    if ca:
+        return ca[:1500]
+    app = str(profile.get("appearance_for_image_model") or "").strip()
+    if app:
+        return app[:1500]
+    parts: list[str] = []
+    for label, key in (
+        ("Age", "age"),
+        ("Heritage", "nationalities"),
+        ("Height", "height"),
+        ("Face", "face"),
+        ("Expressions", "expressions_grimaces"),
+        ("Hair", "hair"),
+        ("Skin", "skin_tone"),
+        ("Body", "body_shape"),
+        ("Wardrobe", "wardrobe_style"),
+    ):
+        v = str(profile.get(key) or "").strip()
+        if v:
+            parts.append(f"{label}: {v}")
+    return ", ".join(parts)[:1500] if parts else ""
+
+
+def _ailive_fallback_appearance(niche: str, topic: str) -> str:
+    t = (topic or "").strip() or (niche or "").strip() or "the content"
+    n = (niche or "").strip() or "content"
+    return (
+        f"On-screen creator for the {n} niche: approachable, confident presence. Tone aligned with: {t}. "
+        "Soft cinematic key light, shallow depth of field, clean modern background, natural skin texture."
+    )[:1500]
+
+
+def _ailiveai_persona_gender_from_payload(payload: dict[str, Any]) -> str:
+    g = str(payload.get("ailiveai_gender") or "").strip().upper()
+    return g if g in ("MALE", "FEMALE", "TRANS") else "FEMALE"
+
+
+async def _generate_ailive_persona_if_needed(
+    *,
+    need_persona: bool,
+    appearance_override: str,
+    use_anthropic: bool,
+    text_svc: Any,
+    niche: str,
+    topic: str,
+    mode: str,
+    persona_gender: str,
+    gtrace: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Returns structured persona dict, or None if skipped or generation failed."""
+    if not need_persona or appearance_override:
+        return None
+    if use_anthropic:
+        try:
+            return await text_svc.generate_ailiveai_persona_profile(
+                niche=niche, topic=topic, mode=mode, persona_gender=persona_gender
+            )
+        except Exception as e:
+            if settings.GEMINI_API_KEY and _is_anthropic_credit_error(e):
+                emit(
+                    "text_provider_fallback",
+                    job_id=str(gtrace.get("job_id", "")),
+                    step=str(gtrace.get("step", "persona")),
+                    from_provider="anthropic",
+                    to_provider="gemini",
+                    reason="anthropic_credit_low",
+                    level="warning",
+                )
+                gemini = GeminiService()
+                return await gemini.generate_ailiveai_persona_profile(
+                    niche=niche, topic=topic, mode=mode, persona_gender=persona_gender, trace=gtrace
+                )
+            raise
+    try:
+        return await text_svc.generate_ailiveai_persona_profile(
+            niche=niche, topic=topic, mode=mode, persona_gender=persona_gender, trace=gtrace
+        )
+    except Exception as e:
+        logger.warning("ailiveai persona generation failed: %s", e)
+        return None
+
+
 def _ffmpeg_concat_sync(urls: list[str]) -> tuple[Optional[str], dict[str, Any]]:
     meta: dict[str, Any] = {"clips": len(urls)}
     if not shutil.which("ffmpeg"):
@@ -280,6 +364,20 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
             applied_scenes=scene_count,
             demo_max_scenes=settings.GENERATION_DEMO_MAX_SCENES,
         )
+    ailive_topic_scene = exec_mode == "ailiveai_single_video"
+    appearance_override = str(payload.get("ailiveai_image_appearance") or "").strip()
+    persona_gender = _ailiveai_persona_gender_from_payload(payload)
+    persona_profile = await _generate_ailive_persona_if_needed(
+        need_persona=ailive_topic_scene,
+        appearance_override=appearance_override,
+        use_anthropic=use_anthropic,
+        text_svc=text_svc,
+        niche=niche,
+        topic=topic,
+        mode=mode,
+        persona_gender=persona_gender,
+        gtrace=gtrace,
+    )
     if use_anthropic:
         try:
             plan = await text_svc.generate_scene_plan(
@@ -288,6 +386,7 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
                 content_type=content_type,
                 mode=mode,
                 scene_count=scene_count,
+                ailiveai_on_camera_topic_scene=ailive_topic_scene,
             )
             copy = await text_svc.generate_caption(niche=niche, topic=topic)
         except Exception as e:
@@ -309,6 +408,7 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
                     mode=mode,
                     scene_count=scene_count,
                     trace=gtrace,
+                    ailiveai_on_camera_topic_scene=ailive_topic_scene,
                 )
                 copy = await gemini.generate_caption(niche=niche, topic=topic, trace=gtrace)
             else:
@@ -321,9 +421,17 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
             mode=mode,
             scene_count=scene_count,
             trace=gtrace,
+            ailiveai_on_camera_topic_scene=ailive_topic_scene,
         )
         copy = await text_svc.generate_caption(niche=niche, topic=topic, trace=gtrace)
     merged = dict(payload)
+    if ailive_topic_scene and not appearance_override:
+        if persona_profile:
+            merged["ailiveai_persona"] = persona_profile
+            app_line = _ailive_appearance_from_profile(persona_profile)
+            merged["ailiveai_image_appearance"] = app_line or _ailive_fallback_appearance(niche, topic)
+        else:
+            merged["ailiveai_image_appearance"] = _ailive_fallback_appearance(niche, topic)
     merged["caption"] = copy.get("caption", "")
     merged["hashtags"] = copy.get("hashtags", [])
     job.input_payload = merged
@@ -349,7 +457,12 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
     ctrl0["scene_generation"] = "completed"
     job.step_control = ctrl0
     job.progress = 5
-    await svc.append_log(job, "Draft scenes and caption generated. Launch to run media pipeline.")
+    draft_msg = (
+        "Draft persona, scene, and caption generated. Launch to run media pipeline."
+        if ailive_topic_scene
+        else "Draft scenes and caption generated. Launch to run media pipeline."
+    )
+    await svc.append_log(job, draft_msg)
     svc.touch(job)
     await db.flush()
     emit(
@@ -748,8 +861,13 @@ async def _step_scene_generation(db, svc: GenerationJobService, job: GenerationJ
 
     use_anthropic = _prefer_anthropic()
     text_svc = AnthropicService() if use_anthropic else GeminiService()
-    raw_scene_count = max(1, int(payload.get("scene_count") or 7))
-    scene_count = _capped_scene_count(payload)
+    exec_mode = str(getattr(job, "execution_mode", "") or "").strip()
+    if exec_mode == "ailiveai_single_video":
+        raw_scene_count = 1
+        scene_count = 1
+    else:
+        raw_scene_count = max(1, int(payload.get("scene_count") or 7))
+        scene_count = _capped_scene_count(payload)
     if settings.GENERATION_DEMO_MODE and scene_count < raw_scene_count:
         emit(
             "demo_scene_count_capped",
@@ -761,6 +879,20 @@ async def _step_scene_generation(db, svc: GenerationJobService, job: GenerationJ
         )
     gtrace = {"job_id": gid, "step": "scene_generation"}
     await _abort_if_job_or_step_cancelling(db, svc, job, step, "scene_generation")
+    ailive_topic_scene = exec_mode == "ailiveai_single_video"
+    appearance_override = str(payload.get("ailiveai_image_appearance") or "").strip()
+    persona_gender_sg = _ailiveai_persona_gender_from_payload(payload)
+    persona_profile = await _generate_ailive_persona_if_needed(
+        need_persona=ailive_topic_scene,
+        appearance_override=appearance_override,
+        use_anthropic=use_anthropic,
+        text_svc=text_svc,
+        niche=niche,
+        topic=topic,
+        mode=mode,
+        persona_gender=persona_gender_sg,
+        gtrace=gtrace,
+    )
     if use_anthropic:
         try:
             plan = await text_svc.generate_scene_plan(
@@ -769,6 +901,7 @@ async def _step_scene_generation(db, svc: GenerationJobService, job: GenerationJ
                 content_type=content_type,
                 mode=mode,
                 scene_count=scene_count,
+                ailiveai_on_camera_topic_scene=ailive_topic_scene,
             )
             copy = await text_svc.generate_caption(niche=niche, topic=topic)
         except Exception as e:
@@ -790,6 +923,7 @@ async def _step_scene_generation(db, svc: GenerationJobService, job: GenerationJ
                     mode=mode,
                     scene_count=scene_count,
                     trace=gtrace,
+                    ailiveai_on_camera_topic_scene=ailive_topic_scene,
                 )
                 copy = await gemini.generate_caption(niche=niche, topic=topic, trace=gtrace)
             else:
@@ -802,12 +936,20 @@ async def _step_scene_generation(db, svc: GenerationJobService, job: GenerationJ
             mode=mode,
             scene_count=scene_count,
             trace=gtrace,
+            ailiveai_on_camera_topic_scene=ailive_topic_scene,
         )
         await _abort_if_job_or_step_cancelling(db, svc, job, step, "scene_generation")
     await _abort_if_job_or_step_cancelling(db, svc, job, step, "scene_generation")
     if not use_anthropic:
         copy = await text_svc.generate_caption(niche=niche, topic=topic, trace=gtrace)
     merged = dict(payload)
+    if ailive_topic_scene and not appearance_override:
+        if persona_profile:
+            merged["ailiveai_persona"] = persona_profile
+            app_line = _ailive_appearance_from_profile(persona_profile)
+            merged["ailiveai_image_appearance"] = app_line or _ailive_fallback_appearance(niche, topic)
+        else:
+            merged["ailiveai_image_appearance"] = _ailive_fallback_appearance(niche, topic)
     merged["caption"] = copy.get("caption", "")
     merged["hashtags"] = copy.get("hashtags", [])
     job.input_payload = merged
@@ -1651,11 +1793,36 @@ async def _step_ailiveai_single_video(db, svc: GenerationJobService, job: Genera
         or (getattr(settings, "AILIVEAI_MEDIA_ID", None) or "")
     ).strip() or None
     aliveai_aspect = "PORTRAIT" if ctype in ("reel", "story") else "LANDSCAPE"
+    persona_blob = payload.get("ailiveai_persona")
+    persona_dict = persona_blob if isinstance(persona_blob, dict) else None
     image_name = str(payload.get("topic") or payload.get("niche") or "Character").strip()[:200]
-    image_app = str(payload.get("ailiveai_image_appearance") or "").strip() or prompt
+    if persona_dict and str(persona_dict.get("full_name") or "").strip():
+        image_name = str(persona_dict["full_name"]).strip()[:200]
+    explicit_appearance = str(payload.get("ailiveai_image_appearance") or "").strip()
+    image_app = explicit_appearance or prompt
+    if not explicit_appearance:
+        emit(
+            "ailiveai_appearance_missing_using_scene_prompt",
+            job_id=gid,
+            step="video_generation",
+            execution_mode="ailiveai_single_video",
+            level="warning",
+            note="Blocking /prompts appearance falls back to combined scene text; portrait may look like the scene (e.g. room) not a persona.",
+        )
     scene_extra = str(payload.get("ailiveai_scene") or "").strip() or None
     if not scene_extra and scenes:
         scene_extra = (scenes[0].prompt or "")[:600] or None
+    raw_seed = str(payload.get("ailiveai_seed") or "").strip() or None
+    raw_ci = payload.get("ailiveai_custom_image")
+    custom_image_opt = raw_ci if isinstance(raw_ci, bool) else None
+    video_frame_rate_opt = str(payload.get("ailiveai_video_frame_rate") or "").strip() or None
+    motion_raw = payload.get("ailiveai_motion_strength")
+    motion_strength_opt: Optional[int] = None
+    if motion_raw is not None and str(motion_raw).strip() != "":
+        try:
+            motion_strength_opt = int(motion_raw)
+        except (TypeError, ValueError):
+            motion_strength_opt = None
     ailiveai = AiliveaiService()
     t0 = time.perf_counter()
     max_attempts = 3
@@ -1707,6 +1874,11 @@ async def _step_ailiveai_single_video(db, svc: GenerationJobService, job: Genera
             server_id=str(payload.get("ailiveai_server_id") or "").strip() or None,
             last_frame_media_id=str(payload.get("ailiveai_last_frame_media_id") or "").strip() or None,
             video_quality=str(payload.get("ailiveai_video_quality") or "").strip() or None,
+            blocking_persona=persona_dict,
+            seed=raw_seed,
+            custom_image=custom_image_opt,
+            video_frame_rate=video_frame_rate_opt,
+            motion_strength=motion_strength_opt,
             trace={"job_id": gid, "step": "video_generation"},
         )
         if result.get("status") == "completed" and result.get("video_url"):
@@ -1986,7 +2158,17 @@ async def generate_scene_preview(
         else:
             if not settings.KIE_API_KEY or settings.KIE_API_KEY in ("",):
                 raise RuntimeError("KIE_API_KEY not configured")
-            prompt = f"{sc.prompt} — single frame preview, {ctype}, high quality."
+            exec_mode = str(getattr(job, "execution_mode", "") or "").strip()
+            persona_app = str(payload.get("ailiveai_image_appearance") or "").strip()
+            if exec_mode == "ailiveai_single_video" and persona_app:
+                scene_brief = (sc.prompt or "").strip()
+                prompt = (
+                    f"{persona_app[:1200]} — Cinematic single frame for {ctype}, high quality. "
+                    f"The person is the clear subject; environment may reflect this scene mood (do not replace the person): "
+                    f"{scene_brief[:500]}"
+                )
+            else:
+                prompt = f"{sc.prompt} — single frame preview, {ctype}, high quality."
             url = await kie.generate_image(prompt, aspect_ratio=aspect, trace=preview_trace)
             if url == "ERROR: INSUFFICIENT_CREDITS":
                 raise RuntimeError("Kie.ai Credits Insufficient. Please top up.")

@@ -78,9 +78,96 @@ def _http_error_message(status_code: int, auth_mode: str, *, request_url: str = 
     return f"HTTP_{status_code}"
 
 
+def _main_appearance_from_persona(persona: Optional[dict[str, Any]], fallback: str) -> str:
+    """Prefer API-oriented ``character_appearance``; support legacy ``appearance_for_image_model``."""
+    if isinstance(persona, dict):
+        ca = str(persona.get("character_appearance") or "").strip()
+        if ca:
+            return ca[:1500]
+        legacy = str(persona.get("appearance_for_image_model") or "").strip()
+        if legacy:
+            return legacy[:1500]
+    return (fallback or "").strip()[:1500]
+
+
+def _blocking_name_from_persona(persona: Optional[dict[str, Any]], fallback: str) -> str:
+    """Alive ``name`` affects the face — use a realistic full name when available."""
+    if isinstance(persona, dict):
+        fn = str(persona.get("full_name") or "").strip()
+        if fn:
+            return fn[:200]
+    return (fallback or "Character").strip()[:200]
+
+
+def _blocking_optionals_from_persona(persona: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """Optional Create Prompt fields derived from stored ``ailiveai_persona``."""
+    out: dict[str, Any] = {}
+    if not isinstance(persona, dict):
+        return out
+    fd = str(persona.get("face_details") or "").strip()
+    if fd:
+        out["face_details"] = fd[:1000]
+    bg = str(persona.get("image_background") or "").strip()
+    if bg:
+        out["background"] = bg[:1000]
+    fl = str(persona.get("from_location") or "").strip()
+    if fl:
+        out["from_location"] = fl[:100]
+    isc = str(persona.get("image_scene") or "").strip()
+    if isc:
+        out["image_scene"] = isc[:1000]
+    nd = str(persona.get("negative_details") or "").strip()
+    if nd:
+        out["negative_details"] = nd[:1000]
+    return out
+
+
+def _append_alive_response_detail(base: str, response: httpx.Response) -> str:
+    """Include AliveAI JSON or raw body snippet so job logs are actionable (e.g. HTTP_400 causes)."""
+    raw = (response.text or "").strip()
+    if not raw:
+        return base
+    try:
+        data = response.json()
+        if isinstance(data, dict):
+            for key in ("message", "error", "detail", "description", "reason"):
+                v = data.get(key)
+                if isinstance(v, str) and v.strip():
+                    return f"{base}: {v.strip()[:500]}"
+                if isinstance(v, list) and v:
+                    parts = [str(x).strip() for x in v[:5] if str(x).strip()]
+                    if parts:
+                        return f"{base}: {'; '.join(parts)[:500]}"
+    except Exception:
+        pass
+    safe = raw[:500].replace("\n", " ")
+    return f"{base}: {safe}"
+
+
 def _video_length_for_aliveai(duration_seconds: int) -> str:
     """AliveAI VideoLength: SHORT (~5s) or MEDIUM (~10s) only."""
     return "SHORT" if int(duration_seconds) <= 5 else "MEDIUM"
+
+
+def _normalize_alive_seed(raw: Optional[str]) -> Optional[str]:
+    """Optional seed: numeric string, max 18 digits (OpenAPI image + video creates)."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s or not s.isdigit():
+        return None
+    return s[:18] if len(s) > 18 else s
+
+
+def _normalize_image_to_video_scene(raw: Optional[str]) -> Optional[str]:
+    """``scene`` is optional; when sent it must be 1..600 characters."""
+    s = (raw or "").strip()
+    if len(s) < 1:
+        return None
+    return s[:600]
+
+
+_VALID_VIDEO_FRAME_RATES = frozenset({"LOW", "MEDIUM", "HIGH"})
 
 
 def _medias_list_from_container(container: dict[str, Any]) -> list[Any]:
@@ -154,6 +241,16 @@ class AiliveaiService:
         gender: Optional[str] = "FEMALE",
         aspect_ratio_aliveai: Optional[str] = None,
         server_id: Optional[str] = None,
+        face_details: Optional[str] = None,
+        background: Optional[str] = None,
+        from_location: Optional[str] = None,
+        image_scene: Optional[str] = None,
+        negative_details: Optional[str] = None,
+        face_improve_enabled: bool = True,
+        face_model: Optional[str] = None,
+        face_improve_strength: Optional[int] = None,
+        block_explicit_content: Optional[bool] = None,
+        seed: Optional[str] = None,
         trace: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """POST /prompts with blocking header; return first IMAGE media ``id`` from ``promptContainer``."""
@@ -178,6 +275,38 @@ class AiliveaiService:
             body["gender"] = g
         if aspect_ratio_aliveai in ("DEFAULT", "SQUARE", "PORTRAIT", "LANDSCAPE"):
             body["aspectRatio"] = aspect_ratio_aliveai
+        fd = (face_details or "").strip()
+        if fd:
+            body["faceDetails"] = fd[:1000]
+            body["faceImproveEnabled"] = bool(face_improve_enabled)
+            fm = (face_model or "REALISM").strip().upper()
+            if fm in ("REALISM", "CREATIVE"):
+                body["faceModel"] = fm
+            fis = face_improve_strength
+            if fis is None:
+                fis = 5
+            try:
+                fi = int(fis)
+            except (TypeError, ValueError):
+                fi = 5
+            body["faceImproveStrength"] = max(0, min(10, fi))
+        bg = (background or "").strip()
+        if bg:
+            body["background"] = bg[:1000]
+        fl = (from_location or "").strip()
+        if fl:
+            body["fromLocation"] = fl[:100]
+        isc = (image_scene or "").strip()
+        if isc:
+            body["scene"] = isc[:1000]
+        nd = (negative_details or "").strip()
+        if nd:
+            body["negativeDetails"] = nd[:1000]
+        if block_explicit_content is not None:
+            body["blockExplicitContent"] = bool(block_explicit_content)
+        seed_n = _normalize_alive_seed(seed)
+        if seed_n:
+            body["seed"] = seed_n
         url = f"{self.create_base}/prompts"
         params: dict[str, str] = {}
         if server_id and str(server_id).strip():
@@ -188,6 +317,8 @@ class AiliveaiService:
             step=tb.get("step"),
             endpoint=url,
             appearance_len=len(app),
+            has_face_details=bool(fd),
+            has_background=bool(bg),
         )
         try:
             async with httpx.AsyncClient(timeout=90.0) as client:
@@ -206,12 +337,11 @@ class AiliveaiService:
                     body_preview=preview,
                 )
                 if resp.status_code >= 400:
+                    base = _http_error_message(resp.status_code, self._auth_mode_resolved, request_url=url)
                     return {
                         "media_id": None,
                         "status": "failed",
-                        "error": _http_error_message(
-                            resp.status_code, self._auth_mode_resolved, request_url=url
-                        ),
+                        "error": _append_alive_response_detail(base, resp),
                     }
                 data = resp.json()
                 if not isinstance(data, dict):
@@ -259,6 +389,11 @@ class AiliveaiService:
         server_id: Optional[str] = None,
         last_frame_media_id: Optional[str] = None,
         video_quality: Optional[str] = None,
+        blocking_persona: Optional[dict[str, Any]] = None,
+        seed: Optional[str] = None,
+        custom_image: Optional[bool] = None,
+        video_frame_rate: Optional[str] = None,
+        motion_strength: Optional[int] = None,
         trace: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         _ = aspect_ratio
@@ -269,8 +404,16 @@ class AiliveaiService:
             return {"video_url": None, "status": "failed", "error": "NO_AILIVEAI_BASE_URL"}
         mid = (media_id or "").strip()
         if not mid:
-            app = (image_appearance or prompt or "").strip()
-            nm = (image_name or "Character").strip()[:200]
+            app_raw = (image_appearance or prompt or "").strip()
+            app = _main_appearance_from_persona(blocking_persona, app_raw)
+            nm0 = (image_name or "Character").strip()
+            nm = _blocking_name_from_persona(blocking_persona, nm0)
+            opt = _blocking_optionals_from_persona(blocking_persona)
+            bec: Optional[bool] = None
+            if isinstance(blocking_persona, dict):
+                raw_bec = blocking_persona.get("block_explicit_content")
+                if isinstance(raw_bec, bool):
+                    bec = raw_bec
             img = await self.create_blocking_source_image(
                 app,
                 name=nm,
@@ -278,6 +421,13 @@ class AiliveaiService:
                 gender=image_gender,
                 aspect_ratio_aliveai=aliveai_aspect,
                 server_id=server_id,
+                face_details=opt.get("face_details"),
+                background=opt.get("background"),
+                from_location=opt.get("from_location"),
+                image_scene=opt.get("image_scene"),
+                negative_details=opt.get("negative_details"),
+                block_explicit_content=bec,
+                seed=seed,
                 trace=tb,
             )
             if img.get("error") or not img.get("media_id"):
@@ -298,14 +448,30 @@ class AiliveaiService:
             "text": text[:1500],
             "videoLength": _video_length_for_aliveai(d),
         }
-        if scene and str(scene).strip():
-            body["scene"] = str(scene).strip()[:600]
+        scene_s = _normalize_image_to_video_scene(scene)
+        if scene_s:
+            body["scene"] = scene_s
         vq = (video_quality or "").strip()
         if vm == "GROK" and vq in ("V_480P", "V_720P"):
             body["videoQuality"] = vq
         lf = (last_frame_media_id or "").strip()
         if lf:
             body["lastFrameMediaId"] = lf
+        seed_v = _normalize_alive_seed(seed)
+        if seed_v:
+            body["seed"] = seed_v
+        if custom_image is not None:
+            body["customImage"] = bool(custom_image)
+        vfr = (video_frame_rate or "").strip().upper()
+        if vfr in _VALID_VIDEO_FRAME_RATES:
+            body["videoFrameRate"] = vfr
+        if vm == "DEFAULT" and motion_strength is not None:
+            try:
+                ms = int(motion_strength)
+            except (TypeError, ValueError):
+                ms = None
+            if ms is not None and 0 <= ms <= 6:
+                body["motionStrength"] = ms
         create_path = f"{self.create_base}/prompts/image-to-video"
         params: dict[str, str] = {}
         if server_id and str(server_id).strip():
@@ -332,14 +498,15 @@ class AiliveaiService:
                     body_preview=create_body,
                 )
                 if create_resp.status_code >= 400:
+                    base = _http_error_message(
+                        create_resp.status_code,
+                        self._auth_mode_resolved,
+                        request_url=create_path,
+                    )
                     return {
                         "video_url": None,
                         "status": "failed",
-                        "error": _http_error_message(
-                            create_resp.status_code,
-                            self._auth_mode_resolved,
-                            request_url=create_path,
-                        ),
+                        "error": _append_alive_response_detail(base, create_resp),
                     }
                 data = create_resp.json()
                 if not isinstance(data, dict):
@@ -348,17 +515,19 @@ class AiliveaiService:
                 if not prompt_id:
                     return {"video_url": None, "status": "failed", "error": "NO_PROMPT_ID"}
                 prompt_id = str(prompt_id).strip()
-                pc = data.get("promptContainer")
-                if isinstance(pc, dict):
-                    early = _first_video_url_from_container(pc)
-                    if early:
-                        emit(
-                            "ailiveai_video_sync_complete",
-                            job_id=tb.get("job_id"),
-                            step=tb.get("step"),
-                            prompt_id=prompt_id,
-                        )
-                        return {"video_url": early, "status": "completed", "error": None}
+                early = _first_video_url_from_container(data)
+                if not early:
+                    pc = data.get("promptContainer")
+                    if isinstance(pc, dict):
+                        early = _first_video_url_from_container(pc)
+                if early:
+                    emit(
+                        "ailiveai_video_sync_complete",
+                        job_id=tb.get("job_id"),
+                        step=tb.get("step"),
+                        prompt_id=prompt_id,
+                    )
+                    return {"video_url": early, "status": "completed", "error": None}
                 poll_path = f"{self.poll_base}/prompts/{prompt_id}"
                 max_polls = max(1, int(getattr(settings, "GENERATION_AILIVEAI_MAX_POLLS", 60)))
                 poll_interval_s = 5
