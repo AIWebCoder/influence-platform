@@ -19,6 +19,14 @@ const montserrat = Montserrat({
 export const metadata: Metadata = {
   title: "Influence Platform",
   description: "Dashboard for Content Factory & Distribution Engine",
+  icons: {
+    icon: [
+      { url: "/favicon-16x16.png", type: "image/png", sizes: "16x16" },
+      { url: "/favicon-32x32.png", type: "image/png", sizes: "32x32" },
+      { url: "/favicon.ico", type: "image/x-icon" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", type: "image/png", sizes: "180x180" }],
+  },
 }
 
 export default function RootLayout({

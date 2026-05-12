@@ -15,6 +15,8 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const { initRedis, consumeQueue } = require('./core/redis');
 const { initDB } = require('./core/database');
+const authMiddleware = require('./middleware/auth');
+const authRouter = require('./managers/authRouter');
 const accountsRouter = require('./managers/accountsRouter');
 const healthRouter = require('./health/healthRouter');
 
@@ -24,9 +26,9 @@ app.use(express.json());
 
 // CORS — Must be before limiter to ensure 429s have CORS headers
 app.use(cors({
-  origin: '*', 
-  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: process.env.ALLOWED_ORIGINS?.split(',').map((o) => o.trim()) || ['http://localhost:3000'],
+  methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-trace-id', 'x-request-id'],
 }));
 
 // Rate Limiting — 5000 requests per 15 minutes per IP
@@ -41,6 +43,16 @@ app.use(limiter);
 
 // Routes
 app.use('/health', healthRouter);
+app.use('/auth', authRouter);
+
+// Prometheus metrics must be public (scrapers have no JWT)
+const { register } = require('./core/metrics');
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', register.contentType);
+  res.end(await register.metrics());
+});
+
+app.use(authMiddleware);
 app.use('/accounts', accountsRouter);
 
 const publicationsRouter = require('./managers/publicationsRouter');
@@ -69,13 +81,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// Prometheus metrics endpoint
-const { register } = require('./core/metrics');
-app.get('/metrics', async (req, res) => {
-  res.set('Content-Type', register.contentType);
-  res.end(await register.metrics());
-});
-
 // Démarrage
 async function start() {
   try {
@@ -83,11 +88,28 @@ async function start() {
     await initRedis();
     console.log('✅ Base de données et Redis prêts');
 
+    const { publishModeLabel } = require('./core/publishMode');
+    const dry = publishModeLabel() === 'DRY_RUN';
+    console.log(JSON.stringify({
+      event: 'publish_pipeline_startup',
+      mode: publishModeLabel(),
+      publish_mode: dry ? 'DRY_RUN_MODE' : 'REAL_PUBLISH_MODE',
+      PUBLISH_DRY_RUN: process.env.PUBLISH_DRY_RUN,
+      hint: dry
+        ? 'DRY_RUN_MODE: no Playwright / Instagram tokens. Set PUBLISH_DRY_RUN=false only for controlled real posts.'
+        : 'REAL_PUBLISH_MODE: external automation and tokens will be used.',
+    }));
+
     // Démarrer le consumer de queue en background
     consumeQueue('content:ready');
 
+    const PublishingWorker = require('./publisher/PublishingWorker');
+    PublishingWorker.startPublishConsumer();
+    const { startTokenExpiryCron } = require('./services/tokenExpiryMonitor');
+    startTokenExpiryCron();
+
     // Initialize Automated Services (after DB/Redis are READY)
-    
+
     // 1. Proxy Health Check (every 5 minutes)
     const ProxyManager = require('./proxy/ProxyManager');
     setInterval(async () => {
@@ -95,7 +117,7 @@ async function start() {
       await ProxyManager.runHealthCheckAll();
     }, 5 * 60 * 1000);
     // Initial run
-    ProxyManager.runHealthCheckAll().catch(err => 
+    ProxyManager.runHealthCheckAll().catch(err =>
       console.warn('[HealthCheck] Initial proxy check failed:', err.message)
     );
 

@@ -37,35 +37,39 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#F9F9F9] px-4 py-12">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-zinc-50 to-zinc-100 px-4 py-12">
       <div
-        className="w-full max-w-[400px] bg-white border border-[#E5E7EB] rounded-[12px] p-10"
-        style={{ boxShadow: "none" }}
+        className="w-full max-w-[420px] rounded-2xl border border-zinc-200 bg-white p-8 shadow-xl shadow-zinc-200/60"
       >
-        <div className="text-center">
-          <h2 className="font-bold text-[22px] mb-2 text-zinc-900">Influence.</h2>
-          <h3 className="text-[20px] font-bold text-zinc-900">{text.login.welcomeBack}</h3>
-          <p className="text-[14px] text-[#6B7280] mt-1 mb-7">{text.login.signInWorkspace}</p>
+        <div className="mb-7 text-center">
+          <div className="mx-auto mb-3 inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-600">
+            Influence Platform
+          </div>
+          <h2 className="text-[26px] font-bold tracking-tight text-zinc-900">Influence.</h2>
+          <h3 className="mt-1 text-[20px] font-semibold text-zinc-900">{text.login.welcomeBack}</h3>
+          <p className="mt-1 text-sm text-zinc-600">{text.login.signInWorkspace}</p>
         </div>
 
         <form onSubmit={handleSubmit}>
           {error && (
-            <div className="rounded-md bg-red-50 p-4 mb-4">
+            <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3">
               <p className="text-sm font-medium text-red-800">{error}</p>
             </div>
           )}
 
-          <div className="space-y-3">
+          <div className="space-y-3.5">
             <div>
               <input
                 id="username"
                 name="username"
                 type="text"
                 required
-                className="w-full rounded-[8px] border border-[#E5E7EB] bg-white py-2.5 px-3.5 text-sm transition-colors placeholder:text-muted-foreground focus:border-[#000000] focus:outline-none"
+                className="w-full rounded-lg border border-zinc-300 bg-white px-3.5 py-2.5 text-sm text-zinc-900 transition-colors placeholder:text-zinc-400 focus:border-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
                 placeholder={text.login.username}
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                style={{ WebkitTextFillColor: "#111827" }}
               />
             </div>
             <div className="relative">
@@ -74,22 +78,25 @@ export default function LoginPage() {
                 name="password"
                 type={showPassword ? "text" : "password"}
                 required
-                className="w-full rounded-[8px] border border-[#E5E7EB] bg-white py-2.5 pr-10 px-3.5 text-sm transition-colors placeholder:text-muted-foreground focus:border-[#000000] focus:outline-none"
+                className="w-full rounded-lg border border-zinc-300 bg-white px-3.5 py-2.5 pr-10 text-sm text-zinc-900 transition-colors placeholder:text-zinc-400 focus:border-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
                 placeholder={text.login.password}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                style={{ WebkitTextFillColor: "#111827" }}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-700"
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-zinc-500 transition-colors hover:text-zinc-700"
+                aria-label={showPassword ? "Hide password" : "Show password"}
               >
                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
             </div>
           </div>
 
-          <div className="mt-5">
+          <div className="mt-6">
             <PrimaryButton type="submit" disabled={loading} className="w-full py-3">
               {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : text.login.signIn}
             </PrimaryButton>

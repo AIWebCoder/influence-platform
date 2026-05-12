@@ -34,6 +34,7 @@ class Base(DeclarativeBase):
 
 # Import models so they are registered with Base metadata
 from src.models.content import Niche, Template, ContentPacket
+from src.models.generation_job import GenerationJob, GenerationStep, GenerationScene
 from src.models.alert import Alert
 from src.models.user import User
 
@@ -42,6 +43,7 @@ async def verify_migrations():
     """Verify that all required tables exist in the database."""
     required_tables = [
         'niches', 'templates', 'content_packets',
+        'generation_jobs', 'generation_steps', 'generation_scenes',
         'accounts', 'proxies', 'publications',
         'alerts', 'users', 'analytics_events'
     ]

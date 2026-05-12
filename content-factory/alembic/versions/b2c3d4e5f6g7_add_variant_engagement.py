@@ -9,6 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
@@ -19,10 +20,26 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('content_packets', sa.Column('variant', sa.String(5), nullable=True))
-    op.add_column('publications', sa.Column('engagement_score', sa.Integer(), nullable=True))
+    bind = op.get_bind()
+    inspector = inspect(bind)
+
+    content_packet_columns = {col["name"] for col in inspector.get_columns('content_packets')}
+    if 'variant' not in content_packet_columns:
+        op.add_column('content_packets', sa.Column('variant', sa.String(5), nullable=True))
+
+    publication_columns = {col["name"] for col in inspector.get_columns('publications')}
+    if 'engagement_score' not in publication_columns:
+        op.add_column('publications', sa.Column('engagement_score', sa.Integer(), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column('publications', 'engagement_score')
-    op.drop_column('content_packets', 'variant')
+    bind = op.get_bind()
+    inspector = inspect(bind)
+
+    publication_columns = {col["name"] for col in inspector.get_columns('publications')}
+    if 'engagement_score' in publication_columns:
+        op.drop_column('publications', 'engagement_score')
+
+    content_packet_columns = {col["name"] for col in inspector.get_columns('content_packets')}
+    if 'variant' in content_packet_columns:
+        op.drop_column('content_packets', 'variant')

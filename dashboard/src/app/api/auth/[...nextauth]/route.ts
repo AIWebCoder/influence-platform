@@ -11,6 +11,21 @@ const authOptions: NextAuthOptions = {
       },
       async authorize(credentials) {
         try {
+          const e2eBypass = process.env.E2E_TEST_BYPASS_AUTH === "true";
+          const e2eUser = process.env.E2E_TEST_USERNAME || "e2e-user";
+          const e2ePass = process.env.E2E_TEST_PASSWORD || "e2e-pass";
+          if (
+            e2eBypass &&
+            credentials?.username === e2eUser &&
+            credentials?.password === e2ePass
+          ) {
+            return {
+              id: "e2e-user",
+              name: e2eUser,
+              accessToken: "e2e-access-token",
+            };
+          }
+
           let apiUrl = process.env.NEXT_PUBLIC_CONTENT_API_URL || "http://localhost:8000";
           if (apiUrl.includes("localhost")) {
             apiUrl = "http://content-factory:8000";

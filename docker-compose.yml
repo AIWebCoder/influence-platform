@@ -1,9 +1,11 @@
+# App code: host folders are bind-mounted so local edits match the container (see per-service volumes).
 services:
   # ─────────────────────────────────────────
   # INFRASTRUCTURE
   # ─────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
+    pull_policy: always
     container_name: ip_postgres
     restart: unless-stopped
     environment:
@@ -24,6 +26,7 @@ services:
 
   pgbouncer:
     image: edoburu/pgbouncer:latest
+    pull_policy: always
     container_name: ip_pgbouncer
     restart: unless-stopped
     ports:
@@ -48,7 +51,8 @@ services:
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
+    pull_policy: always
     container_name: ip_redis
     restart: unless-stopped
     ports:
@@ -75,6 +79,7 @@ services:
     build:
       context: ./content-factory
       dockerfile: Dockerfile
+      pull: true
     container_name: ip_content_factory
     restart: unless-stopped
     ports:
@@ -82,24 +87,50 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ipuser}:${POSTGRES_PASSWORD:-ippassword}@pgbouncer:6432/${POSTGRES_DB:-influence_platform}
       REDIS_URL: redis://redis:6379
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3-flash-preview}
+      TEXT_PROVIDER_PRIMARY: ${TEXT_PROVIDER_PRIMARY:-gemini}
+      DYNAMIC_MODE_STRICT: ${DYNAMIC_MODE_STRICT:-true}
+      GENERATION_ALLOW_SYNTHETIC_PREVIEW_FALLBACK: ${GENERATION_ALLOW_SYNTHETIC_PREVIEW_FALLBACK:-false}
+      GENERATION_ENABLE_DEMO_CAPS: ${GENERATION_ENABLE_DEMO_CAPS:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      KIE_API_KEY: ${KIE_API_KEY:-}
+      SEEDANCE_API_KEY: ${SEEDANCE_API_KEY:-}
+      SEEDANCE_BASE_URL: ${SEEDANCE_BASE_URL:-https://api.kie.ai}
+      AILIVEAI_API_KEY: ${AILIVEAI_API_KEY:-}
+      AILIVEAI_API_TOKEN: ${AILIVEAI_API_TOKEN:-}
+      AILIVEAI_MEDIA_ID: ${AILIVEAI_MEDIA_ID:-}
+      AILIVEAI_BASE_URL: ${AILIVEAI_BASE_URL:-https://api.aliveai.app}
+      AILIVEAI_POLL_BASE_URL: ${AILIVEAI_POLL_BASE_URL:-https://api-server.aliveai.app}
+      AILIVEAI_VIDEO_MODEL: ${AILIVEAI_VIDEO_MODEL:-SEEDANCE}
+      AILIVEAI_AUTH_MODE: ${AILIVEAI_AUTH_MODE:-auto}
+      AILIVEAI_REQUEST_BLOCKING: ${AILIVEAI_REQUEST_BLOCKING:-false}
+      # Seedance poll budget: 144 × 5s ≈ 12 min (Kie wall time can be ~9m+ for 15s output)
+      GENERATION_SEEDANCE_MAX_POLLS: ${GENERATION_SEEDANCE_MAX_POLLS:-144}
+      GENERATION_AILIVEAI_MAX_POLLS: ${GENERATION_AILIVEAI_MAX_POLLS:-60}
+      # UI cost estimate for multi_scene_single_video: credits per second of output (15s × 41 ≈ 615 Kie)
+      SEEDANCE_ESTIMATE_CREDITS_PER_SECOND: ${SEEDANCE_ESTIMATE_CREDITS_PER_SECOND:-41}
       JWT_SECRET: ${JWT_SECRET:-changeme_in_production}
+      FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED: ${FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED:-true}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       SENTRY_DSN: ${SENTRY_DSN:-}
+      # 0 = stable API. Uvicorn --reload restarts the worker and can drop active requests → net::ERR_EMPTY_RESPONSE in the browser.
+      UVICORN_RELOAD: ${UVICORN_RELOAD:-0}
     depends_on:
       pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
-      - ./content-factory/src:/app/src
-      - ./content-factory/alembic:/app/alembic
-      - ./content-factory/alembic.ini:/app/alembic.ini
-      - ./content-factory/tests:/app/tests
+      # Full tree so local changes (entrypoint, requirements, src, alembic) match the container
+      - ./content-factory:/app
+      # Persist structured pipeline trace logs on host
+      - ./content-factory/src/logs:/app/src/logs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -114,6 +145,7 @@ services:
     build:
       context: ./distribution-engine
       dockerfile: Dockerfile
+      pull: true
     container_name: ip_distribution_engine
     restart: unless-stopped
     ports:
@@ -122,6 +154,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ipuser}:${POSTGRES_PASSWORD:-ippassword}@pgbouncer:6432/${POSTGRES_DB:-influence_platform}
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:-changeme_in_production}
+      DISTRIBUTION_API_USERNAME: ${DISTRIBUTION_API_USERNAME}
+      DISTRIBUTION_API_PASSWORD: ${DISTRIBUTION_API_PASSWORD}
+      PROXY_CREDENTIALS_KEY: ${PROXY_CREDENTIALS_KEY:-}
       PROXY_PROVIDER: ${PROXY_PROVIDER:-brightdata}
       PROXY_USERNAME: ${PROXY_USERNAME}
       PROXY_PASSWORD: ${PROXY_PASSWORD}
@@ -132,14 +167,21 @@ services:
       QUEUE_BATCH_SIZE: ${QUEUE_BATCH_SIZE:-5}
       CAMPAIGN_CYCLE_HOURS: ${CAMPAIGN_CYCLE_HOURS:-6}
       CHROMIUM_PATH: /usr/bin/chromium-browser
+      PUBLISH_DRY_RUN: ${PUBLISH_DRY_RUN:-false}
+      PUBLISH_SKIP_RACE_RECHECK: ${PUBLISH_SKIP_RACE_RECHECK:-false}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
     depends_on:
       pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Bind-mounted ./distribution-engine + nodemon: edit JS on the host, no image rebuild.
+    command: ["npm", "run", "dev"]
     volumes:
-      - ./distribution-engine/src:/app/src
-      - ./distribution-engine/tests:/app/tests
+      # Full tree: local `src/` (and tests) are what the container runs
+      - ./distribution-engine:/app
+      # Keep Linux node_modules from the image; do not overwrite with the host folder
+      - /app/node_modules
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 30s
@@ -148,31 +190,97 @@ services:
       start_period: 20s
 
   # ─────────────────────────────────────────
+  # EMULATOR CONTROLLER (Python + Appium)
+  # ─────────────────────────────────────────
+  emulator-controller:
+    build:
+      context: ./emulator-controller
+      dockerfile: Dockerfile
+      pull: true
+    container_name: ip_emulator_controller
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DISTRIBUTION_ENGINE_BASE_URL: http://distribution-engine:3001
+      DISTRIBUTION_API_USERNAME: ${DISTRIBUTION_API_USERNAME}
+      DISTRIBUTION_API_PASSWORD: ${DISTRIBUTION_API_PASSWORD}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ipuser}:${POSTGRES_PASSWORD:-ippassword}@pgbouncer:6432/${POSTGRES_DB:-influence_platform}
+      REDIS_URL: redis://redis:6379
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-3-5-sonnet-20241022}
+      APPIUM_SERVER_URL: ${APPIUM_SERVER_URL:-http://host.docker.internal:4723}
+      ANDROID_APP_PACKAGE: ${ANDROID_APP_PACKAGE:-com.instagram.android}
+      ANDROID_APP_ACTIVITY: ${ANDROID_APP_ACTIVITY:-com.instagram.mainactivity.MainActivity}
+      ADB_PATH: ${ADB_PATH:-adb}
+      ADB_HOST: ${ADB_HOST:-host.docker.internal}
+      ADB_PORT: ${ADB_PORT:-5037}
+      MAX_PARALLEL_EMULATORS: ${MAX_PARALLEL_EMULATORS:-5}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-30}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-15}
+      IDLE_POLL_INTERVAL_SECONDS: ${IDLE_POLL_INTERVAL_SECONDS:-300}
+      MIN_HUMAN_DELAY_SECONDS: ${MIN_HUMAN_DELAY_SECONDS:-1.2}
+      MAX_HUMAN_DELAY_SECONDS: ${MAX_HUMAN_DELAY_SECONDS:-4.5}
+      METRICS_PORT: ${METRICS_PORT:-9101}
+      SCREENSHOT_SERVER_PORT: ${SCREENSHOT_SERVER_PORT:-9102}
+      SCREENSHOT_ONLY_IF_MISSING_AI: ${SCREENSHOT_ONLY_IF_MISSING_AI:-true}
+      PROXY_BRIDGE_LISTEN_HOST: ${PROXY_BRIDGE_LISTEN_HOST:-0.0.0.0}
+      PROXY_BRIDGE_PUBLIC_HOST: ${PROXY_BRIDGE_PUBLIC_HOST:-10.0.2.2}
+      PROXY_BRIDGE_PORT_START: ${PROXY_BRIDGE_PORT_START:-19100}
+      PROXY_BRIDGE_PORT_END: ${PROXY_BRIDGE_PORT_END:-19199}
+      LOG_DIR: /app/logs
+      DEFAULT_MAX_POSTS_PER_DAY: ${DEFAULT_MAX_POSTS_PER_DAY:-3}
+      DEFAULT_MAX_LIKES_PER_HOUR: ${DEFAULT_MAX_LIKES_PER_HOUR:-20}
+      DEFAULT_MAX_FOLLOWS_PER_DAY: ${DEFAULT_MAX_FOLLOWS_PER_DAY:-15}
+    ports:
+      - "9101:9101"
+      - "9102:9102"
+      - "19100-19199:19100-19199"
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      distribution-engine:
+        condition: service_healthy
+    volumes:
+      - ./emulator-controller:/app
+
+  # ─────────────────────────────────────────
   # DASHBOARD (Next.js)
   # ─────────────────────────────────────────
   dashboard:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
+      pull: true
     container_name: ip_dashboard
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_CONTENT_API_URL: http://localhost:8000
-      NEXT_PUBLIC_DISTRIBUTION_API_URL: http://localhost:3001
+      NEXT_PUBLIC_CONTENT_API_URL: ${NEXT_PUBLIC_CONTENT_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_DISTRIBUTION_API_URL: ${NEXT_PUBLIC_DISTRIBUTION_API_URL:-http://localhost:3001}
+      NEXT_PUBLIC_EMULATOR_CONTROLLER_URL: ${NEXT_PUBLIC_EMULATOR_CONTROLLER_URL:-http://localhost:9102}
+      EMULATOR_CONTROLLER_URL: http://emulator-controller:9102
       NEXTAUTH_SECRET: ${JWT_SECRET:-changeme_in_production}
-      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
       NEXT_PUBLIC_SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_DSN: ${SENTRY_DSN:-}
+      NEXT_PUBLIC_FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED: ${NEXT_PUBLIC_FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED:-true}
+      # File watching over bind mounts (Docker Desktop / Windows / macOS)
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+      NEXT_WEBPACK_USEPOLLING: "1"
     depends_on:
       content-factory:
         condition: service_healthy
       distribution-engine:
         condition: service_healthy
+      emulator-controller:
+        condition: service_started
     volumes:
-      - ./dashboard/src:/app/src
-      - ./dashboard/public:/app/public
+      # Full tree: next.config, tailwind, src, public, etc. stay in sync with local
+      - ./dashboard:/app
+      - /app/node_modules
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1"]
       interval: 30s
@@ -185,7 +293,8 @@ services:
   # ─────────────────────────────────────────
 
   prometheus:
-    image: prom/prometheus:v2.50.0
+    image: prom/prometheus:v2.53.4
+    pull_policy: always
     container_name: ip_prometheus
     restart: unless-stopped
     ports:
@@ -199,9 +308,11 @@ services:
     depends_on:
       - content-factory
       - distribution-engine
+      - emulator-controller
 
   grafana:
-    image: grafana/grafana:10.3.1
+    image: grafana/grafana:10.4.8
+    pull_policy: always
     container_name: ip_grafana
     restart: unless-stopped
     ports:

@@ -24,7 +24,13 @@ class ProxyManager {
 
     if (existing.rows.length > 0 && existing.rows[0].is_active) {
       const proxy = existing.rows[0];
-      return { id: accountId, proxy_id: proxy.id, proxy_url: `${proxy.host}:${proxy.port}` };
+      return {
+        id: accountId,
+        proxy_id: proxy.id,
+        proxy_url: `${proxy.host}:${proxy.port}`,
+        proxy_type: proxy.proxy_type || 'http',
+        auth_mode: proxy.auth_mode || 'credentials',
+      };
     }
 
     // 2. Select the best available proxy
@@ -34,7 +40,7 @@ class ProxyManager {
       
       // Select best proxy based on usage count and then latency
       const res = await client.query(`
-        SELECT p.id, p.host, p.port, COUNT(a.id) as assigned_count
+        SELECT p.id, p.host, p.port, p.proxy_type, p.auth_mode, COUNT(a.id) as assigned_count
         FROM proxies p
         LEFT JOIN accounts a ON p.id = a.proxy_id
         WHERE p.is_active = true
@@ -63,7 +69,13 @@ class ProxyManager {
       
       await client.query('COMMIT');
       
-      return { id: accountId, proxy_id: proxy.id, proxy_url: `${proxy.host}:${proxy.port}` };
+      return {
+        id: accountId,
+        proxy_id: proxy.id,
+        proxy_url: `${proxy.host}:${proxy.port}`,
+        proxy_type: proxy.proxy_type || 'http',
+        auth_mode: proxy.auth_mode || 'credentials',
+      };
     } catch (err) {
       await client.query('ROLLBACK');
       console.error('[ProxyManager] Error assigning proxy:', err.message);
@@ -261,7 +273,8 @@ class ProxyManager {
   async getHealthStatus() {
     const pool = getPool();
     const result = await pool.query(
-      `SELECT id, host, port, is_active, response_time, success_rate, total_requests, provider, country, last_checked_at
+      `SELECT id, host, port, is_active, response_time, success_rate, total_requests, provider, country, last_checked_at,
+              proxy_type, auth_mode
        FROM proxies 
        ORDER BY is_active DESC, response_time ASC NULLS LAST`
     );

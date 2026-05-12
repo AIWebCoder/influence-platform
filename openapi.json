@@ -1,0 +1,6700 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AliveAI API",
+    "version": "1.0.0",
+    "description": "API documentation for AliveAI services. For custom integrations or business inquiries, please [contact us](mailto:hello@aliveai.app).\n\n# How It Works\n\n1. **Authenticate** — choose one of the following methods:\n   1. Log in via [Member Login](#operation/login). Use the `accessToken` from the response as the `Authorization` header with the `Bearer` prefix.\n   2. Log in via API Key. Create an API Key in the [Dashboard](https://aliveai.app/settings) and use it as the `Authorization` header with the `Key` prefix.\n2. **Start a generation** — the core endpoints are [Create Image Generation](#operation/createPrompt) and [Create Video Generation](#operation/createImageToVideo). Copy the `promptId` from the response.\n3. **Receive updates** — connect to the WebSocket endpoint at `wss://api.aliveai.app/ws/prompts/{promptId}` to receive real-time progress and results.\n   1. **Optional (development only):** Add the `x-aliveai-request-blocking: true` header to a generation request to receive a synchronous response. The connection stays open until generation is complete and the final result is returned in the response body. For production use, the WebSocket connection is strongly recommended — it provides live previews and status updates without blocking.\n\n# Enterprise White-Label Solutions\n\nWe offer enterprise-ready solutions for businesses that want to integrate state-of-the-art AI generation capabilities into their own platforms. Our unified API covers all aspects of AI generation, including image and video creation, character consistency, roleplay chat, and more. Adult content generation is supported, making the API suitable for a wide range of applications.\n\nOur team can work with you to customize the API and services to meet your specific requirements. [Contact us](mailto:hello@aliveai.app) to learn how we can help you leverage our AI technology for your business.\n\n# Features\n\n## Image Generation\n\n![Image Generation](https://aliveai.app/assets/updates/charcreator.webp \"Title\")\n\n- Generate high-quality images from text prompts.\n- Customizable parameters for style, resolution, and more.\n- Supported AI models:\n  - **Creative** — a versatile model supporting a wide range of styles and subjects.\n  - **Realism** — optimized for photorealism and fine detail.\n  - **Anima** — specializes in anime-style artwork with vibrant colors and dynamic compositions.\n\n## Video Generation\n\n<video loop controls style=\"max-height: 700px\">\n  <source src=\"https://aliveai.app/assets/updates/demo_video_audio.mp4\" type=\"video/mp4\">\n</video>\n\n- Create videos from existing images.\n- Includes audio and speech generation capabilities.\n- Customizable parameters for style, resolution, and more.\n\n## Consistent Characters\n\n![Consistent Characters](https://aliveai.app/assets/updates/update_train.webp \"Title\")\n\nCreate and maintain consistent characters across multiple generations. This is ideal for storytelling, marketing campaigns, and any project that requires recurring characters with a consistent appearance and personality.\n\n### Creating Consistent Character Images\n\n1. Generate a character image using the [Create Image Generation](#operation/createPrompt) endpoint. For best results, use a clear front-facing image with a simple background. Minimal clothing (bikini or nudity) helps the model learn full-body details.\n2. Use that image as the reference (`mediaId`) in the [Edit Image Generation](#operation/editImage) endpoint. Start your prompt with something like: _`extract this person keep her appearance and body shape and same background. <add your prompt here>`_ Choose the AI model based on your desired content type:\n   - For realistic social media content, use the **REALISM** or **QWEN_PRO** model.\n   - For nudity and pornographic content, use the **CREATIVE** or **QWEN_PRO** model.\n   - For specific pornographic content, use a model with a matching [Template](#tag/Template-Resource) (LoRA).\n   - Note: For best results keep the changes minimal and the prompt concise.\n\n## Chatting with AI\n\nBuild immersive roleplay and conversational experiences with consistent AI characters. The chat API supports streamed responses, multiple alternative replies, and on-demand image generation that reflects the ongoing conversation.\n\n### Characters\n\nChat characters define who the user talks to. Each character has a name, a long-form bio used as system context (personality, background, scenario), a short bio for previews, and a default first message.\n\n- Create or update characters via [Create Chat Character](#operation/createChatCharacter) and [Update Chat Character](#operation/updateChatCharacter).\n- Generate a character card automatically from an image with [Create Character From Image](#operation/createChatCharacterFromImage) — a vision model analyzes appearance, clothing, and setting to produce the bio fields.\n- Attach a generated or uploaded image (`mediaId`) to give the character a portrait. Use [Consistent Characters](#consistent-characters) to keep that portrait stable across future image generations.\n\n### Personas\n\nA persona represents the user inside the chat. It carries a display name and an optional bio that is sent to the character as part of the conversation context, so the character knows who they are talking to.\n\n- Manage personas via the [Chat Persona Resource](#tag/Chat-Persona-Resource).\n- One persona can be marked as the default and is reused across new chats.\n\n### Starting and Managing Chats\n\n- Start a chat with [Create Chat](#operation/createChat), supplying a `chatCharacterId`, a `personaId`, and the user's opening message.\n- List existing chats with [Get Chats](#operation/listChats) and fetch full message history (including all candidates) with [Get Chat](#operation/getChat).\n- Delete a chat with [Delete Chat](#operation/deleteChat).\n\n### Sending Messages (Streaming)\n\n- Post a user message with [Send Chat Message](#operation/sendChatMessage). The response is an NDJSON stream of `ChatStreamEvent` objects — one JSON object per line — with the following event types:\n  - `init` — stream metadata, including the new message id.\n  - `token` — incremental text tokens as the character's reply is generated.\n  - `complete` — final message payload once generation finishes.\n  - `error` — terminal error event if generation fails.\n- This allows you to render the character's reply progressively, similar to a typing indicator.\n\n### Candidates, Regeneration, and Editing\n\nEvery character message can have multiple alternative replies (candidates), letting users swipe between variations.\n\n- Regenerate the most recent character reply as a new candidate with [Regenerate Chat Message](#operation/regenerateChatMessage).\n- Edit the text of a specific candidate via the candidate update endpoint to fine-tune tone or fix details.\n- Delete individual messages from the chat history when needed.\n\n### In-Chat Image Generation\n\nCharacters can produce images that match the current narrative context.\n\n- Call [Create Chat Image](#operation/createChatImage) to generate a new image of the character based on the recent chat context. The image is appended to the chat as a media message.\n- Use [Regenerate Chat Image](#operation/regenerateChatImage) to produce alternative image candidates for an existing media message.\n- Image generation reuses the character's reference image, so the visual identity stays consistent across the conversation.\n",
+    "contact": {
+      "name": "AliveAI",
+      "url": "https://aliveai.app",
+      "email": "hello@AliveAi.app"
+    }
+  },
+  "paths": {
+    "/prompts": {
+      "get": {
+        "tags": [
+          "Prompts Manager Resource"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "required": true
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 20
+            }
+          },
+          {
+            "name": "promptType",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/PromptType"
+              }
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "schema": {
+              "description": "Search query",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptsListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Prompts",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      },
+      "post": {
+        "description": "Create a new prompt for image generation",
+        "operationId": "createPrompt",
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "description": "Optional server ID to use for prompt processing. If empty it will select an available server.\n",
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-aliveai-request-blocking",
+            "in": "header",
+            "schema": {
+              "description": "Returns a synchronous response with the generation result. Waits max 40 seconds for the generation to complete.",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "Minimal Example": {
+                  "value": {
+                    "name": "Marcielle Strongmaid",
+                    "appearance": "a strong viking woman, blonde hair, hazel eyes, powerful face, wearing revealing viking armour, full body",
+                    "gender": "FEMALE",
+                    "fromLocation": "NORWAY",
+                    "faceImproveEnabled": true,
+                    "model": "DEFAULT"
+                  }
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/CreatePromptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Prompt created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpValidationProblem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Prompt",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/after-face-swap": {
+      "post": {
+        "description": "Changes the face of an existing image",
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAfterFaceSwapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create After Face Swap",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/character-image": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCharacterImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Character Image",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/character-training-data": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCharacterTrainingDataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Character Training Data",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/create-clothes": {
+      "post": {
+        "description": "Extracts the outfit from an input image and returns a clean front/back clothing collage.",
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClothesImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Clothes",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/create-face": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Face",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/edit-breasts": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEditBreastsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Edit Breasts",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/edit-eyes": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEyeImproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Edit Eyes",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/edit-image": {
+      "post": {
+        "description": "Edit an existing image with a text prompt. Can be used to edit an image or re-use a character from an image in a new scene, outfit or pose",
+        "operationId": "editImage",
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-aliveai-request-blocking",
+            "in": "header",
+            "schema": {
+              "description": "Returns a synchronous response with the generation result. Waits max 40 seconds for the generation to complete.",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEditImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Edit Image",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/edit-improve-face": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEditImproveFaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Edit Improve Face",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/edit-upscale": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUpscaleImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Upscale Image",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/edit-vagina": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEditVaginaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Edit Vagina",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/edit-video-extend": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExtendVideoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Edit Video Extend",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/edit-video-increase-fps": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEditVideoIncreaseFpsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Edit Video Increase Fps",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/enhance-image": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEnhanceImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Enhance Image",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/face-improve": {
+      "post": {
+        "description": "Improves the face of an existing image",
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFaceImproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Face Improve Prompt",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/image-to-video": {
+      "post": {
+        "description": "Create a new prompt for video generation",
+        "operationId": "createImageToVideo",
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "Minimal Video Example": {
+                  "value": {
+                    "mediaId": "1234",
+                    "text": "She is walking towards the camera and then turns around to show her back, revealing her full body in a sexy pose"
+                  }
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/CreateImageToVideoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Image To Video",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/inpaint": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInpaintRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Inpaint",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/inpaint-google": {
+      "post": {
+        "description": "Inpaint an image using Google's inpainting model. This model has better capabilities for consistency but can not handle explicit scenes",
+        "operationId": "inpaintGoogle",
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGoogleInpaintRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Inpaint Google",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/pending": {
+      "get": {
+        "description": "Get pending prompts in the user's queue",
+        "tags": [
+          "Prompts Resource"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingPromptResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Pending",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/queue": {
+      "delete": {
+        "description": "Delete a prompt from the user's queue",
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "promptId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Delete From Queue",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/upscale-video": {
+      "post": {
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUpscaleVideoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Upscale Video",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/video-expression": {
+      "post": {
+        "operationId": "createCharacterExpressionVideo",
+        "tags": [
+          "Prompts Resource"
+        ],
+        "parameters": [
+          {
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVideoExpressionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Character Expression Video",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/prompts/websocket-example-prompt-event": {
+      "get": {
+        "summary": "Websocket Prompt Event Example",
+        "description": "Unused endpoint to show the Websocket payload for a prompt event.\nConnect to `wss://api.aliveai.app/ws/prompts/{promptId}` to receive real-time updates for the prompt.",
+        "tags": [
+          "Prompts Resource"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptProgressResponse"
+                }
+              }
+            }
+          }
+        },
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ],
+        "security": [
+          {
+            "ApiKeyScheme": []
+          }
+        ]
+      }
+    },
+    "/prompts/websocket-example-user-event": {
+      "get": {
+        "summary": "Websocket User Event Example",
+        "description": "Unused endpoint to show the Websocket payload for a user event.\nConnect to `wss://api.aliveai.app/ws/users/r9orK?token={bearerToken}` to receive real-time updates for the user queue.",
+        "tags": [
+          "Prompts Resource"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserEvents"
+                }
+              }
+            }
+          }
+        },
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ],
+        "security": [
+          {
+            "ApiKeyScheme": []
+          }
+        ]
+      }
+    },
+    "/prompts/{promptId}": {
+      "delete": {
+        "description": "Deletes a completed prompt",
+        "tags": [
+          "Prompts Manager Resource"
+        ],
+        "parameters": [
+          {
+            "name": "promptId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Delete Prompt",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "Prompts Manager Resource"
+        ],
+        "parameters": [
+          {
+            "name": "promptId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptContainer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Prompt",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/upload": {
+      "post": {
+        "description": "Upload a file to the server. Returns a mediaId which can be used to reference the file later.",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "image": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Upload File",
+        "tags": [
+          "Upload Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chat-characters": {
+      "get": {
+        "description": "Lists all non-deleted chat characters owned by the authenticated user.",
+        "operationId": "listChatCharacters",
+        "tags": [
+          "Chat Character Resource"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ChatCharacterResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Characters For User",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      },
+      "post": {
+        "description": "Creates a new chat character for the authenticated user. Optionally links an existing media as the character image.",
+        "operationId": "createChatCharacter",
+        "tags": [
+          "Chat Character Resource"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChatCharacterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateChatCharacterResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Submit Character",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chat-characters/character-from-image": {
+      "post": {
+        "description": "Generates a character card (description, personality, scenario, first message, tags) from an image URL using a vision model. Rate limited per user. Contact support if you need to increase your limit.",
+        "operationId": "generateCharacterFromImage",
+        "tags": [
+          "Chat Character Resource"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChatCharacterFromImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateChatCharacterFromImageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Vision",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chat-characters/update-character-from-image": {
+      "post": {
+        "description": "Refines an existing AI-generated character card based on a free-form update prompt. Rate limited per user. Contact support if you need to increase your limit.",
+        "operationId": "updateCharacterFromImage",
+        "tags": [
+          "Chat Character Resource"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateChatCharacterFromImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateChatCharacterFromImageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Update Vision",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chat-characters/{id}": {
+      "delete": {
+        "description": "Soft-deletes a chat character. The character is hidden from listings but existing chats with it remain.",
+        "operationId": "deleteChatCharacter",
+        "tags": [
+          "Chat Character Resource"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Delete Character",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      },
+      "get": {
+        "description": "Returns a chat character by its public id, or null if it does not exist.",
+        "operationId": "getChatCharacter",
+        "tags": [
+          "Chat Character Resource"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCharacterResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Character",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      },
+      "put": {
+        "description": "Updates name, bio, short bio and first message of an existing chat character. The first message is replaced with a new one.",
+        "operationId": "updateChatCharacter",
+        "tags": [
+          "Chat Character Resource"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChatCharacterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Update Character",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chat-personas": {
+      "get": {
+        "description": "Lists all personas owned by the authenticated user.",
+        "operationId": "listPersonas",
+        "tags": [
+          "Chat Persona Resource"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PersonaResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Personas",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      },
+      "post": {
+        "description": "Creates a new persona for the authenticated user. If marked as default, any previous default persona is unset.",
+        "operationId": "createPersona",
+        "tags": [
+          "Chat Persona Resource"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePersonaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Persona",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chat-personas/for-chat/{chatId}": {
+      "get": {
+        "description": "Returns the persona that is associated with the given chat.",
+        "operationId": "getPersonaForChat",
+        "tags": [
+          "Chat Persona Resource"
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Persona For Chat",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chat-personas/{id}": {
+      "delete": {
+        "description": "Deletes a persona. Fails if the persona is the only one of the user or if it is still used in any chat.",
+        "operationId": "deletePersona",
+        "tags": [
+          "Chat Persona Resource"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Delete Persona",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      },
+      "put": {
+        "description": "Updates name, bio and default flag of an existing persona. If marked as default, any previous default persona is unset.",
+        "operationId": "updatePersona",
+        "tags": [
+          "Chat Persona Resource"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePersonaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Update Persona",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chats": {
+      "get": {
+        "description": "Lists all character chats belonging to the authenticated user.",
+        "operationId": "listChats",
+        "tags": [
+          "Chat Resource"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CharacterChat"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Chats",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      },
+      "post": {
+        "description": "Creates a new chat with a character, seeded with a caller-provided first message from the character.",
+        "operationId": "createChat",
+        "tags": [
+          "Chat Resource"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChatFirstMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Chat With Custom First Message",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chats/{chatId}": {
+      "delete": {
+        "description": "Deletes a chat owned by the authenticated user.",
+        "operationId": "deleteChat",
+        "tags": [
+          "Chat Resource"
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Delete Chat",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      },
+      "get": {
+        "description": "Returns the chat with all messages and selected candidates.",
+        "operationId": "getChat",
+        "tags": [
+          "Chat Resource"
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Chat",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chats/{chatId}/images": {
+      "post": {
+        "description": "Generates an image of the character based on the recent chat context and appends it to the chat as a new media message.",
+        "operationId": "createChatImage",
+        "tags": [
+          "Chat Resource"
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional id of a private AliveAI server to route the generation through for faster results.",
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Create Chat Image",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chats/{chatId}/images/{messageId}/regenerate": {
+      "post": {
+        "description": "Regenerates the image of an existing media message as a new candidate using the current chat context.",
+        "operationId": "regenerateChatImage",
+        "tags": [
+          "Chat Resource"
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional id of a private AliveAI server to route the generation through for faster results.",
+            "name": "serverId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Regenerate Image",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chats/{chatId}/messages": {
+      "post": {
+        "description": "Sends a user message to the character and streams the assistant response as NDJSON",
+        "operationId": "sendChatMessage",
+        "tags": [
+          "Chat Resource"
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageStreamRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "NDJSON stream of chat events: one ChatStreamEvent JSON object per line, terminated by '\\n'. Order is init -> N x token -> complete (or a final error).",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatStreamEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Send Message",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "delete": {
+        "description": "Deletes the given message and all messages that follow it in the chat.",
+        "operationId": "deleteMessage",
+        "tags": [
+          "Chat Resource"
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Delete Messages",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      },
+      "put": {
+        "description": "Switches the selected candidate of a message to a different existing candidate.",
+        "operationId": "selectMessageCandidate",
+        "tags": [
+          "Chat Resource"
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Id of the candidate to mark as selected.",
+            "name": "candidateId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Update Selected Candidate",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chats/{chatId}/messages/{messageId}/candidates/{candidateId}": {
+      "put": {
+        "description": "Updates the text content of a single message candidate.",
+        "operationId": "updateCandidateMessage",
+        "tags": [
+          "Chat Resource"
+        ],
+        "parameters": [
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCandidateMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Update Candidate Message",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/chats/{chatId}/messages/{messageId}/regenerate": {
+      "post": {
+        "description": "Regenerates the last character message of the chat as a new candidate and streams it as NDJSON. Only the most recent character message can be regenerated.",
+        "operationId": "regenerateChatMessage",
+        "tags": [
+          "Chat Resource"
+        ],
+        "parameters": [
+          {
+            "name": "chatId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "NDJSON stream of chat events: one ChatStreamEvent JSON object per line, terminated by '\\n'. Order is init -> N x token -> complete (or a final error).",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatStreamEvent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Regenerate Message",
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/clothes": {
+      "get": {
+        "description": "Get all public clothes",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClothesResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Public Clothes",
+        "tags": [
+          "Clothes Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/clothes/custom": {
+      "get": {
+        "description": "Get custom clothes",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClothesResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Custom Clothes",
+        "tags": [
+          "Clothes Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/clothes/custom/{clothesId}": {
+      "delete": {
+        "description": "Delete custom clothes",
+        "parameters": [
+          {
+            "name": "clothesId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Delete Custom Clothes",
+        "tags": [
+          "Clothes Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      },
+      "get": {
+        "description": "Get custom clothes by ID",
+        "parameters": [
+          {
+            "name": "clothesId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClothesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Custom Clothes",
+        "tags": [
+          "Clothes Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/llm/builder-prompt": {
+      "post": {
+        "description": "Creates an extended text prompt for the character builder",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LlmBuilderPromptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmPromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Generate Character Builder Prompt",
+        "tags": [
+          "Llm Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/llm/character-prompt": {
+      "post": {
+        "description": "Creates an extended text prompt for a character (for a trainer or imported profile)",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTextPromptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmPromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Generate Character Prompt",
+        "tags": [
+          "Llm Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/llm/clothes/{clothesId}": {
+      "get": {
+        "description": "Creates an extended text prompt describing clothes based on the provided clothes ID",
+        "parameters": [
+          {
+            "name": "clothesId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmPromptResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Clothes Description",
+        "tags": [
+          "Llm Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/llm/prompt": {
+      "post": {
+        "description": "Creates an extended text prompt based on the provided input",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LlmPromptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmPromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Generate Prompt",
+        "tags": [
+          "Llm Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/llm/update-builder-prompt": {
+      "post": {
+        "description": "Updates an existing prompt from the character builder with new information",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LlmBuilderPromptUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmPromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Generate Update Prompt",
+        "tags": [
+          "Llm Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/llm/video-prompt": {
+      "post": {
+        "description": "Creates an extended text prompt to be used as a video script",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LlmVideoPromptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmVideoPromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Generate Video Prompt",
+        "tags": [
+          "Llm Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/llm/vision-prompt": {
+      "post": {
+        "description": "Creates an extended text prompt describing an existing image",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LlmVisionPromptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmPromptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Generate Vision Prompt",
+        "tags": [
+          "Llm Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/members/login": {
+      "post": {
+        "description": "Login with email and password",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JwtAuthenticationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "Member Resource"
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ],
+        "security": [
+          {
+            "ApiKeyScheme": []
+          }
+        ]
+      }
+    },
+    "/members/me": {
+      "get": {
+        "description": "Get current user information",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Me",
+        "tags": [
+          "Member Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/poses": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PosesListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Poses",
+        "tags": [
+          "Poses Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/poses/custom": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Pose"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Custom Poses",
+        "tags": [
+          "Poses Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/poses/custom/{poseId}": {
+      "delete": {
+        "parameters": [
+          {
+            "name": "poseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Delete Custom Pose",
+        "tags": [
+          "Poses Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      },
+      "get": {
+        "parameters": [
+          {
+            "name": "poseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pose"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Custom Pose",
+        "tags": [
+          "Poses Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/profiles": {
+      "get": {
+        "description": "Get Profiles",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "required": true
+          },
+          {
+            "name": "public",
+            "in": "query",
+            "schema": {
+              "description": "true view all profiles, false view only your profiles",
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/ProfileSortType"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfilesListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Profiles For User",
+        "tags": [
+          "Profile Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/templates": {
+      "get": {
+        "description": "Get all public and user Image LoRAs.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Templates",
+        "tags": [
+          "Template Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/templates/edit-templates": {
+      "get": {
+        "description": "Get all public and user Image Edit LoRAs for Creative.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Edit Templates",
+        "tags": [
+          "Template Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/templates/edit-templates-realism": {
+      "get": {
+        "description": "Get all public and user Image Edit LoRAs for Realism.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Edit Templates Realism",
+        "tags": [
+          "Template Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/video-templates": {
+      "get": {
+        "description": "Get all public and user Video LoRAs.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Templates",
+        "tags": [
+          "Video Template Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    },
+    "/video-templates/ltx": {
+      "get": {
+        "description": "Get all public and user Video LoRAs.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not Authorized"
+          },
+          "403": {
+            "description": "Not Allowed"
+          }
+        },
+        "summary": "Get Ltx Video Templates",
+        "tags": [
+          "Video Template Resource"
+        ],
+        "security": [
+          {
+            "SecurityScheme": []
+          },
+          {
+            "ApiKeyScheme": []
+          }
+        ],
+        "servers": [
+          {
+            "url": "https://api-server.aliveai.app"
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "LlmBuilderPromptRequest": {
+        "type": "object",
+        "required": [
+          "model"
+        ],
+        "properties": {
+          "model": {
+            "$ref": "#/components/schemas/LlmModel"
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 250
+            },
+            "description": "A map of attributes to be included in the prompt (hairColor, bodyShape, etc.). Each key is the attribute name and the value is the attribute value. The keys must be between 2 and 250 characters long."
+          }
+        }
+      },
+      "PoseRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Id of an existing public pose to use. For public poses id and type must both be provided."
+          },
+          "type": {
+            "$ref": "#/components/schemas/PoseType",
+            "description": "Type of an existing public pose to use. For public poses id and type must both be provided.",
+            "type": "string"
+          },
+          "posePrompt": {
+            "type": "string",
+            "description": "Prompt which describes the pose.",
+            "maxLength": 250
+          },
+          "poseStrength": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Strength of the pose. Higher values will make the pose more dominant but can also lead to less coherent images. Recommended default value is 50.",
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "mediaId of the image to create a custom pose from."
+          },
+          "saveCustomPoseImage": {
+            "type": "boolean",
+            "description": "If enabled it will persist the mediaId as a new custom pose.",
+            "default": false
+          },
+          "customPoseId": {
+            "type": "string",
+            "description": "ID of an existing custom pose to reuse"
+          }
+        },
+        "required": [
+          "poseStrength"
+        ]
+      },
+      "ModelTemplate": {
+        "type": "string",
+        "enum": [
+          "BUKKAKE",
+          "FEET",
+          "SELFIE",
+          "LESBIAN",
+          "SOCIALMEDIA"
+        ]
+      },
+      "FaceReplaceGender": {
+        "type": "string",
+        "enum": [
+          "FEMALE",
+          "MALE"
+        ]
+      },
+      "TemplateResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "ownerId",
+          "supportedModels"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "templatePrompt": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "ownerId": {
+            "type": "string"
+          },
+          "strength": {
+            "type": "number",
+            "format": "double",
+            "maximum": 10,
+            "minimum": 0
+          },
+          "applyToFace": {
+            "type": "boolean"
+          },
+          "supportedModels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Model"
+            },
+            "minItems": 1
+          }
+        }
+      },
+      "CreatePersonaRequest": {
+        "description": "Request body for creating a new user persona.",
+        "type": "object",
+        "required": [
+          "name",
+          "isDefault"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 20,
+            "description": "Display name of the persona.",
+            "minLength": 1
+          },
+          "bio": {
+            "type": "string",
+            "maxLength": 150,
+            "description": "Optional bio describing the persona. Sent to the character as part of the chat context."
+          },
+          "isDefault": {
+            "type": "boolean",
+            "description": "If true, this persona becomes the user's default and any previous default is unset."
+          }
+        }
+      },
+      "VideoUpscaleModel": {
+        "type": "string",
+        "enum": [
+          "DEFAULT",
+          "HIGH_DETAIL"
+        ]
+      },
+      "VideoModel": {
+        "type": "string",
+        "enum": [
+          "DEFAULT",
+          "AUDIO",
+          "GROK",
+          "SEEDANCE"
+        ]
+      },
+      "ChatStreamInit": {
+        "description": "Sent once at the start of a stream with the server-generated message and candidate IDs.",
+        "type": "object",
+        "required": [
+          "type",
+          "chatId",
+          "assistantMessageId",
+          "assistantCandidateId"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "init"
+            ]
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "userMessageId": {
+            "type": "string",
+            "description": "Null on regenerate."
+          },
+          "userCandidateId": {
+            "type": "string",
+            "description": "Null on regenerate."
+          },
+          "assistantMessageId": {
+            "type": "string"
+          },
+          "assistantCandidateId": {
+            "type": "string"
+          }
+        }
+      },
+      "Pose": {
+        "type": "object",
+        "required": [
+          "id",
+          "image"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "additionalPrompt": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateChatCharacterRequest": {
+        "description": "Request body for creating or updating a chat character.",
+        "type": "object",
+        "required": [
+          "name",
+          "bio",
+          "shortBio",
+          "firstMessage"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 50,
+            "description": "Display name of the character.",
+            "minLength": 1
+          },
+          "bio": {
+            "type": "string",
+            "maxLength": 15000,
+            "description": "Long-form bio used as system context for the character. Should describe personality, background, scenario, etc.",
+            "minLength": 1
+          },
+          "shortBio": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "Short bio shown in lists and previews.",
+            "minLength": 1
+          },
+          "firstMessage": {
+            "type": "string",
+            "maxLength": 15000,
+            "description": "Default first message the character sends when a new chat is started.",
+            "minLength": 1
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "Optional public id of an existing media to use as the character image."
+          },
+          "promptId": {
+            "type": "string",
+            "description": "Optional id of the prompt that produced the linked mediaId. Only relevant when mediaId is set."
+          }
+        }
+      },
+      "CreateAfterFaceSwapRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "faceSwap": {
+            "$ref": "#/components/schemas/FaceSwapRequest"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mediaId",
+          "faceSwap"
+        ]
+      },
+      "MessageCandidate": {
+        "type": "object",
+        "required": [
+          "candidateId",
+          "message"
+        ],
+        "properties": {
+          "candidateId": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "media": {
+            "$ref": "#/components/schemas/MediaResponse"
+          }
+        }
+      },
+      "HttpProblem": {
+        "description": "HTTP Problem Response according to RFC9457 and RFC7807",
+        "additionalProperties": true,
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "A optional URI reference that identifies the problem type",
+            "examples": [
+              "https://example.com/errors/not-found"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "A optional, short, human-readable summary of the problem type",
+            "examples": [
+              "Not Found"
+            ]
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The HTTP status code for this occurrence of the problem",
+            "examples": [
+              404
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "description": "A optional human-readable explanation specific to this occurrence of the problem",
+            "examples": [
+              "Record not found"
+            ]
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri",
+            "description": "A URI reference that identifies the specific occurrence of the problem",
+            "examples": [
+              "https://api.example.com/errors/123"
+            ]
+          }
+        }
+      },
+      "UpdatePersonaRequest": {
+        "description": "Request body for updating an existing user persona. All fields replace the current values.",
+        "type": "object",
+        "required": [
+          "name",
+          "isDefault"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 20,
+            "description": "Display name of the persona.",
+            "minLength": 1
+          },
+          "bio": {
+            "type": "string",
+            "maxLength": 150,
+            "description": "Optional bio describing the persona. Sent to the character as part of the chat context."
+          },
+          "isDefault": {
+            "type": "boolean",
+            "description": "If true, this persona becomes the user's default and any previous default is unset."
+          }
+        }
+      },
+      "CreatePortraitRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "faceSwap": {
+            "$ref": "#/components/schemas/FaceSwapRequest"
+          },
+          "model": {
+            "$ref": "#/components/schemas/Model"
+          },
+          "detailLevel": {
+            "$ref": "#/components/schemas/DetailLevel"
+          },
+          "gender": {
+            "$ref": "#/components/schemas/PortraitGender"
+          },
+          "ethnicity": {
+            "$ref": "#/components/schemas/Ethnicity"
+          },
+          "scene": {
+            "$ref": "#/components/schemas/Scene"
+          },
+          "aspectRatio": {
+            "$ref": "#/components/schemas/AspectRatio"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "faceSwap",
+          "detailLevel",
+          "gender",
+          "ethnicity",
+          "scene"
+        ]
+      },
+      "OffsetDateTime": {
+        "type": "string",
+        "format": "date-time",
+        "examples": [
+          "2022-03-10T12:15:50-04:00"
+        ]
+      },
+      "CreateFaceRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string",
+            "description": "Optional seed for image generation. Must be a numeric string (max 18 digits).",
+            "pattern": "^\\d{1,18}$"
+          },
+          "faceCreationModel": {
+            "$ref": "#/components/schemas/FaceCreationModel",
+            "type": "string",
+            "default": "DEFAULT"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "extraRandomness": {
+            "type": "boolean",
+            "description": "Add more randomness to the face generation. This can lead to more unique and varied results, but may also result in less consistent faces across generations with the same prompt. Only for model DEFAULT"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "faceCreationModel",
+          "prompt",
+          "extraRandomness"
+        ]
+      },
+      "CreateVideoExpressionRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "videoExpression": {
+            "$ref": "#/components/schemas/VideoExpression"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mediaId",
+          "videoExpression"
+        ]
+      },
+      "CropArea": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "y": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "height": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "CreateInpaintRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "maskMediaId": {
+            "type": "string"
+          },
+          "originalMediaId": {
+            "type": "string"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          },
+          "strength": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 100,
+            "minimum": 1
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "negativePrompt": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "maskMediaId",
+          "originalMediaId",
+          "createdFromPromptId",
+          "strength",
+          "prompt"
+        ]
+      },
+      "CreateGoogleInpaintRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "cropArea": {
+            "$ref": "#/components/schemas/CropArea"
+          },
+          "base64Png": {
+            "type": "string"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "googleModel": {
+            "$ref": "#/components/schemas/GoogleModel"
+          }
+        },
+        "required": [
+          "mediaId",
+          "createdFromPromptId",
+          "prompt",
+          "googleModel"
+        ]
+      },
+      "MessageType": {
+        "type": "string",
+        "enum": [
+          "USER",
+          "CHARACTER",
+          "MEDIA"
+        ]
+      },
+      "PosesListResponse": {
+        "type": "object",
+        "required": [
+          "posesStanding",
+          "posesLying",
+          "posesAllFours",
+          "posesKneeling",
+          "posesSitting",
+          "posesSquatting",
+          "posesSuspended",
+          "posesPorn"
+        ],
+        "properties": {
+          "posesStanding": {
+            "$ref": "#/components/schemas/PoseContainer"
+          },
+          "posesLying": {
+            "$ref": "#/components/schemas/PoseContainer"
+          },
+          "posesAllFours": {
+            "$ref": "#/components/schemas/PoseContainer"
+          },
+          "posesKneeling": {
+            "$ref": "#/components/schemas/PoseContainer"
+          },
+          "posesSitting": {
+            "$ref": "#/components/schemas/PoseContainer"
+          },
+          "posesSquatting": {
+            "$ref": "#/components/schemas/PoseContainer"
+          },
+          "posesSuspended": {
+            "$ref": "#/components/schemas/PoseContainer"
+          },
+          "posesPorn": {
+            "$ref": "#/components/schemas/PoseContainer"
+          }
+        }
+      },
+      "PendingPromptResponse": {
+        "type": "object",
+        "required": [
+          "queue"
+        ],
+        "properties": {
+          "queue": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueElement"
+            }
+          }
+        }
+      },
+      "UploadResponse": {
+        "type": "object",
+        "required": [
+          "mediaId",
+          "mediaType"
+        ],
+        "properties": {
+          "mediaId": {
+            "type": "string"
+          },
+          "mediaType": {
+            "$ref": "#/components/schemas/MediaType"
+          }
+        }
+      },
+      "ChatStreamEvent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ChatStreamInit"
+          },
+          {
+            "$ref": "#/components/schemas/ChatStreamToken"
+          },
+          {
+            "$ref": "#/components/schemas/ChatStreamComplete"
+          },
+          {
+            "$ref": "#/components/schemas/ChatStreamError"
+          }
+        ],
+        "description": "One event in the chat stream. Wire format is NDJSON: one JSON object per line.",
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "init": "#/components/schemas/ChatStreamInit",
+            "token": "#/components/schemas/ChatStreamToken",
+            "complete": "#/components/schemas/ChatStreamComplete",
+            "error": "#/components/schemas/ChatStreamError"
+          }
+        },
+        "type": "object"
+      },
+      "UpdateCandidateMessageRequest": {
+        "description": "Request body for editing the text of a single message candidate.",
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "New text content for the candidate. Replaces the previous text in full.",
+            "maxLength": 20000,
+            "minLength": 1
+          }
+        }
+      },
+      "EditModel": {
+        "type": "string",
+        "enum": [
+          "CREATIVE",
+          "REALISM",
+          "QWEN_PRO"
+        ]
+      },
+      "FaceSwapRequest": {
+        "type": "object",
+        "required": [
+          "faceSwapModel",
+          "mediaIds",
+          "isPartialSwap",
+          "galleryMedia"
+        ],
+        "properties": {
+          "faceSwapModel": {
+            "$ref": "#/components/schemas/FaceSwapModel"
+          },
+          "mediaIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "isPartialSwap": {
+            "type": "boolean",
+            "description": "Face swap uses a two step process. First the face is swapped and then the face details are added to enhance realism. If enabled it will only do the first step and skip the face details enhancement."
+          },
+          "swapStrength": {
+            "type": "number",
+            "format": "double",
+            "maximum": 3,
+            "minimum": 1
+          },
+          "faceReplaceGender": {
+            "$ref": "#/components/schemas/FaceReplaceGender",
+            "description": "Optional. Limit face swap to a specific gender. Useful if the source image contains multiple faces and you only want to swap one of them. For single face image it should be disabled",
+            "type": "string"
+          },
+          "faceIndex": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Optional. Limit face swap to a specific face index. Useful if the source image contains multiple faces and you only want to swap one of them. For single face image it should be disabled. Face index starts from left to right"
+          },
+          "saveFaceSwapImage": {
+            "type": "boolean",
+            "description": "If enabled will save the mediaIds of the face swap to /faceswap",
+            "default": false
+          },
+          "galleryMedia": {
+            "type": "boolean",
+            "description": "If enabled the mediaIds reference a media from an existing prompt. If disabled they reference an uploaded media.",
+            "default": false
+          }
+        }
+      },
+      "FaceSwapModel": {
+        "type": "string",
+        "enum": [
+          "DEFAULT",
+          "NANOBANANA"
+        ]
+      },
+      "ProfilesListResponse": {
+        "type": "object",
+        "required": [
+          "profiles",
+          "hasNextPage"
+        ],
+        "properties": {
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileResponse"
+            }
+          },
+          "hasNextPage": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LlmVideoPromptRequest": {
+        "type": "object",
+        "required": [
+          "model",
+          "userInput",
+          "mediaId"
+        ],
+        "properties": {
+          "model": {
+            "$ref": "#/components/schemas/VideoModel"
+          },
+          "userInput": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "frameCount": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "CharacterChat": {
+        "description": "Summary of a chat between a user and a character. Returned by the list-chats endpoint; use the chatId to fetch full message history.",
+        "type": "object",
+        "required": [
+          "chatId",
+          "created",
+          "characterName",
+          "characterId",
+          "messageCount",
+          "lastMessageCreated"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Public id of the chat. Use this to fetch, delete or post messages to the chat."
+          },
+          "created": {
+            "$ref": "#/components/schemas/OffsetDateTime",
+            "description": "Timestamp when the chat was created.",
+            "type": "string"
+          },
+          "characterName": {
+            "type": "string",
+            "description": "Display name of the character the chat is with."
+          },
+          "characterId": {
+            "type": "string",
+            "description": "Public id of the character the chat is with."
+          },
+          "messageCount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total number of messages currently in the chat (user + character + media)."
+          },
+          "lastMessageCreated": {
+            "$ref": "#/components/schemas/OffsetDateTime",
+            "description": "Timestamp of the most recent message in the chat. Useful for sorting chat lists by activity.",
+            "type": "string"
+          }
+        }
+      },
+      "LlmVideoPromptResponse": {
+        "type": "object",
+        "properties": {
+          "promptText": {
+            "type": "string"
+          },
+          "negPrompt": {
+            "type": "string"
+          }
+        }
+      },
+      "ClothesRequest": {
+        "type": "object",
+        "required": [
+          "clothesId"
+        ],
+        "properties": {
+          "clothesId": {
+            "type": "string",
+            "description": "The ID of the existing clothes to be applied"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "FaceModel": {
+        "type": "string",
+        "enum": [
+          "REALISM",
+          "CREATIVE"
+        ]
+      },
+      "CreateEditImageRequest": {
+        "type": "object",
+        "required": [
+          "editModel",
+          "mediaId",
+          "createdFromPromptId",
+          "ignoreFace",
+          "restoreFace"
+        ],
+        "properties": {
+          "editModel": {
+            "$ref": "#/components/schemas/EditModel"
+          },
+          "seed": {
+            "type": "string",
+            "description": "Optional seed for image generation. Must be a numeric string (max 18 digits).",
+            "pattern": "^\\d{1,18}$"
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "The media ID of the original image to be edited."
+          },
+          "createdFromPromptId": {
+            "type": "string",
+            "description": "The ID of the prompt used to create the original image."
+          },
+          "ignoreFace": {
+            "type": "boolean",
+            "description": "Ignore the face during editing. If true, the face and head will not be modified. Only applicable for editModel CREATIVE"
+          },
+          "restoreFace": {
+            "type": "boolean",
+            "description": "Restores the face after editing in order to preserve the original face details. Only applicable for editModel CREATIVE and REALISM"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "pose": {
+            "$ref": "#/components/schemas/PoseRequest"
+          },
+          "clothesRequest": {
+            "$ref": "#/components/schemas/ClothesRequest"
+          },
+          "modelTemplates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QwenTemplateRequest"
+            },
+            "description": "List of model templates to apply during editing. Each template includes an ID, strength (0-10), and an optional template prompt. Maximum of 5 templates can be applied. Only applicable for editModel CREATIVE and REALISM",
+            "minItems": 1,
+            "maxItems": 5
+          },
+          "maskMediaId": {
+            "type": "string"
+          }
+        }
+      },
+      "ProfileSortType": {
+        "type": "string",
+        "enum": [
+          "NEW",
+          "TOP"
+        ]
+      },
+      "QueueElement": {
+        "type": "object",
+        "properties": {
+          "promptId": {
+            "type": "string"
+          },
+          "queuePosition": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "video": {
+            "type": "boolean"
+          },
+          "progress": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "required": [
+          "progress"
+        ]
+      },
+      "CreateExtendVideoRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          },
+          "videoTemplates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateRequest"
+            },
+            "minItems": 1,
+            "maxItems": 5
+          }
+        },
+        "required": [
+          "mediaId",
+          "prompt"
+        ]
+      },
+      "MediaResponse": {
+        "type": "object",
+        "required": [
+          "mediaUrl",
+          "mediaType",
+          "id"
+        ],
+        "properties": {
+          "mediaUrl": {
+            "type": "string"
+          },
+          "mediaType": {
+            "$ref": "#/components/schemas/MediaType"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateChatCharacterFromImageResponse": {
+        "description": "AI-generated character card produced from an image. Not yet persisted as a chat character; pass the fields to createChatCharacter to save it.",
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "personality",
+          "scenario",
+          "first_mes",
+          "tags"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Generated character name."
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed physical description inferred from the image."
+          },
+          "personality": {
+            "type": "string",
+            "description": "Personality traits inferred from visual cues."
+          },
+          "scenario": {
+            "type": "string",
+            "description": "Suggested initial scenario or setting for the character."
+          },
+          "first_mes": {
+            "type": "string",
+            "description": "Suggested first message for the character."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Free-form tags describing the character."
+          }
+        }
+      },
+      "ClothesResponse": {
+        "type": "object",
+        "required": [
+          "clothesId",
+          "clothesPrompt",
+          "clothesImageUrl"
+        ],
+        "properties": {
+          "clothesId": {
+            "type": "string"
+          },
+          "clothesPrompt": {
+            "type": "string"
+          },
+          "clothesImageUrl": {
+            "type": "string"
+          }
+        }
+      },
+      "Gender": {
+        "type": "string",
+        "enum": [
+          "MALE",
+          "FEMALE",
+          "TRANS"
+        ]
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "password": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        }
+      },
+      "ChatResponse": {
+        "description": "Full chat detail including the character reference and the ordered message history.",
+        "type": "object",
+        "required": [
+          "chatId",
+          "chatCharacterId",
+          "messages"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Public id of the chat."
+          },
+          "chatCharacterId": {
+            "type": "string",
+            "description": "Public id of the character the chat is with."
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageResponse"
+            },
+            "description": "Messages in chronological order. Each message contains its candidate variants and the currently selected candidate."
+          }
+        }
+      },
+      "FaceCreationModel": {
+        "type": "string",
+        "enum": [
+          "DEFAULT",
+          "NANOBANANA"
+        ]
+      },
+      "CreateEnhanceImageRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "mediaId"
+        ]
+      },
+      "CreateUpscaleVideoRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "videoUpscaleModel": {
+            "$ref": "#/components/schemas/VideoUpscaleModel"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "videoUpscaleModel",
+          "mediaId"
+        ]
+      },
+      "VideoLength": {
+        "type": "string",
+        "enum": [
+          "SHORT",
+          "MEDIUM"
+        ]
+      },
+      "CreateEditImproveFaceRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "faceDetails": {
+            "type": "string"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mediaId",
+          "createdFromPromptId"
+        ]
+      },
+      "Ethnicity": {
+        "type": "string",
+        "enum": [
+          "AFRICAN",
+          "ASIAN",
+          "EUROPEAN",
+          "INDIAN",
+          "MIDDLE_EASTERN",
+          "NATIVE_AMERICAN",
+          "PACIFIC_ISLANDER",
+          "MULTIRACIAL",
+          "LATINO"
+        ]
+      },
+      "ChatStreamError": {
+        "description": "Final event on failure after the HTTP response has already started.",
+        "type": "object",
+        "required": [
+          "type",
+          "message"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "error"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "PoseType": {
+        "type": "string",
+        "enum": [
+          "STANDING",
+          "LYING",
+          "ALL_FOURS",
+          "KNEELING",
+          "SITTING",
+          "SQUATTING",
+          "SUSPENDED",
+          "PORN"
+        ]
+      },
+      "ChatStreamComplete": {
+        "description": "Final event on success; emitted only after the assistant message has been persisted.",
+        "type": "object",
+        "required": [
+          "type",
+          "message"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "complete"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Full assistant message as committed to the database."
+          }
+        }
+      },
+      "CreateTextPromptRequest": {
+        "type": "object",
+        "required": [
+          "profileId",
+          "theme",
+          "outfit"
+        ],
+        "properties": {
+          "profileId": {
+            "type": "string"
+          },
+          "theme": {
+            "type": "string"
+          },
+          "outfit": {
+            "type": "string"
+          },
+          "additionalDetails": {
+            "type": "string"
+          }
+        }
+      },
+      "GoogleModel": {
+        "type": "string",
+        "enum": [
+          "GEMINI_2_5",
+          "GEMINI_3_PRO"
+        ]
+      },
+      "Scene": {
+        "type": "string",
+        "enum": [
+          "HEADSHOT",
+          "PHOTOSTUDIO",
+          "FULL_BODY",
+          "BEACH",
+          "ADVENTURE",
+          "FORMAL"
+        ]
+      },
+      "UpdateChatCharacterFromImageRequest": {
+        "description": "Request body for refining an AI-generated character card with a free-form update prompt.",
+        "type": "object",
+        "required": [
+          "chatCharacterFromImageResponse",
+          "updatePrompt"
+        ],
+        "properties": {
+          "chatCharacterFromImageResponse": {
+            "$ref": "#/components/schemas/CreateChatCharacterFromImageResponse",
+            "description": "The current AI-generated character card to refine. Pass back the response from generateCharacterFromImage unchanged.",
+            "type": "object"
+          },
+          "updatePrompt": {
+            "type": "string",
+            "description": "Free-form instruction describing how the character should be modified (e.g. 'make her more shy' or 'change setting to a beach')."
+          }
+        }
+      },
+      "ProfileResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "avatar",
+          "ownerId",
+          "privacy",
+          "score",
+          "userProfile",
+          "challengeProfile",
+          "characterProfile"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "avatar": {
+            "$ref": "#/components/schemas/MediaResponse"
+          },
+          "ownerId": {
+            "type": "string"
+          },
+          "privacy": {
+            "$ref": "#/components/schemas/ProfilePrivacy"
+          },
+          "score": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "userProfile": {
+            "type": "boolean"
+          },
+          "challengeProfile": {
+            "type": "boolean"
+          },
+          "characterProfile": {
+            "type": "boolean"
+          },
+          "characterType": {
+            "$ref": "#/components/schemas/CharacterType"
+          }
+        }
+      },
+      "CreatePromptResponse": {
+        "type": "object",
+        "required": [
+          "promptId",
+          "seed"
+        ],
+        "properties": {
+          "promptId": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "string"
+          },
+          "promptContainer": {
+            "$ref": "#/components/schemas/PromptContainer",
+            "description": "Optional container containing a synchronous prompt response. Only available for prompt which return a response within the same request.",
+            "type": "object"
+          }
+        }
+      },
+      "LlmPromptResponse": {
+        "type": "object",
+        "required": [
+          "promptText"
+        ],
+        "properties": {
+          "promptText": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        }
+      },
+      "AspectRatio": {
+        "type": "string",
+        "enum": [
+          "DEFAULT",
+          "SQUARE",
+          "PORTRAIT",
+          "LANDSCAPE"
+        ]
+      },
+      "VideoExpression": {
+        "type": "string",
+        "enum": [
+          "SMILE_BIG",
+          "SMILE_SMALL",
+          "MOAN_EYES_OPEN",
+          "MOAN_EYES_CLOSED",
+          "KISS",
+          "SHOCKED"
+        ]
+      },
+      "ImageToVideoTemplate": {
+        "type": "string",
+        "enum": [
+          "TITTY_DROP",
+          "SPIN_360",
+          "MISSIONARY",
+          "BOOB_BOUNCE",
+          "BLOWJOB"
+        ]
+      },
+      "CreateEditBreastsRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mediaId"
+        ]
+      },
+      "PromptContainer": {
+        "type": "object",
+        "required": [
+          "promptId",
+          "medias"
+        ],
+        "properties": {
+          "promptId": {
+            "type": "string"
+          },
+          "originalPrompt": {
+            "$ref": "#/components/schemas/CreatePromptRequest"
+          },
+          "originalVideoExpressionPrompt": {
+            "$ref": "#/components/schemas/CreateVideoExpressionRequest"
+          },
+          "faceImprovePrompt": {
+            "$ref": "#/components/schemas/CreateFaceImproveRequest"
+          },
+          "afterFaceSwapPrompt": {
+            "$ref": "#/components/schemas/CreateAfterFaceSwapRequest"
+          },
+          "editBreastsRequest": {
+            "$ref": "#/components/schemas/CreateEditBreastsRequest"
+          },
+          "createPortraitRequest": {
+            "$ref": "#/components/schemas/CreatePortraitRequest"
+          },
+          "imageToVideoRequest": {
+            "$ref": "#/components/schemas/CreateImageToVideoRequest"
+          },
+          "inpaintRequest": {
+            "$ref": "#/components/schemas/CreateInpaintRequest"
+          },
+          "eyeImproveRequest": {
+            "$ref": "#/components/schemas/CreateEyeImproveRequest"
+          },
+          "googleInpaintRequest": {
+            "$ref": "#/components/schemas/CreateGoogleInpaintRequest"
+          },
+          "editVideoIncreaseFpsRequest": {
+            "$ref": "#/components/schemas/CreateEditVideoIncreaseFpsRequest"
+          },
+          "createExtendVideoRequest": {
+            "$ref": "#/components/schemas/CreateExtendVideoRequest"
+          },
+          "createEditImageRequest": {
+            "$ref": "#/components/schemas/CreateEditImageRequest"
+          },
+          "createUpscaleImageRequest": {
+            "$ref": "#/components/schemas/CreateUpscaleImageRequest"
+          },
+          "createUpscaleVideoRequest": {
+            "$ref": "#/components/schemas/CreateUpscaleVideoRequest"
+          },
+          "createCharacterImageRequest": {
+            "$ref": "#/components/schemas/CreateCharacterImageRequest"
+          },
+          "createEditImproveFaceRequest": {
+            "$ref": "#/components/schemas/CreateEditImproveFaceRequest"
+          },
+          "createFaceRequest": {
+            "$ref": "#/components/schemas/CreateFaceRequest"
+          },
+          "createEnhanceImageRequest": {
+            "$ref": "#/components/schemas/CreateEnhanceImageRequest"
+          },
+          "createEditVaginaRequest": {
+            "$ref": "#/components/schemas/CreateEditVaginaRequest"
+          },
+          "createCharacterTrainingDataRequest": {
+            "$ref": "#/components/schemas/CreateCharacterTrainingDataRequest"
+          },
+          "createClothesImageRequest": {
+            "$ref": "#/components/schemas/CreateClothesImageRequest"
+          },
+          "isFavorite": {
+            "type": "boolean"
+          },
+          "medias": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediaResponse"
+            }
+          }
+        }
+      },
+      "DetailLevel": {
+        "type": "string",
+        "enum": [
+          "MEDIUM",
+          "HIGH"
+        ]
+      },
+      "CreateImageToVideoRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string",
+            "description": "Optional seed for image generation. Must be a numeric string (max 18 digits).",
+            "pattern": "^\\d{1,18}$"
+          },
+          "videoModel": {
+            "$ref": "#/components/schemas/VideoModel"
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "ID of the media (image) to be used as the source for video generation"
+          },
+          "lastFrameMediaId": {
+            "type": "string",
+            "description": "ID of the media (image) to be used as the last frame in the video"
+          },
+          "customImage": {
+            "type": "boolean",
+            "description": "Indicates whether a custom image (external image upload) is used for video generation"
+          },
+          "text": {
+            "type": "string",
+            "description": "Text prompt describing the content of the video to be generated",
+            "minLength": 1,
+            "maxLength": 1500
+          },
+          "scene": {
+            "type": "string",
+            "description": "Scene description to provide additional context for video generation",
+            "minLength": 1,
+            "maxLength": 600
+          },
+          "template": {
+            "$ref": "#/components/schemas/ImageToVideoTemplate",
+            "type": "string",
+            "deprecated": true
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          },
+          "videoTemplates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateRequest"
+            },
+            "minItems": 1,
+            "maxItems": 5
+          },
+          "videoLength": {
+            "$ref": "#/components/schemas/VideoLength",
+            "description": "Length of the generated video. SHORT = 5 seconds. MEDIUM = 10 seconds. SHORT is recommended",
+            "type": "string",
+            "default": "SHORT"
+          },
+          "videoFrameRate": {
+            "$ref": "#/components/schemas/VideoFrameRate"
+          },
+          "videoQuality": {
+            "$ref": "#/components/schemas/VideoQuality",
+            "description": "Quality of the generated video. Only applicable to videoModel GROK",
+            "type": "string"
+          },
+          "motionStrength": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Optional. Adds additional motion to the video. Use it to avoid slow motion look. Only applicable to videoModel DEFAULT.",
+            "maximum": 6,
+            "minimum": 0
+          }
+        },
+        "required": [
+          "videoModel",
+          "mediaId",
+          "text"
+        ]
+      },
+      "CreateCharacterTrainingDataRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "mediaId",
+          "createdFromPromptId",
+          "prompt"
+        ]
+      },
+      "Instant": {
+        "type": "string",
+        "format": "date-time",
+        "examples": [
+          "2022-03-10T16:15:50Z"
+        ]
+      },
+      "LlmVisionPromptRequest": {
+        "type": "object",
+        "required": [
+          "mediaId"
+        ],
+        "properties": {
+          "mediaId": {
+            "type": "string"
+          }
+        }
+      },
+      "PersonaResponse": {
+        "description": "A user persona used to represent the user in chats with characters.",
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "defaultPersona"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Public id of the persona. Use this when creating chats or referencing the persona elsewhere."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name of the persona."
+          },
+          "bio": {
+            "type": "string",
+            "description": "Optional bio describing the persona. Sent to the character as part of the chat context."
+          },
+          "defaultPersona": {
+            "type": "boolean",
+            "description": "Whether this is the user's default persona. At most one persona per user is the default."
+          }
+        }
+      },
+      "CreateEditVaginaRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "mediaId",
+          "createdFromPromptId"
+        ]
+      },
+      "LlmPromptRequest": {
+        "type": "object",
+        "required": [
+          "model",
+          "inputPrompt"
+        ],
+        "properties": {
+          "model": {
+            "$ref": "#/components/schemas/Model"
+          },
+          "inputPrompt": {
+            "type": "string",
+            "pattern": "\\S",
+            "minLength": 5,
+            "maxLength": 1000
+          }
+        }
+      },
+      "QwenTemplateRequest": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "strength": {
+            "type": "number",
+            "format": "double",
+            "maximum": 10,
+            "minimum": 0
+          },
+          "templatePrompt": {
+            "type": "string"
+          }
+        }
+      },
+      "VideoFrameRate": {
+        "type": "string",
+        "enum": [
+          "LOW",
+          "MEDIUM",
+          "HIGH"
+        ]
+      },
+      "LlmBuilderPromptUpdateRequest": {
+        "type": "object",
+        "required": [
+          "model",
+          "oldRequest",
+          "newRequest"
+        ],
+        "properties": {
+          "model": {
+            "$ref": "#/components/schemas/LlmModel"
+          },
+          "oldRequest": {
+            "type": "string"
+          },
+          "newRequest": {
+            "$ref": "#/components/schemas/LlmBuilderPromptRequest"
+          }
+        }
+      },
+      "PortraitGender": {
+        "type": "string",
+        "enum": [
+          "MALE",
+          "FEMALE"
+        ]
+      },
+      "MediaType": {
+        "type": "string",
+        "enum": [
+          "IMAGE",
+          "VIDEO"
+        ]
+      },
+      "PromptProgressResponse": {
+        "type": "object",
+        "required": [
+          "promptId",
+          "progress",
+          "isComplete",
+          "queuePosition"
+        ],
+        "properties": {
+          "promptId": {
+            "type": "string"
+          },
+          "progress": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "isComplete": {
+            "type": "boolean"
+          },
+          "promptContainer": {
+            "$ref": "#/components/schemas/PromptContainer"
+          },
+          "isError": {
+            "type": "boolean"
+          },
+          "isSystem": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "errorType": {
+            "$ref": "#/components/schemas/ErrorType"
+          },
+          "queuePosition": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created": {
+            "$ref": "#/components/schemas/Instant"
+          }
+        }
+      },
+      "MessageResponse": {
+        "type": "object",
+        "description": "A single message in a chat. Each message has one or more candidate variants, of which exactly one is selected.",
+        "required": [
+          "messageId",
+          "selectedCandidateId",
+          "candidates",
+          "messageType"
+        ],
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "Public id of the message."
+          },
+          "selectedCandidateId": {
+            "type": "string",
+            "description": "Id of the candidate currently shown for this message. References one of the entries in 'candidates'."
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageCandidate"
+            },
+            "description": "All candidate variants generated for this message. A new candidate is appended each time the message is regenerated."
+          },
+          "messageType": {
+            "$ref": "#/components/schemas/MessageType",
+            "description": "Whether the message is from the user, the character, or a generated media (image).",
+            "type": "string"
+          }
+        }
+      },
+      "CreatePromptRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string",
+            "description": "Optional seed for image generation. Must be a numeric string (max 18 digits).",
+            "pattern": "^\\d{1,18}$"
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the character. Affects the characters face. A unique and realistic First and Last name is recommended.",
+            "maxLength": 200
+          },
+          "appearance": {
+            "type": "string",
+            "description": "Describe the appearance of the character.",
+            "maxLength": 1500
+          },
+          "gender": {
+            "$ref": "#/components/schemas/Gender"
+          },
+          "background": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "fromLocation": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "faceDetails": {
+            "type": "string",
+            "description": "Details only affecting the face",
+            "maxLength": 1000
+          },
+          "faceImproveEnabled": {
+            "type": "boolean",
+            "description": "If enabled it will improve the face using the faceDetails prompt.",
+            "default": true
+          },
+          "faceModel": {
+            "$ref": "#/components/schemas/FaceModel",
+            "description": "Specify the model used for the face improve step. Only applies if faceImproveEnabled is true.",
+            "type": "string",
+            "default": "REALISM"
+          },
+          "faceImproveStrength": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Strength of the face details improvement. Higher values will make the face details more dominant but can also lead to less coherent images. Only applies if faceImproveEnabled is true. Recommended default value is 5.",
+            "default": 5,
+            "maximum": 10,
+            "minimum": 0
+          },
+          "negativeDetails": {
+            "type": "string",
+            "description": "Negative details to avoid in the image generation.",
+            "maxLength": 1000
+          },
+          "scene": {
+            "type": "string",
+            "description": "Additional scene details to enhance the image generation.",
+            "maxLength": 1000
+          },
+          "pose": {
+            "$ref": "#/components/schemas/PoseRequest"
+          },
+          "faceSwap": {
+            "$ref": "#/components/schemas/FaceSwapRequest",
+            "description": "Optional Face swap configuration",
+            "type": "object"
+          },
+          "model": {
+            "$ref": "#/components/schemas/Model"
+          },
+          "modelTemplate": {
+            "$ref": "#/components/schemas/ModelTemplate",
+            "type": "string",
+            "deprecated": true
+          },
+          "modelTemplates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateRequest"
+            },
+            "minItems": 1,
+            "maxItems": 10
+          },
+          "blockExplicitContent": {
+            "type": "boolean",
+            "description": "If enabled AI will avoid nudity. Works best with DEFAULT AI model"
+          },
+          "detailLevel": {
+            "$ref": "#/components/schemas/DetailLevel"
+          },
+          "aspectRatio": {
+            "$ref": "#/components/schemas/AspectRatio"
+          },
+          "cfg": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Classifier-Free Guidance scale. Higher values will make the image generation more closely follow the prompt, but can also lead to less coherent images. Recommended default value is 5.",
+            "default": 5,
+            "maximum": 10,
+            "minimum": 1
+          },
+          "clothesRequest": {
+            "$ref": "#/components/schemas/ClothesRequest",
+            "description": "Optional clothes configuration. Only applies to the CHARACTER_CREATOR model and will be ignored for other models.",
+            "type": "object"
+          },
+          "promptMetaData": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 250
+            },
+            "description": "Optional prompt metadata. Not used for image generation but can be used to store additional information about the prompt"
+          }
+        },
+        "required": [
+          "name",
+          "appearance",
+          "detailLevel"
+        ]
+      },
+      "TemplateRequest": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "strength": {
+            "type": "number",
+            "format": "double",
+            "description": "Strength of the template prompt. Higher values will make the template more dominant",
+            "default": 1,
+            "maximum": 10,
+            "minimum": 0
+          },
+          "templatePrompt": {
+            "type": "string",
+            "description": "Additional prompt or trigger word to be used with this template."
+          },
+          "applyToFace": {
+            "type": "boolean",
+            "description": "If enabled, the LoRa will also be added in the Face Improve Step. Only for Image Generation",
+            "default": false
+          }
+        }
+      },
+      "Violation": {
+        "type": "object",
+        "description": "Validation constraint violation details",
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "The field for which the validation failed",
+            "examples": [
+              "#/profile/email"
+            ]
+          },
+          "in": {
+            "type": "string",
+            "description": "Part of the http request where the validation error occurred such as query, path, header, form, body",
+            "examples": [
+              "query",
+              "path",
+              "header",
+              "form",
+              "body"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Description of the validation error",
+            "examples": [
+              "Invalid email format"
+            ]
+          }
+        }
+      },
+      "CreateCharacterImageRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string",
+            "description": "Optional seed for image generation. Must be a numeric string (max 18 digits).",
+            "pattern": "^\\d{1,18}$"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "profileId": {
+            "type": "string"
+          },
+          "aspectRatio": {
+            "$ref": "#/components/schemas/AspectRatio"
+          },
+          "highResolution": {
+            "type": "boolean"
+          },
+          "characterType": {
+            "$ref": "#/components/schemas/CharacterType"
+          },
+          "modelTemplates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QwenTemplateRequest"
+            },
+            "minItems": 1,
+            "maxItems": 5
+          },
+          "characterStrength": {
+            "type": "number",
+            "format": "double",
+            "maximum": 2,
+            "minimum": 0
+          },
+          "pose": {
+            "$ref": "#/components/schemas/PoseRequest"
+          },
+          "clothesRequest": {
+            "$ref": "#/components/schemas/ClothesRequest"
+          },
+          "improveFace": {
+            "type": "boolean"
+          },
+          "improveBreasts": {
+            "type": "boolean"
+          },
+          "improveVagina": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "prompt",
+          "profileId",
+          "aspectRatio",
+          "highResolution",
+          "characterType",
+          "improveFace",
+          "improveBreasts",
+          "improveVagina"
+        ]
+      },
+      "UserEvents": {
+        "type": "object",
+        "properties": {
+          "eventType": {
+            "$ref": "#/components/schemas/UserEventTypes"
+          },
+          "queue": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueElement"
+            }
+          },
+          "promptId": {
+            "type": "string"
+          }
+        }
+      },
+      "JwtAuthenticationResponse": {
+        "type": "object",
+        "required": [
+          "accessToken"
+        ],
+        "properties": {
+          "accessToken": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateEditVideoIncreaseFpsRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mediaId"
+        ]
+      },
+      "PoseContainer": {
+        "type": "object",
+        "required": [
+          "type",
+          "poses"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/PoseType"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "poses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Pose"
+            }
+          }
+        }
+      },
+      "CreateChatCharacterFromImageRequest": {
+        "description": "Request body for generating a character card from an image using a vision model.",
+        "type": "object",
+        "required": [
+          "imageUrl",
+          "characterName"
+        ],
+        "properties": {
+          "imageUrl": {
+            "type": "string",
+            "description": "Public URL of the source image. The vision model will analyze appearance, clothing and setting from this image."
+          },
+          "characterName": {
+            "type": "string",
+            "description": "Name to assign to the generated character."
+          }
+        }
+      },
+      "PromptType": {
+        "type": "string",
+        "enum": [
+          "IMAGE_DEFAULT",
+          "VIDEO_EXPRESSION",
+          "FACE_IMPROVE",
+          "AFTER_FACE_SWAP",
+          "EDIT_BREASTS",
+          "PORTRAIT",
+          "IMAGE_TO_VIDEO",
+          "EXTEND_VIDEO",
+          "UPSCALE_VIDEO",
+          "INPAINT",
+          "IMPROVE_EYES",
+          "GOOGLE_INPAINT",
+          "EDIT_IMAGE",
+          "EDIT_VIDEO_INCREASE_FPS",
+          "EDIT_UPSCALE_IMAGE",
+          "CHARACTER_IMAGE",
+          "EDIT_IMPROVE_FACE",
+          "CREATE_FACE",
+          "EDIT_ENHANCE",
+          "EDIT_VAGINA",
+          "CHARACTER_TRAINING_DATA",
+          "CREATE_CLOTHES"
+        ]
+      },
+      "UserResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "credits",
+          "email",
+          "emailConfirmed",
+          "hasPurchase",
+          "approved",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "credits": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "email": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "emailConfirmed": {
+            "type": "boolean"
+          },
+          "hasPurchase": {
+            "type": "boolean"
+          },
+          "approved": {
+            "type": "boolean"
+          },
+          "premiumExpiration": {
+            "$ref": "#/components/schemas/OffsetDateTime"
+          },
+          "created": {
+            "$ref": "#/components/schemas/OffsetDateTime"
+          }
+        }
+      },
+      "CreateFaceImproveRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "faceDetails": {
+            "type": "string"
+          },
+          "negativeFaceDetails": {
+            "type": "string"
+          },
+          "strength": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 100,
+            "minimum": 1
+          },
+          "faceIndex": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          },
+          "faceModel": {
+            "$ref": "#/components/schemas/FaceModel"
+          }
+        },
+        "required": [
+          "mediaId",
+          "strength"
+        ]
+      },
+      "CreateUpscaleImageRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          },
+          "restoreFace": {
+            "type": "boolean"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "strength": {
+            "type": "number",
+            "format": "double"
+          },
+          "upscaleModel": {
+            "$ref": "#/components/schemas/UpscaleModel"
+          }
+        },
+        "required": [
+          "mediaId",
+          "createdFromPromptId",
+          "restoreFace"
+        ]
+      },
+      "CharacterType": {
+        "type": "string",
+        "enum": [
+          "ZIMAGE",
+          "FLUX"
+        ]
+      },
+      "CreateEyeImproveRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string"
+          },
+          "mediaId": {
+            "type": "string"
+          },
+          "createdFromPromptId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "mediaId",
+          "createdFromPromptId",
+          "text"
+        ]
+      },
+      "Model": {
+        "type": "string",
+        "enum": [
+          "DEFAULT",
+          "REALISM",
+          "ANIME",
+          "TEMPORARY",
+          "CHARACTER_CREATOR",
+          "ANIMA"
+        ]
+      },
+      "PromptsListResponse": {
+        "type": "object",
+        "required": [
+          "prompts",
+          "hasNextPage",
+          "totalPageCount"
+        ],
+        "properties": {
+          "prompts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptContainer"
+            }
+          },
+          "hasNextPage": {
+            "type": "boolean"
+          },
+          "totalPageCount": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ChatCharacterResponse": {
+        "description": "A chat character that the user can chat with.",
+        "type": "object",
+        "required": [
+          "chatCharacterId",
+          "characterName",
+          "characterBio",
+          "shortBio",
+          "firstMessage"
+        ],
+        "properties": {
+          "chatCharacterId": {
+            "type": "string",
+            "description": "Public id of the character."
+          },
+          "characterName": {
+            "type": "string",
+            "description": "Display name of the character."
+          },
+          "characterBio": {
+            "type": "string",
+            "description": "Long-form bio. Used as system context when chatting with the character."
+          },
+          "shortBio": {
+            "type": "string",
+            "description": "Short bio shown in lists and previews."
+          },
+          "firstMessage": {
+            "$ref": "#/components/schemas/MessageResponse",
+            "description": "Default first message the character sends when a new chat is started.",
+            "type": "object"
+          },
+          "characterImage": {
+            "$ref": "#/components/schemas/MediaResponse",
+            "description": "Optional character portrait. Null if the character has no image.",
+            "type": "object"
+          }
+        }
+      },
+      "HttpValidationProblem": {
+        "description": "HTTP Validation Problem Response according to RFC9457 and RFC7807",
+        "additionalProperties": true,
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "A optional URI reference that identifies the problem type",
+            "examples": [
+              "https://example.com/errors/not-found"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "A optional, short, human-readable summary of the problem type",
+            "examples": [
+              "Not Found"
+            ]
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The HTTP status code for this occurrence of the problem",
+            "examples": [
+              404
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "description": "A optional human-readable explanation specific to this occurrence of the problem",
+            "examples": [
+              "Record not found"
+            ]
+          },
+          "instance": {
+            "type": "string",
+            "format": "uri",
+            "description": "A URI reference that identifies the specific occurrence of the problem",
+            "examples": [
+              "https://api.example.com/errors/123"
+            ]
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Violation"
+            },
+            "description": "List of validation constraint violations that occurred"
+          }
+        }
+      },
+      "UpscaleModel": {
+        "type": "string",
+        "enum": [
+          "DEFAULT",
+          "ALTERNATIVE",
+          "SKIN_DETAIL",
+          "SEEDVR"
+        ]
+      },
+      "CreateChatFirstMessageRequest": {
+        "description": "Request body for creating a new chat seeded with a caller-provided opening message from the character.",
+        "type": "object",
+        "required": [
+          "chatCharacterId",
+          "firstMessage",
+          "personaId"
+        ],
+        "properties": {
+          "chatCharacterId": {
+            "type": "string",
+            "description": "Public id of the character to chat with."
+          },
+          "firstMessage": {
+            "type": "string",
+            "description": "Opening message attributed to the character. Shown as the first message in the chat."
+          },
+          "personaId": {
+            "type": "string",
+            "description": "Public id of the user persona to chat as. The persona controls how the user is presented to the character."
+          }
+        }
+      },
+      "ErrorType": {
+        "type": "string",
+        "enum": [
+          "UNKNOWN",
+          "INPUT_FACE_IMAGE",
+          "GEMINI_NO_RESPONSE",
+          "GEMINI_QUOTA_EXCEEDED"
+        ]
+      },
+      "ProfilePrivacy": {
+        "type": "string",
+        "enum": [
+          "PUBLIC",
+          "PRIVATE"
+        ]
+      },
+      "VideoQuality": {
+        "type": "string",
+        "enum": [
+          "V_480P",
+          "V_720P"
+        ]
+      },
+      "CreateChatCharacterResponse": {
+        "description": "Response returned after a chat character has been created.",
+        "type": "object",
+        "required": [
+          "chatCharacterId"
+        ],
+        "properties": {
+          "chatCharacterId": {
+            "type": "string",
+            "description": "Public id of the newly created character."
+          }
+        }
+      },
+      "LlmModel": {
+        "type": "string",
+        "enum": [
+          "QWEN3_235B",
+          "QWEN3_8B",
+          "GROK",
+          "MISTRAL",
+          "RAW"
+        ]
+      },
+      "SendMessageStreamRequest": {
+        "description": "Request body for sending a user message to a chat. The character response is streamed back as NDJSON.",
+        "type": "object",
+        "required": [
+          "userMessage"
+        ],
+        "properties": {
+          "userMessage": {
+            "type": "string",
+            "maxLength": 4000,
+            "description": "Text of the user message to send to the character.",
+            "minLength": 1
+          }
+        }
+      },
+      "ChatStreamToken": {
+        "description": "Incremental token emitted by the LLM.",
+        "type": "object",
+        "required": [
+          "type",
+          "delta"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "token"
+            ]
+          },
+          "delta": {
+            "type": "string",
+            "description": "Token delta to append to the assistant message."
+          }
+        }
+      },
+      "CreateClothesImageRequest": {
+        "type": "object",
+        "properties": {
+          "seed": {
+            "type": "string",
+            "description": "Optional seed for image generation. Must be a numeric string (max 18 digits).",
+            "pattern": "^\\d{1,18}$"
+          },
+          "mediaId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mediaId"
+        ]
+      },
+      "UserEventTypes": {
+        "type": "string",
+        "enum": [
+          "QUEUE_CHANGE",
+          "COMPLETION"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "SecurityScheme": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Authentication"
+      },
+      "ApiKeyScheme": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "API Key authentication. Pass the key prefixed with `Key `:\n\n`Authorization: Key 123a48ae-0198-4fb1-1234-0ae59483d754`"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Chat Character Resource",
+      "description": "Endpoints for creating and managing chat characters, including AI-assisted character generation from images."
+    },
+    {
+      "name": "Chat Persona Resource",
+      "description": "Endpoints for managing user personas. A persona controls how the user is presented to a character in a chat."
+    },
+    {
+      "name": "Chat Resource",
+      "description": "Endpoints for managing character chats, streaming chat completions and generating chat images."
+    },
+    {
+      "name": "Prompts Manager Resource",
+      "description": "Endpoints for managing completed prompts."
+    },
+    {
+      "name": "Prompts Resource",
+      "description": "Endpoints for creating and managing prompt queue for image and video generation."
+    }
+  ]
+}
