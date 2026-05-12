@@ -38,9 +38,11 @@ import {
 import {
   CheckCircle2,
   ChevronDown,
+  ChevronUp,
   Circle,
   GripVertical,
   Loader2,
+  Maximize2,
   RefreshCw,
   Rocket,
   SkipForward,
@@ -55,6 +57,8 @@ import { addTrackedGenerationJobId } from "@/lib/generation-job-tracking";
 type ContentType = "post" | "reel" | "story";
 type Mode = "persona" | "faceless";
 type ExecutionMode = "scene_based" | "multi_scene_single_video" | "ailiveai_single_video";
+/** AliveAI Create Prompt gender (blocking portrait + persona text). */
+type AiliveaiGender = "FEMALE" | "MALE" | "TRANS";
 type PublishMode = "publish_now" | "save_for_later" | "scheduled";
 
 type DraftScene = {
@@ -199,7 +203,9 @@ function formatVideoGenExecutionStart(metadata: Record<string, unknown> | undefi
 function StepIcon({ status, skipped }: { status: string; skipped?: boolean }) {
   if (status === "completed" && skipped) {
     return (
-      <SkipForward className="h-4 w-4 text-muted-foreground" title="Skipped for this execution mode" />
+      <span title="Skipped for this execution mode" className="inline-flex">
+        <SkipForward className="h-4 w-4 text-muted-foreground" aria-hidden />
+      </span>
     );
   }
   if (status === "completed") return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
@@ -601,6 +607,8 @@ function GenerationStudioPageInner() {
   const [contentType, setContentType] = useState<ContentType>("reel");
   const [mode, setMode] = useState<Mode>("faceless");
   const [executionMode, setExecutionMode] = useState<ExecutionMode>("multi_scene_single_video");
+  /** AliveAI blocking image / persona LLM gender (API: MALE | FEMALE | TRANS). */
+  const [ailiveaiGender, setAiliveaiGender] = useState<AiliveaiGender>("FEMALE");
   const [videoDuration, setVideoDuration] = useState<number>(15);
   const [niche, setNiche] = useState<string>("fitness");
   const [topic, setTopic] = useState("");
@@ -617,6 +625,10 @@ function GenerationStudioPageInner() {
   const [previewingTarget, setPreviewingTarget] = useState<{ sceneId: string; kind: "image" | "video" } | null>(null);
   /** At most one scene video panel expanded (toggle with "Vid preview" / "Hide video"). */
   const [openSceneVideoId, setOpenSceneVideoId] = useState<string | null>(null);
+  /** Per-scene: image preview strip folded (hidden); prompt and video stay visible. */
+  const [sceneImagePreviewFolded, setSceneImagePreviewFolded] = useState<Record<string, boolean>>({});
+  /** Fullscreen image lightbox (scene image preview). */
+  const [imageLightboxSrc, setImageLightboxSrc] = useState<string | null>(null);
 
   const [editOpen, setEditOpen] = useState(false);
   const [editScene, setEditScene] = useState<JobScene | DraftScene | null>(null);
@@ -683,6 +695,14 @@ function GenerationStudioPageInner() {
   useEffect(() => {
     setOpenSceneVideoId(null);
   }, [jobId]);
+
+  useEffect(() => {
+    const raw = job?.input_payload?.ailiveai_gender;
+    const g = typeof raw === "string" ? raw.trim().toUpperCase() : "";
+    if (g === "FEMALE" || g === "MALE" || g === "TRANS") {
+      setAiliveaiGender(g as AiliveaiGender);
+    }
+  }, [job?.id, job?.input_payload?.ailiveai_gender]);
 
   const sortedScenes: Array<JobScene | DraftScene> = useMemo(() => {
     if (job?.scenes?.length) {
@@ -757,6 +777,7 @@ function GenerationStudioPageInner() {
           executionMode === "multi_scene_single_video" || executionMode === "ailiveai_single_video"
             ? videoDuration
             : undefined,
+        ...(executionMode === "ailiveai_single_video" ? { ailiveai_gender: ailiveaiGender } : {}),
       });
       setJobId(res.job_id);
       addTrackedGenerationJobId(res.job_id);
@@ -1111,6 +1132,36 @@ function GenerationStudioPageInner() {
                 </div>
               ) : null}
               <div className="space-y-2">
+                <Label>Persona gender (AliveAI)</Label>
+                <Select
+                  value={ailiveaiGender}
+                  onValueChange={(v) => setAiliveaiGender(v as AiliveaiGender)}
+                  disabled={executionMode !== "ailiveai_single_video"}
+                >
+                  <SelectTrigger className={executionMode !== "ailiveai_single_video" ? "opacity-80" : undefined}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="FEMALE">Female</SelectItem>
+                    <SelectItem value="MALE">Male</SelectItem>
+                    <SelectItem value="TRANS">Trans</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {executionMode === "ailiveai_single_video" ? (
+                    <>
+                      Sent as AliveAI <span className="font-mono text-[11px]">gender</span> for the blocking portrait and
+                      used to steer the generated persona text.
+                    </>
+                  ) : (
+                    <>
+                      Choose <strong>Single video (AILIVEAI)</strong> in Execution mode above to enable this. It is not
+                      used for Seedance or scene-based Kie jobs.
+                    </>
+                  )}
+                </p>
+              </div>
+              <div className="space-y-2">
                 <Label>Topic</Label>
                 <div className="relative flex items-center">
                   <Input
@@ -1229,28 +1280,36 @@ function GenerationStudioPageInner() {
               )}
               {job?.cost_estimate ? (
                 <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs">
-                  <p className="font-semibold text-foreground">Cost estimate (credits)</p>
-                  {job.cost_estimate.model ? (
-                    <p className="mt-1 text-muted-foreground">
-                      {job.cost_estimate.model}
-                      {job.cost_estimate.provider ? ` · ${job.cost_estimate.provider}` : ""}
-                    </p>
-                  ) : null}
-                  <p className="mt-1 text-lg font-bold">{job.cost_estimate.total_credits}</p>
-                  <ul className="mt-2 space-y-1 text-muted-foreground">
-                    {job.cost_estimate.breakdown.map((b) => (
-                      <li key={b.line}>
-                        {job.cost_estimate.model
-                          ? `${b.line}: ${b.units}s × ${b.unit_credits} credits/s = ${b.subtotal}`
-                          : `${b.line}: ${b.units} × ${b.unit_credits} = ${b.subtotal}`}
-                      </li>
-                    ))}
-                  </ul>
-                  {job.cost_estimate.estimate_note ? (
-                    <p className="mt-2 border-t border-border pt-2 text-[11px] leading-snug text-muted-foreground">
-                      {job.cost_estimate.estimate_note}
-                    </p>
-                  ) : null}
+                  {(() => {
+                    const ce = job.cost_estimate;
+                    if (!ce) return null;
+                    return (
+                      <>
+                        <p className="font-semibold text-foreground">Cost estimate (credits)</p>
+                        {ce.model ? (
+                          <p className="mt-1 text-muted-foreground">
+                            {ce.model}
+                            {ce.provider ? ` · ${ce.provider}` : ""}
+                          </p>
+                        ) : null}
+                        <p className="mt-1 text-lg font-bold">{ce.total_credits}</p>
+                        <ul className="mt-2 space-y-1 text-muted-foreground">
+                          {ce.breakdown.map((b) => (
+                            <li key={b.line}>
+                              {ce.model
+                                ? `${b.line}: ${b.units}s × ${b.unit_credits} credits/s = ${b.subtotal}`
+                                : `${b.line}: ${b.units} × ${b.unit_credits} = ${b.subtotal}`}
+                            </li>
+                          ))}
+                        </ul>
+                        {ce.estimate_note ? (
+                          <p className="mt-2 border-t border-border pt-2 text-[11px] leading-snug text-muted-foreground">
+                            {ce.estimate_note}
+                          </p>
+                        ) : null}
+                      </>
+                    );
+                  })()}
                 </div>
               ) : null}
             </CardContent>
@@ -1278,8 +1337,6 @@ function GenerationStudioPageInner() {
                     {sortedScenes.map((scene) => {
                       const w = Math.max(8, ((scene.duration || 3) / maxDur) * 100);
                       const sid = "id" in scene && scene.id ? scene.id : `draft-${scene.scene_index}`;
-                      const meta = "metadata" in scene ? scene.metadata : undefined;
-                      const thumb = meta?.preview_image_url;
                       return (
                         <div
                           key={sid}
@@ -1294,14 +1351,13 @@ function GenerationStudioPageInner() {
                             <GripVertical className="h-3 w-3 shrink-0 text-muted-foreground" />
                             <span className="truncate text-[10px] font-semibold">#{scene.scene_index}</span>
                           </div>
-                          {thumb ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img alt="" src={thumb} className="h-10 w-full object-cover" />
-                          ) : (
-                            <div className="h-10 w-full bg-muted" />
-                          )}
-                          <div className="flex flex-1 flex-col justify-end p-1">
-                            <span className="text-[9px] text-muted-foreground">{scene.duration}s</span>
+                          <div
+                            className="flex min-h-[2.5rem] flex-1 items-center justify-center bg-muted/25 px-1"
+                            title="Preview appears under the scene text below"
+                          >
+                            <span className="text-center text-[9px] leading-tight text-muted-foreground">
+                              {scene.duration}s
+                            </span>
                           </div>
                         </div>
                       );
@@ -1323,6 +1379,10 @@ function GenerationStudioPageInner() {
                         Boolean(sid && previewingTarget?.sceneId === sid && previewingTarget.kind === "image");
                       const vidPreviewBusy =
                         Boolean(sid && previewingTarget?.sceneId === sid && previewingTarget.kind === "video");
+                      const imagePreviewSrc =
+                        meta?.preview_image_url ??
+                        (jobScene?.start_image_url ? String(jobScene.start_image_url) : undefined);
+                      const imageFolded = sceneImagePreviewFolded[key] === true;
                       return (
                         <div key={key} className="rounded-lg border border-border bg-card/60 p-3 shadow-sm">
                           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -1377,36 +1437,101 @@ function GenerationStudioPageInner() {
                               </Button>
                             </div>
                           </div>
-                          <p className="text-sm leading-relaxed">{scene.prompt}</p>
-                          {videoSrc ? (
-                            <div
-                              className={cn(
-                                "video-container mt-3 overflow-hidden rounded-lg border border-border/50 bg-muted/20 shadow-md shadow-black/[0.07] ring-1 ring-black/[0.04] transition-[max-height,opacity] duration-300 ease-in-out dark:bg-muted/10 dark:shadow-black/40 dark:ring-white/[0.06]",
-                                videoPanelOpen ? "max-h-[560px] opacity-100" : "max-h-0 opacity-0"
-                              )}
-                              aria-hidden={!videoPanelOpen}
-                            >
+                          <div className="space-y-3">
+                            <p className="text-sm leading-relaxed">{scene.prompt}</p>
+                            {imagePreviewSrc ? (
                               <div
                                 className={cn(
-                                  "p-2 transition-opacity duration-300 ease-in-out",
-                                  videoPanelOpen ? "opacity-100" : "pointer-events-none opacity-0"
+                                  "relative overflow-hidden rounded-lg border border-border/50 bg-muted/20 ring-1 ring-black/[0.04] dark:ring-white/[0.06]",
+                                  isVerticalVideo ? "max-w-[min(100%,240px)]" : "max-w-md"
                                 )}
                               >
-                                <video
-                                  src={videoSrc}
-                                  className={cn(
-                                    "mx-auto w-full max-h-[320px] rounded-lg object-cover shadow-sm",
-                                    isVerticalVideo
-                                      ? "aspect-[9/16] max-w-[min(100%,280px)]"
-                                      : "aspect-video max-w-full"
-                                  )}
-                                  controls
-                                  playsInline
-                                  preload="metadata"
-                                />
+                                <div className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-md border border-border/60 bg-background/90 p-0.5 shadow-sm backdrop-blur-sm">
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground"
+                                    aria-label="View image fullscreen"
+                                    onClick={() => setImageLightboxSrc(imagePreviewSrc)}
+                                  >
+                                    <Maximize2 className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground"
+                                    aria-expanded={!imageFolded}
+                                    aria-label={imageFolded ? "Show image preview" : "Hide image preview"}
+                                    onClick={() =>
+                                      setSceneImagePreviewFolded((prev) => ({
+                                        ...prev,
+                                        [key]: !(prev[key] === true),
+                                      }))
+                                    }
+                                  >
+                                    {imageFolded ? (
+                                      <ChevronDown className="h-4 w-4" />
+                                    ) : (
+                                      <ChevronUp className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </div>
+                                {!imageFolded ? (
+                                  <button
+                                    type="button"
+                                    className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                    onClick={() => setImageLightboxSrc(imagePreviewSrc)}
+                                    aria-label="Open image preview fullscreen"
+                                  >
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                      alt=""
+                                      src={imagePreviewSrc}
+                                      className={cn(
+                                        "h-auto w-full object-cover",
+                                        isVerticalVideo ? "aspect-[9/16] max-h-[360px]" : "aspect-video max-h-[280px]"
+                                      )}
+                                    />
+                                  </button>
+                                ) : (
+                                  <div className="flex min-h-[3.5rem] items-center bg-muted/30 pl-3 pr-[4.5rem]">
+                                    <span className="text-xs text-muted-foreground">Image preview hidden</span>
+                                  </div>
+                                )}
                               </div>
-                            </div>
-                          ) : null}
+                            ) : null}
+                            {videoSrc ? (
+                              <div
+                                className={cn(
+                                  "video-container overflow-hidden rounded-lg border border-border/50 bg-muted/20 shadow-md shadow-black/[0.07] ring-1 ring-black/[0.04] transition-[max-height,opacity] duration-300 ease-in-out dark:bg-muted/10 dark:shadow-black/40 dark:ring-white/[0.06]",
+                                  videoPanelOpen ? "max-h-[560px] opacity-100" : "max-h-0 opacity-0"
+                                )}
+                                aria-hidden={!videoPanelOpen}
+                              >
+                                <div
+                                  className={cn(
+                                    "p-2 transition-opacity duration-300 ease-in-out",
+                                    videoPanelOpen ? "opacity-100" : "pointer-events-none opacity-0"
+                                  )}
+                                >
+                                  <video
+                                    src={videoSrc}
+                                    className={cn(
+                                      "mx-auto w-full max-h-[320px] rounded-lg object-cover shadow-sm",
+                                      isVerticalVideo
+                                        ? "aspect-[9/16] max-w-[min(100%,280px)]"
+                                        : "aspect-video max-w-full"
+                                    )}
+                                    controls
+                                    playsInline
+                                    preload="metadata"
+                                  />
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
                           {sid && (scene as JobScene).error_message ? (
                             <p className="mt-2 text-xs text-red-600 dark:text-red-400">{(scene as JobScene).error_message}</p>
                           ) : null}
@@ -1668,6 +1793,27 @@ function GenerationStudioPageInner() {
           )
         ) : null}
       </div>
+
+      <Dialog
+        open={imageLightboxSrc !== null}
+        onOpenChange={(open) => {
+          if (!open) setImageLightboxSrc(null);
+        }}
+      >
+        <DialogContent className="max-h-[95vh] max-w-[min(96vw,1200px)] border-border/40 bg-background p-2 sm:p-4">
+          <DialogHeader>
+            <DialogTitle className="sr-only">Scene image preview</DialogTitle>
+          </DialogHeader>
+          {imageLightboxSrc ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imageLightboxSrc}
+              alt=""
+              className="mx-auto max-h-[min(88vh,900px)] w-full max-w-full object-contain"
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>

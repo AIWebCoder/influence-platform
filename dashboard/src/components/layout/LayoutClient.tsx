@@ -1,21 +1,34 @@
 "use client";
 
+import dynamic from "next/dynamic";
+import { Suspense } from "react";
 import { usePathname } from "next/navigation";
-import { Sidebar } from "@/components/layout/Sidebar";
-import { GenerationJobProgressDock } from "@/components/generation/GenerationJobProgressDock";
-import { cn } from "@/lib/utils";
 
-export function LayoutClient({ children }: { children: React.ReactNode }) {
+const DashboardChrome = dynamic(() =>
+  import("@/components/layout/DashboardChrome").then((m) => m.DashboardChrome),
+);
+
+function LayoutClientBody({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isLoginPage = pathname === "/login";
 
+  if (isLoginPage) {
+    return (
+      <main className="w-full min-h-0 flex-1 overflow-y-auto bg-muted/20">{children}</main>
+    );
+  }
+
+  return <DashboardChrome>{children}</DashboardChrome>;
+}
+
+export function LayoutClient({ children }: { children: React.ReactNode }) {
   return (
-    <>
-      {!isLoginPage && <Sidebar />}
-      <main className={cn("flex-1 overflow-y-auto bg-muted/20", isLoginPage && "w-full")}>
-        {children}
-      </main>
-      {!isLoginPage ? <GenerationJobProgressDock /> : null}
-    </>
+    <Suspense
+      fallback={
+        <main className="w-full min-h-0 flex-1 overflow-y-auto bg-muted/20">{children}</main>
+      }
+    >
+      <LayoutClientBody>{children}</LayoutClientBody>
+    </Suspense>
   );
 }

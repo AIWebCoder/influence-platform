@@ -332,6 +332,7 @@ export const api = {
       scene_count?: number;
       video_duration?: number;
       ailiveai_media_id?: string;
+      ailiveai_gender?: string;
       ailiveai_video_model?: string;
       ailiveai_scene?: string;
       ailiveai_server_id?: string;

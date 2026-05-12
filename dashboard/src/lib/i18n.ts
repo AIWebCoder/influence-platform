@@ -86,6 +86,13 @@ export const translations = {
     sidebar: {
       profileFallbackName: "Admin principal",
       profileRole: "Administrateur",
+      collapse: "Réduire le menu",
+      expand: "Agrandir le menu",
+      comingSoonHint: "Bientôt disponible",
+      themeSection: "Apparence",
+      themeLight: "Clair",
+      themeDark: "Sombre",
+      themeSystem: "Système",
     },
     accountHealth: {
       title: "Santé des comptes",
@@ -359,6 +366,13 @@ export const translations = {
     sidebar: {
       profileFallbackName: "Primary Admin",
       profileRole: "Administrator",
+      collapse: "Collapse sidebar",
+      expand: "Expand sidebar",
+      comingSoonHint: "Coming soon",
+      themeSection: "Appearance",
+      themeLight: "Light",
+      themeDark: "Dark",
+      themeSystem: "System",
     },
     accountHealth: {
       title: "Account Health",
