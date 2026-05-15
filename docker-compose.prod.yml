@@ -155,6 +155,7 @@ services:
       PROXY_USERNAME: ${PROXY_USERNAME:-}
       PROXY_PASSWORD: ${PROXY_PASSWORD:-}
       ENVIRONMENT: production
+      PUBLISH_DRY_RUN: ${PUBLISH_DRY_RUN:-false}
       SENTRY_DSN: ${SENTRY_DSN:-}
     depends_on:
       pgbouncer:

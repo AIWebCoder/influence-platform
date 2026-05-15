@@ -16,6 +16,7 @@ export function DashboardChrome({ children }: { children: React.ReactNode }) {
             {
               "--sidebar-width": "18.25rem",
               "--sidebar-width-mobile": "20rem",
+              "--sidebar-width-icon": "3.75rem",
             } as React.CSSProperties
           }
         >

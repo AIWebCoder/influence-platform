@@ -1,6 +1,26 @@
 import NextAuth, { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 
+type FastApiTokenClaims = {
+  sub?: string;
+  role?: string;
+  exp?: number;
+};
+
+function decodeJwtPayload(token: string): FastApiTokenClaims | null {
+  try {
+    const [, payload] = token.split(".");
+    if (!payload) return null;
+    const padded = payload.replace(/-/g, "+").replace(/_/g, "/").padEnd(payload.length + ((4 - (payload.length % 4)) % 4), "=");
+    const decoded = typeof atob === "function"
+      ? atob(padded)
+      : Buffer.from(padded, "base64").toString("binary");
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+}
+
 const authOptions: NextAuthOptions = {
   providers: [
     CredentialsProvider({
@@ -22,7 +42,9 @@ const authOptions: NextAuthOptions = {
             return {
               id: "e2e-user",
               name: e2eUser,
+              email: e2eUser,
               accessToken: "e2e-access-token",
+              role: "admin",
             };
           }
 
@@ -41,15 +63,21 @@ const authOptions: NextAuthOptions = {
             }),
           });
 
-          console.log("FastAPI status:", res.status);
-          const data = await res.json();
-          console.log("FastAPI response:", data);
+          const data = await res.json().catch(() => ({}));
 
           if (res.ok && data.access_token) {
+            const claims = decodeJwtPayload(data.access_token) ?? {};
+            const apiUser = (data && typeof data === "object" ? data.user : null) as
+              | { id?: string; email?: string; role?: string }
+              | null;
+            const email = apiUser?.email || claims.sub || credentials?.username || "";
+            const role = apiUser?.role || claims.role || "viewer";
             return {
-              id: "1",
-              name: credentials?.username,
+              id: apiUser?.id || email,
+              name: email,
+              email,
               accessToken: data.access_token,
+              role,
             };
           }
           return null;
@@ -64,11 +92,18 @@ const authOptions: NextAuthOptions = {
     async jwt({ token, user }: { token: any, user: any }) {
       if (user) {
         token.accessToken = user.accessToken;
+        token.role = user.role;
+        token.email = user.email;
       }
       return token;
     },
     async session({ session, token }: { session: any, token: any }) {
       session.accessToken = token.accessToken;
+      session.user = {
+        ...(session.user ?? {}),
+        email: token.email ?? session.user?.email ?? null,
+        role: token.role ?? "viewer",
+      };
       return session;
     },
   },

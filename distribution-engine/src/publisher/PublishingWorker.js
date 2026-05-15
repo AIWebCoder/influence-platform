@@ -1020,6 +1020,7 @@ class PublishingWorker {
       publishPipelineLog('worker_command_parsed', {
         intent_id: intentId,
         target_id: targetId,
+        generation_job_id: payload.generation_job_id || null,
         body: payload,
       });
 

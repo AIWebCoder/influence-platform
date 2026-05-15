@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
+import { humanizeGenerationMessage } from '@/lib/generation-errors';
 
 // The Distribution Engine API (Node.js) on port 3001 by default
 const distributionClient = axios.create({
@@ -80,20 +81,52 @@ export function formatContentApiError(error: unknown, fallback: string): string 
   if (!error.response) {
     return "Cannot reach Content API. Check NEXT_PUBLIC_CONTENT_API_URL (from the browser it must resolve, e.g. http://localhost:8000).";
   }
-  const data = error.response.data as { detail?: unknown; error?: string } | undefined;
+  const data = error.response.data as {
+    detail?: unknown;
+    error?: string;
+    details?: string;
+    message?: string;
+  } | undefined;
   if (data?.detail !== undefined) {
-    if (typeof data.detail === "string") return data.detail;
+    if (typeof data.detail === "string") return humanizeGenerationMessage(data.detail);
     if (Array.isArray(data.detail)) {
       const msgs = data.detail.map((item) => {
         if (item && typeof item === "object" && "msg" in item) return String((item as { msg: string }).msg);
         return JSON.stringify(item);
       });
-      if (msgs.length) return msgs.join(" ");
+      if (msgs.length) return humanizeGenerationMessage(msgs.join(" "));
     }
   }
-  if (typeof data?.error === "string") return data.error;
+  if (typeof data?.error === "string") return humanizeGenerationMessage(data.error);
+  if (typeof data?.details === "string") return humanizeGenerationMessage(data.details);
+  if (typeof data?.message === "string") return humanizeGenerationMessage(data.message);
   return fallback;
 }
+
+export type CampaignRecord = {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  target_niche?: string | null;
+  target_account_id?: string | null;
+  settings?: {
+    topic?: string;
+    account_ids?: string[];
+    generation_job_ids?: string[];
+    [key: string]: unknown;
+  };
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type CreateCampaignPayload = {
+  name: string;
+  type: 'content' | 'growth' | 'engagement';
+  target_niche?: string;
+  target_account_id?: string | null;
+  settings?: Record<string, unknown>;
+};
 
 export const api = {
   distribution: {
@@ -115,8 +148,36 @@ export const api = {
       status: string;
       platform?: string;
       metadata?: Record<string, unknown>;
+      ig_user_id?: string;
+      ig_access_token?: string;
     }) => {
       const response = await distributionClient.post('/accounts', payload);
+      return response.data;
+    },
+    updateAccountInstagram: async (
+      id: string,
+      payload: { ig_user_id?: string; ig_access_token?: string }
+    ) => {
+      const response = await distributionClient.patch(`/accounts/${id}/instagram`, payload);
+      return response.data;
+    },
+    updateAccountStatus: async (id: string, status: string) => {
+      const response = await distributionClient.patch(`/accounts/${id}`, { status });
+      return response.data;
+    },
+    assignAccountProxy: async (id: string, proxyId?: string) => {
+      const response = await distributionClient.post(`/accounts/${id}/proxy/assign`, {
+        ...(proxyId ? { proxy_id: proxyId } : {}),
+      });
+      return response.data as {
+        success: boolean;
+        proxy_id: string;
+        proxy_url: string;
+        account: Record<string, unknown>;
+      };
+    },
+    rotateAccountProxy: async (id: string) => {
+      const response = await distributionClient.post(`/accounts/${id}/proxy/rotate`);
       return response.data;
     },
     getPublications: async (status?: string, limit = 100, offset = 0) => {
@@ -173,6 +234,49 @@ export const api = {
     },
     getProxyStats: async () => {
       const response = await distributionClient.get('/proxies/stats');
+      return response.data as {
+        total: number;
+        active: number;
+        unhealthy: number;
+        avg_latency_ms: number;
+        capacity?: {
+          unassigned_active: number;
+          accounts: number;
+          slots_available: number;
+          strict_one_to_one: boolean;
+          can_add_accounts: boolean;
+        };
+      };
+    },
+    createProxy: async (payload: {
+      host: string;
+      port: number;
+      username?: string;
+      provider?: string;
+      country?: string;
+    }) => {
+      const response = await distributionClient.post('/proxies', payload);
+      return response.data;
+    },
+    bulkImportAccounts: async (
+      accounts: Array<{
+        username: string;
+        password_encrypted: string;
+        status?: string;
+        ig_user_id?: string;
+        ig_access_token?: string;
+      }>,
+    ) => {
+      const response = await distributionClient.post('/accounts/bulk', { accounts });
+      return response.data as {
+        created_count: number;
+        failed_count: number;
+        created: Array<{ id: string; username: string }>;
+        failed: Array<{ index: number; username: string; error: string }>;
+      };
+    },
+    getOpsSummary: async () => {
+      const response = await distributionClient.get('/dashboard/ops-summary');
       return response.data;
     },
     checkProxies: async () => {
@@ -213,15 +317,19 @@ export const api = {
     },
     getCampaigns: async () => {
       const response = await distributionClient.get('/campaigns');
-      return response.data;
+      return response.data as CampaignRecord[];
     },
-    createCampaign: async (payload: any) => {
+    createCampaign: async (payload: CreateCampaignPayload) => {
       const response = await distributionClient.post('/campaigns', payload);
-      return response.data;
+      return response.data as CampaignRecord;
     },
     updateCampaignStatus: async (id: string, status: string) => {
       const response = await distributionClient.patch(`/campaigns/${id}`, { status });
-      return response.data;
+      return response.data as CampaignRecord;
+    },
+    patchCampaignSettings: async (id: string, settings: Record<string, unknown>) => {
+      const response = await distributionClient.patch(`/campaigns/${id}`, { settings });
+      return response.data as CampaignRecord;
     },
     getCampaignHistory: async (id: string) => {
       const response = await distributionClient.get(`/campaigns/${id}/history`);
@@ -243,9 +351,88 @@ export const api = {
       const response = await contentClient.post('/analytics/caption/score', { caption, hashtags });
       return response.data;
     },
-    getTemplates: async () => {
-      const response = await contentClient.get('/templates');
+    getNiches: async () => {
+      const response = await contentClient.get('/niches');
+      return response.data as Array<{
+        id: string;
+        name: string;
+        description?: string | null;
+        hashtags: string[];
+        posting_times: number[];
+      }>;
+    },
+    getTemplates: async (params?: { niche_id?: string; active_only?: boolean }) => {
+      const response = await contentClient.get('/templates', { params });
+      return response.data as Array<{
+        id: string;
+        name: string;
+        caption_template: string;
+        visual_prompt?: string | null;
+        hashtag_groups: string[];
+        is_active: boolean;
+        niche_id?: string | null;
+      }>;
+    },
+    createTemplate: async (data: {
+      name: string;
+      caption_template: string;
+      visual_prompt?: string;
+      hashtag_groups?: string[];
+      is_active?: boolean;
+      niche_id?: string;
+    }) => {
+      const response = await contentClient.post('/templates', data);
       return response.data;
+    },
+    updateTemplate: async (
+      id: string,
+      data: Partial<{
+        name: string;
+        caption_template: string;
+        visual_prompt: string;
+        hashtag_groups: string[];
+        is_active: boolean;
+      }>,
+    ) => {
+      const response = await contentClient.put(`/templates/${id}`, data);
+      return response.data;
+    },
+    deleteTemplate: async (id: string) => {
+      await contentClient.delete(`/templates/${id}`);
+    },
+    getEditorialCalendar: async (params: { start_date: string; end_date: string; niche?: string }) => {
+      const response = await contentClient.get('/scheduling/calendar', { params });
+      return response.data as Array<{
+        id: string;
+        caption?: string | null;
+        visual_url?: string | null;
+        scheduled_at?: string | null;
+        niche?: string | null;
+        status: string;
+        template_id?: string | null;
+      }>;
+    },
+    patchPacketSchedule: async (packetId: string, scheduled_at: string) => {
+      const response = await contentClient.patch(`/scheduling/${packetId}/schedule`, { scheduled_at });
+      return response.data as {
+        id: string;
+        caption?: string | null;
+        scheduled_at?: string | null;
+        status: string;
+      };
+    },
+    getReadyQueue: async (params?: { status?: string; limit?: number }) => {
+      const response = await contentClient.get('/ready-queue', { params });
+      return response.data as Array<{
+        intent_id: string;
+        generation_job_id: string;
+        status: string;
+        content_type?: string | null;
+        caption?: string | null;
+        public_url?: string | null;
+        target_count: number;
+        created_at?: string | null;
+      }>;
     },
     generateContent: async (data: { niche: string, type?: string, target_accounts: string[], scheduled_at?: string }) => {
       const payload = {
@@ -318,6 +505,55 @@ export const api = {
         status: string;
         dispatched_targets: number;
       };
+    },
+    /** Create publish intent from a completed job and dispatch to Instagram (queue / ops shortcut). */
+    dispatchCompletedJob: async (jobId: string) => {
+      const job = (await contentClient.get(`/generation-jobs/${jobId}`)).data as {
+        status?: string;
+        input_payload?: {
+          caption?: string;
+          hashtags?: string[];
+          target_accounts?: string[];
+          content_type?: string;
+        };
+      };
+      if (job.status !== "completed") {
+        throw new Error("Job must be completed before dispatch");
+      }
+      const assets = (await contentClient.get(`/generation-jobs/${jobId}/assets`)).data as Array<{
+        id: string;
+        asset_type: string;
+        public_url?: string;
+      }>;
+      const video = assets.find(
+        (a) => a.asset_type === "video" && (a.public_url || "").trim().startsWith("https://"),
+      );
+      if (!video) {
+        throw new Error("No public HTTPS video asset on this job");
+      }
+      const payload = job.input_payload || {};
+      const targetIds = (payload.target_accounts || []).filter(Boolean);
+      if (targetIds.length === 0) {
+        throw new Error("Job has no target accounts");
+      }
+      const contentType =
+        payload.content_type === "reel" || payload.content_type === "story" || payload.content_type === "post"
+          ? payload.content_type
+          : "reel";
+      const hashtags = (payload.hashtags || []).map((h) => String(h).replace(/^#/, "").trim()).filter(Boolean);
+      const accountKey = [...targetIds].sort().join(",");
+      const intent = (
+        await contentClient.post(`/generation-jobs/${jobId}/publish-intents`, {
+          asset_id: video.id,
+          content_type: contentType,
+          caption: (payload.caption || "").trim(),
+          hashtags,
+          mode: "publish_now",
+          target_account_ids: targetIds,
+          idempotency_key: `queue-dispatch-${jobId}-${video.id}-${accountKey}`,
+        })
+      ).data as { intent_id: string };
+      return contentClient.post(`/publication-intents/${intent.intent_id}/dispatch`).then((r) => r.data);
     },
     create: async (data: {
       execution_mode?: "scene_based" | "multi_scene_single_video" | "ailiveai_single_video";
@@ -432,5 +668,44 @@ export const api = {
       const response = await contentClient.post(`/alerts/read/${alertId}`);
       return response.data;
     }
-  }
+  },
+  users: {
+    me: async () => {
+      const response = await contentClient.get('/users/me');
+      return response.data as UserRecord;
+    },
+    changeMyPassword: async (payload: { current_password: string; new_password: string }) => {
+      const response = await contentClient.post('/users/me/password', payload);
+      return response.data as { message: string };
+    },
+    list: async () => {
+      const response = await contentClient.get('/users');
+      return response.data as UserRecord[];
+    },
+    create: async (payload: { email: string; password: string; role?: AppUserRole }) => {
+      const response = await contentClient.post('/users', payload);
+      return response.data as UserRecord;
+    },
+    update: async (
+      id: string,
+      payload: { role?: AppUserRole; is_active?: boolean; password?: string }
+    ) => {
+      const response = await contentClient.patch(`/users/${id}`, payload);
+      return response.data as UserRecord;
+    },
+    remove: async (id: string) => {
+      const response = await contentClient.delete(`/users/${id}`);
+      return response.data as { message: string };
+    },
+  },
 };
+
+export type AppUserRole = "admin" | "operator" | "viewer";
+
+export interface UserRecord {
+  id: string;
+  email: string;
+  role: AppUserRole;
+  is_active: boolean;
+  created_at: string;
+}

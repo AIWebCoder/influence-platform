@@ -277,41 +277,24 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
-    """Login with email + password. Falls back to env-var admin if enabled and no users exist."""
+    """Login with email + password against the `users` table. No env-var fallback (seed first admin via startup)."""
     result = await db.execute(select(User).where(User.email == form_data.username))
     user = result.scalar_one_or_none()
-
-    if user:
-        if not user.is_active:
-            raise HTTPException(status_code=403, detail="Account is disabled")
-        if not verify_password(form_data.password, user.hashed_password):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect email or password",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        access_token = create_access_token(
-            subject=user.email,
-            role=user.role,
-            expires_delta=timedelta(minutes=settings.JWT_EXPIRE_MINUTES),
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-        return {"access_token": access_token, "token_type": "bearer"}
-
-    from src.core.config import ADMIN_PASSWORD_HASH
-    
-    if settings.ADMIN_FALLBACK_ENABLED:
-        if form_data.username == settings.ADMIN_USERNAME and verify_password(
-            form_data.password, ADMIN_PASSWORD_HASH
-        ):
-            access_token = create_access_token(
-                subject=form_data.username,
-                role="admin",
-                expires_delta=timedelta(minutes=settings.JWT_EXPIRE_MINUTES),
-            )
-            return {"access_token": access_token, "token_type": "bearer"}
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Incorrect email or password",
-        headers={"WWW-Authenticate": "Bearer"},
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is disabled")
+    access_token = create_access_token(
+        subject=user.email,
+        role=user.role,
+        expires_delta=timedelta(minutes=settings.JWT_EXPIRE_MINUTES),
     )
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {"id": str(user.id), "email": user.email, "role": user.role},
+    }

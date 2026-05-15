@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getPool } = require('../core/database');
 const { getRedis } = require('../core/redis');
+const ProxyManager = require('../proxy/ProxyManager');
 
 router.get('/ops-summary', async (req, res) => {
   try {
@@ -18,6 +19,7 @@ router.get('/ops-summary', async (req, res) => {
       publishCommandsPending,
       publishDelayedCount,
       publishFailedDlq,
+      proxyCapacity,
     ] = await Promise.all([
       pool.query(`
         SELECT
@@ -60,11 +62,12 @@ router.get('/ops-summary', async (req, res) => {
       pool.query(`
         SELECT
           COUNT(*) AS total,
-          COUNT(*) FILTER (WHERE status = 'ACTIVE') AS active,
-          COUNT(*) FILTER (WHERE status = 'WARMING') AS warming,
+          COUNT(*) FILTER (WHERE LOWER(status) = 'active') AS active,
+          COUNT(*) FILTER (WHERE LOWER(status) = 'warming') AS warming,
           COUNT(*) FILTER (WHERE COALESCE(health_score, 0) < 50) AS low_health
         FROM accounts
       `),
+      ProxyManager.getPoolCapacity().catch(() => null),
       redis.llen('content:ready').catch(() => 0),
       redis.llen('publish:commands').catch(() => 0),
       redis.zcard('content:delayed').catch(() => 0),
@@ -113,6 +116,7 @@ router.get('/ops-summary', async (req, res) => {
         failure_type: row.failure_type,
         total: Number(row.total || 0),
       })),
+      proxy_capacity: proxyCapacity || null,
     });
   } catch (error) {
     console.error('Error GET /dashboard/ops-summary:', error);

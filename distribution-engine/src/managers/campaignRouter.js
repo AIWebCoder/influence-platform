@@ -58,12 +58,30 @@ router.get('/:id/history', async (req, res) => {
  * Pause, resume, or finish a campaign.
  */
 router.patch('/:id', async (req, res) => {
-  const { status } = req.body;
+  const { status, settings } = req.body;
   const pool = getPool();
   try {
-    const result = await pool.query(`
-      UPDATE campaigns SET status = $1 WHERE id = $2 RETURNING *
-    `, [status, req.params.id]);
+    if (settings !== undefined) {
+      const result = await pool.query(
+        `UPDATE campaigns
+         SET settings = COALESCE(settings, '{}'::jsonb) || $1::jsonb,
+             updated_at = NOW()
+         WHERE id = $2
+         RETURNING *`,
+        [JSON.stringify(settings), req.params.id]
+      );
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'Campaign not found' });
+      }
+      return res.json(result.rows[0]);
+    }
+    const result = await pool.query(
+      `UPDATE campaigns SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+      [status, req.params.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Failed to update campaign', details: err.message });

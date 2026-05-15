@@ -10,14 +10,23 @@ import {
   BarChart3,
   BookOpen,
   ChevronsUpDown,
+  CalendarDays,
   Clapperboard,
+  FileText,
+  KeyRound,
   LayoutDashboard,
+  ListOrdered,
   LogOut,
+  ShieldCheck,
   Smartphone,
   Split,
   Users,
+  Network,
 } from "lucide-react";
 
+import { useState } from "react";
+import { ChangePasswordDialog } from "@/components/auth/ChangePasswordDialog";
+import { useCurrentUser } from "@/lib/auth";
 import { useLocale } from "@/components/i18n/LocaleProvider";
 import { useTheme } from "@/components/theme/ThemeProvider";
 import {
@@ -73,6 +82,8 @@ export function AppSidebar() {
   const { theme, setTheme, resolvedTheme } = useTheme();
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
+  const { role, isAdmin } = useCurrentUser();
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
 
   const logoSrc = useMemo(() => {
     const isDarkUi = resolvedTheme === "dark";
@@ -83,14 +94,21 @@ export function AppSidebar() {
     return `/branding/logo-dark-${size}.png`;
   }, [resolvedTheme, collapsed]);
 
-  const userName = session?.user?.name || text.sidebar.profileFallbackName;
+  const userName = session?.user?.email || session?.user?.name || text.sidebar.profileFallbackName;
   const initials =
     userName
-      .split(" ")
+      .split(/[\s@.]+/)
       .filter(Boolean)
       .slice(0, 2)
       .map((part) => part[0]?.toUpperCase())
       .join("") || "IP";
+
+  const roleLabel =
+    role === "admin"
+      ? text.sidebar.roleAdmin
+      : role === "operator"
+        ? text.sidebar.roleOperator
+        : text.sidebar.roleViewer;
 
   const comingSoonHint = text.sidebar.comingSoonHint;
 
@@ -106,9 +124,13 @@ export function AppSidebar() {
       label: text.nav.groupOperations,
       items: [
         { name: text.nav.accounts, href: "/accounts", icon: Users },
+        { name: text.nav.proxies, href: "/proxies", icon: Network },
         { name: text.nav.generationStudio, href: "/generation-studio", icon: Clapperboard },
+        { name: text.nav.templates, href: "/templates", icon: FileText },
+        { name: text.nav.calendar, href: "/calendar", icon: CalendarDays },
+        { name: text.nav.readyQueue, href: "/queue", icon: ListOrdered },
         { name: text.nav.publications, href: "/publications", icon: BookOpen },
-        { name: text.nav.campaigns, href: "/campaigns", icon: Activity, comingSoon: true },
+        { name: text.nav.campaigns, href: "/campaigns", icon: Activity },
         { name: "Emulators", href: "/emulators", icon: Smartphone },
       ],
     },
@@ -118,12 +140,19 @@ export function AppSidebar() {
     },
   ];
 
+  if (isAdmin) {
+    navGroups.push({
+      label: text.nav.groupAdmin,
+      items: [{ name: text.nav.users, href: "/users", icon: ShieldCheck }],
+    });
+  }
+
   return (
     <Sidebar collapsible="icon" variant="sidebar" side="left">
       <SidebarHeader className="border-b border-sidebar-border px-2 py-3">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild className="h-auto min-h-12 py-2">
+            <SidebarMenuButton size="lg" asChild className="h-auto min-h-12 py-2 group-data-[collapsible=icon]:!min-h-10">
               <Link href="/" className="gap-3">
                 <div
                   className={cn(
@@ -131,7 +160,7 @@ export function AppSidebar() {
                     resolvedTheme === "dark"
                       ? "border-sidebar-border/60 bg-transparent"
                       : "border-sidebar-border/60 bg-sidebar-accent/40",
-                    collapsed ? "size-9" : "size-10 max-w-[10rem]",
+                    collapsed ? "size-7" : "size-10 max-w-[10rem]",
                   )}
                 >
                   <Image
@@ -206,14 +235,14 @@ export function AppSidebar() {
               <DropdownMenuTrigger asChild>
                 <SidebarMenuButton
                   size="lg"
-                  className="h-auto min-h-12 gap-2 py-2 data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+                  className="h-auto min-h-12 gap-2 py-2 group-data-[collapsible=icon]:!min-h-10 data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
                 >
-                  <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-sidebar-primary text-sm font-semibold text-sidebar-primary-foreground">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-sidebar-primary text-sm font-semibold text-sidebar-primary-foreground group-data-[collapsible=icon]:size-7 group-data-[collapsible=icon]:text-xs">
                     {initials}
                   </div>
                   <div className="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
                     <span className="truncate font-semibold">{userName}</span>
-                    <span className="truncate text-xs text-sidebar-foreground/70">{text.sidebar.profileRole}</span>
+                    <span className="truncate text-xs text-sidebar-foreground/70">{roleLabel}</span>
                   </div>
                   <ChevronsUpDown className="ml-auto size-4 shrink-0 opacity-60 group-data-[collapsible=icon]:hidden" />
                 </SidebarMenuButton>
@@ -222,9 +251,14 @@ export function AppSidebar() {
                 <DropdownMenuLabel className="font-normal">
                   <div className="flex flex-col space-y-1">
                     <p className="text-sm font-medium leading-none">{userName}</p>
-                    <p className="text-xs leading-none text-muted-foreground">{text.sidebar.profileRole}</p>
+                    <p className="text-xs leading-none text-muted-foreground">{roleLabel}</p>
                   </div>
                 </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem className="gap-2" onClick={() => setPasswordDialogOpen(true)}>
+                  <KeyRound className="size-4" />
+                  {text.nav.changePassword}
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuLabel>{text.sidebar.themeSection}</DropdownMenuLabel>
                 <DropdownMenuRadioGroup value={theme} onValueChange={(v) => setTheme(v as "light" | "dark" | "system")}>
@@ -246,6 +280,7 @@ export function AppSidebar() {
         </SidebarMenu>
       </SidebarFooter>
       <SidebarRail />
+      <ChangePasswordDialog open={passwordDialogOpen} onOpenChange={setPasswordDialogOpen} />
     </Sidebar>
   );
 }

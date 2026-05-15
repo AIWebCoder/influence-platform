@@ -194,6 +194,17 @@ def _first_image_media_id_from_container(container: dict[str, Any]) -> Optional[
     return None
 
 
+def _first_image_url_from_container(container: dict[str, Any]) -> Optional[str]:
+    for m in _medias_list_from_container(container):
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("mediaType") or "").upper() == "IMAGE":
+            url = m.get("mediaUrl")
+            if isinstance(url, str) and url.strip():
+                return url.strip()
+    return None
+
+
 def _first_video_url_from_container(container: dict[str, Any]) -> Optional[str]:
     for m in _medias_list_from_container(container):
         if not isinstance(m, dict):
@@ -256,12 +267,12 @@ class AiliveaiService:
         """POST /prompts with blocking header; return first IMAGE media ``id`` from ``promptContainer``."""
         tb = trace or {}
         if not self.api_key:
-            return {"media_id": None, "status": "failed", "error": "NO_AILIVEAI_API_KEY"}
+            return {"media_id": None, "status": "failed", "error": "NO_AILIVEAI_API_KEY", "image_url": None}
         if not self.create_base:
-            return {"media_id": None, "status": "failed", "error": "NO_AILIVEAI_BASE_URL"}
+            return {"media_id": None, "status": "failed", "error": "NO_AILIVEAI_BASE_URL", "image_url": None}
         app = (appearance or "").strip()
         if not app:
-            return {"media_id": None, "status": "failed", "error": "EMPTY_APPEARANCE"}
+            return {"media_id": None, "status": "failed", "error": "EMPTY_APPEARANCE", "image_url": None}
         dl = (detail_level or "MEDIUM").strip().upper()
         if dl not in ("MEDIUM", "HIGH"):
             dl = "MEDIUM"
@@ -342,25 +353,28 @@ class AiliveaiService:
                         "media_id": None,
                         "status": "failed",
                         "error": _append_alive_response_detail(base, resp),
+                        "image_url": None,
                     }
                 data = resp.json()
                 if not isinstance(data, dict):
-                    return {"media_id": None, "status": "failed", "error": "INVALID_IMAGE_RESPONSE"}
+                    return {"media_id": None, "status": "failed", "error": "INVALID_IMAGE_RESPONSE", "image_url": None}
                 pc = data.get("promptContainer")
                 if not isinstance(pc, dict) and _medias_list_from_container(data):
                     pc = data
                 if not isinstance(pc, dict):
-                    return {"media_id": None, "status": "failed", "error": "NO_PROMPT_CONTAINER"}
+                    return {"media_id": None, "status": "failed", "error": "NO_PROMPT_CONTAINER", "image_url": None}
                 mid = _first_image_media_id_from_container(pc)
                 if not mid:
-                    return {"media_id": None, "status": "failed", "error": "NO_IMAGE_MEDIA_ID"}
+                    return {"media_id": None, "status": "failed", "error": "NO_IMAGE_MEDIA_ID", "image_url": None}
+                img_url = _first_image_url_from_container(pc)
                 emit(
                     "ailiveai_image_media_ready",
                     job_id=tb.get("job_id"),
                     step=tb.get("step"),
                     media_id_preview=(mid[:8] + "...") if len(mid) > 8 else mid,
+                    has_image_url=bool(img_url),
                 )
-                return {"media_id": mid, "status": "completed", "error": None}
+                return {"media_id": mid, "status": "completed", "error": None, "image_url": img_url}
         except Exception as e:
             logger.error("AILIVEAI blocking image failed: %s", e)
             emit(
@@ -370,7 +384,7 @@ class AiliveaiService:
                 error=str(e),
                 level="error",
             )
-            return {"media_id": None, "status": "failed", "error": str(e)}
+            return {"media_id": None, "status": "failed", "error": str(e), "image_url": None}
 
     async def generate_video(
         self,
@@ -403,6 +417,8 @@ class AiliveaiService:
         if not self.create_base:
             return {"video_url": None, "status": "failed", "error": "NO_AILIVEAI_BASE_URL"}
         mid = (media_id or "").strip()
+        source_media_id: Optional[str] = None
+        source_image_url: Optional[str] = None
         if not mid:
             app_raw = (image_appearance or prompt or "").strip()
             app = _main_appearance_from_persona(blocking_persona, app_raw)
@@ -435,12 +451,26 @@ class AiliveaiService:
                     "video_url": None,
                     "status": "failed",
                     "error": str(img.get("error") or "SOURCE_IMAGE_FAILED"),
+                    "source_media_id": None,
+                    "source_image_url": None,
                 }
             mid = str(img["media_id"]).strip()
+            source_media_id = mid
+            biu = img.get("image_url")
+            if isinstance(biu, str) and biu.strip():
+                source_image_url = biu.strip()
+        else:
+            source_media_id = mid
         vm = _normalize_video_model(video_model)
         text = (prompt or "").strip()
         if not text:
-            return {"video_url": None, "status": "failed", "error": "EMPTY_TEXT_PROMPT"}
+            return {
+                "video_url": None,
+                "status": "failed",
+                "error": "EMPTY_TEXT_PROMPT",
+                "source_media_id": source_media_id,
+                "source_image_url": source_image_url,
+            }
         d = 5 if int(duration) <= 5 else 10
         body: dict[str, Any] = {
             "videoModel": vm,
@@ -507,13 +537,27 @@ class AiliveaiService:
                         "video_url": None,
                         "status": "failed",
                         "error": _append_alive_response_detail(base, create_resp),
+                        "source_media_id": source_media_id,
+                        "source_image_url": source_image_url,
                     }
                 data = create_resp.json()
                 if not isinstance(data, dict):
-                    return {"video_url": None, "status": "failed", "error": "INVALID_CREATE_RESPONSE"}
+                    return {
+                        "video_url": None,
+                        "status": "failed",
+                        "error": "INVALID_CREATE_RESPONSE",
+                        "source_media_id": source_media_id,
+                        "source_image_url": source_image_url,
+                    }
                 prompt_id = data.get("promptId")
                 if not prompt_id:
-                    return {"video_url": None, "status": "failed", "error": "NO_PROMPT_ID"}
+                    return {
+                        "video_url": None,
+                        "status": "failed",
+                        "error": "NO_PROMPT_ID",
+                        "source_media_id": source_media_id,
+                        "source_image_url": source_image_url,
+                    }
                 prompt_id = str(prompt_id).strip()
                 early = _first_video_url_from_container(data)
                 if not early:
@@ -521,13 +565,25 @@ class AiliveaiService:
                     if isinstance(pc, dict):
                         early = _first_video_url_from_container(pc)
                 if early:
+                    img_early = _first_image_url_from_container(data)
+                    if not img_early:
+                        pc2 = data.get("promptContainer")
+                        if isinstance(pc2, dict):
+                            img_early = _first_image_url_from_container(pc2)
+                    siu = img_early or source_image_url
                     emit(
                         "ailiveai_video_sync_complete",
                         job_id=tb.get("job_id"),
                         step=tb.get("step"),
                         prompt_id=prompt_id,
                     )
-                    return {"video_url": early, "status": "completed", "error": None}
+                    return {
+                        "video_url": early,
+                        "status": "completed",
+                        "error": None,
+                        "source_media_id": source_media_id,
+                        "source_image_url": siu,
+                    }
                 poll_path = f"{self.poll_base}/prompts/{prompt_id}"
                 max_polls = max(1, int(getattr(settings, "GENERATION_AILIVEAI_MAX_POLLS", 60)))
                 poll_interval_s = 5
@@ -553,12 +609,21 @@ class AiliveaiService:
                     if not isinstance(pdata, dict):
                         continue
                     video_url = _first_video_url_from_container(pdata)
-                    if not video_url:
-                        nested = pdata.get("promptContainer")
-                        if isinstance(nested, dict):
-                            video_url = _first_video_url_from_container(nested)
+                    nested_pc = pdata.get("promptContainer") if isinstance(pdata.get("promptContainer"), dict) else None
+                    if not video_url and isinstance(nested_pc, dict):
+                        video_url = _first_video_url_from_container(nested_pc)
                     if video_url:
-                        return {"video_url": video_url, "status": "completed", "error": None}
+                        img_poll = _first_image_url_from_container(pdata)
+                        if not img_poll and isinstance(nested_pc, dict):
+                            img_poll = _first_image_url_from_container(nested_pc)
+                        siu2 = img_poll or source_image_url
+                        return {
+                            "video_url": video_url,
+                            "status": "completed",
+                            "error": None,
+                            "source_media_id": source_media_id,
+                            "source_image_url": siu2,
+                        }
                 emit(
                     "ailiveai_video_poll_exhausted",
                     job_id=tb.get("job_id"),

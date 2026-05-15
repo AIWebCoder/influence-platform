@@ -170,6 +170,7 @@ services:
       PUBLISH_DRY_RUN: ${PUBLISH_DRY_RUN:-false}
       PUBLISH_SKIP_RACE_RECHECK: ${PUBLISH_SKIP_RACE_RECHECK:-false}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      PROXY_STRICT_ONE_TO_ONE: ${PROXY_STRICT_ONE_TO_ONE:-true}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -280,7 +281,9 @@ services:
     volumes:
       # Full tree: next.config, tailwind, src, public, etc. stay in sync with local
       - ./dashboard:/app
+      # Keep deps + Next build cache inside Linux container (avoids Windows path in RSC manifest)
       - /app/node_modules
+      - /app/.next
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1"]
       interval: 30s

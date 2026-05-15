@@ -35,17 +35,24 @@ class TemplateResponse(TemplateBase):
     model_config = ConfigDict(from_attributes=True)
 
 @router.get("/", response_model=List[TemplateResponse])
-async def list_templates(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
-    cache_key = f"templates:list:{skip}:{limit}"
-    
+async def list_templates(
+    skip: int = 0,
+    limit: int = 100,
+    niche_id: uuid.UUID | None = None,
+    active_only: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    cache_key = f"templates:list:{skip}:{limit}:{niche_id}:{active_only}"
+
     cached = await cache_service.get(cache_key)
     if cached:
         return cached
-    
+
     svc = TemplateService(db)
-    result = await svc.get_all(skip=skip, limit=limit)
-    
-    await cache_service.set(cache_key, [t.model_dump() for t in result], CACHE_TTL)
+    result = await svc.get_all(skip=skip, limit=limit, niche_id=niche_id, active_only=active_only)
+    serialized = [TemplateResponse.model_validate(t).model_dump(mode="json") for t in result]
+
+    await cache_service.set(cache_key, serialized, CACHE_TTL)
     return result
 
 @router.get("/{template_id}", response_model=TemplateResponse)

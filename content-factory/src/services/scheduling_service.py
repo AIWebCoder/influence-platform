@@ -1,8 +1,8 @@
-from datetime import date
+from datetime import date, datetime
 from typing import List, Optional
 import uuid
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.content import ContentPacket
@@ -33,6 +33,19 @@ class SchedulingService:
         
         if packet:
             packet.status = status
+            await self.db.commit()
+            await self.db.refresh(packet)
+            return packet
+        return None
+
+    async def update_scheduled_at(
+        self, packet_id: uuid.UUID, scheduled_at: datetime
+    ) -> Optional[ContentPacket]:
+        query = select(ContentPacket).where(ContentPacket.id == packet_id)
+        result = await self.db.execute(query)
+        packet = result.scalars().first()
+        if packet:
+            packet.scheduled_at = scheduled_at
             await self.db.commit()
             await self.db.refresh(packet)
             return packet

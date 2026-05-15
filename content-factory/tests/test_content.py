@@ -38,9 +38,9 @@ def mock_gemini():
         yield mock
 
 @pytest.fixture(autouse=True)
-def mock_openai():
-    with patch('src.services.generation_task.OpenAIService.generate_image', new_callable=AsyncMock) as mock:
-        mock.return_value = "https://mocked.openai.url/image.jpg"
+def mock_kie_image():
+    with patch('src.services.generation_task.KieService.generate_image', new_callable=AsyncMock) as mock:
+        mock.return_value = "https://mocked.kie.url/image.jpg"
         yield mock
 
 

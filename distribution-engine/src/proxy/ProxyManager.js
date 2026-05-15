@@ -1,6 +1,9 @@
 const { getPool } = require('../core/database');
 const net = require('net');
 
+/** V1 policy: one dedicated proxy per account (set PROXY_STRICT_ONE_TO_ONE=false to disable). */
+const PROXY_STRICT_ONE_TO_ONE = process.env.PROXY_STRICT_ONE_TO_ONE !== 'false';
+
 class ProxyManager {
   /**
    * Assigns a proxy to an account with enhanced load balancing:
@@ -10,6 +13,145 @@ class ProxyManager {
    *    - Lowest number of assigned accounts (least used)
    *    - Lowest response_time (fastest)
    */
+  async getPoolCapacity() {
+    const pool = getPool();
+    const result = await pool.query(`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE p.is_active)::int AS active,
+        COUNT(*) FILTER (
+          WHERE p.is_active
+            AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.proxy_id = p.id)
+        )::int AS unassigned_active,
+        COUNT(*) FILTER (
+          WHERE EXISTS (SELECT 1 FROM accounts a WHERE a.proxy_id = p.id)
+        )::int AS assigned
+      FROM proxies p
+    `);
+    const accounts = await pool.query('SELECT COUNT(*)::int AS total FROM accounts');
+    const row = result.rows[0] || {};
+    const accountTotal = Number(accounts.rows[0]?.total || 0);
+    const unassigned = Number(row.unassigned_active || 0);
+    return {
+      total: Number(row.total || 0),
+      active: Number(row.active || 0),
+      unassigned_active: unassigned,
+      assigned: Number(row.assigned || 0),
+      accounts: accountTotal,
+      strict_one_to_one: PROXY_STRICT_ONE_TO_ONE,
+      can_add_accounts: PROXY_STRICT_ONE_TO_ONE ? unassigned : unassigned > 0,
+      slots_available: unassigned,
+    };
+  }
+
+  async createProxy({ host, port, username = null, password_encrypted = null, provider = null, country = null }) {
+    const pool = getPool();
+    const hostNorm = String(host || '').trim();
+    const portNum = parseInt(port, 10);
+    if (!hostNorm || !Number.isFinite(portNum) || portNum < 1 || portNum > 65535) {
+      throw new Error('host and valid port are required');
+    }
+    const result = await pool.query(
+      `INSERT INTO proxies (host, port, username, password_encrypted, provider, country, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, true)
+       RETURNING id, host, port, provider, country, is_active, created_at`,
+      [hostNorm, portNum, username, password_encrypted, provider, country]
+    );
+    return result.rows[0];
+  }
+
+  async updateProxy(proxyId, fields) {
+    const pool = getPool();
+    const allowed = ['host', 'port', 'username', 'password_encrypted', 'provider', 'country', 'is_active'];
+    const sets = [];
+    const vals = [];
+    let i = 1;
+    for (const key of allowed) {
+      if (fields[key] !== undefined) {
+        sets.push(`${key} = $${i++}`);
+        vals.push(fields[key]);
+      }
+    }
+    if (sets.length === 0) {
+      throw new Error('No fields to update');
+    }
+    vals.push(proxyId);
+    const result = await pool.query(
+      `UPDATE proxies SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+      vals
+    );
+    if (result.rows.length === 0) {
+      throw new Error('Proxy not found');
+    }
+    return result.rows[0];
+  }
+
+  async releaseProxyFromAccount(accountId) {
+    const pool = getPool();
+    await pool.query('UPDATE accounts SET proxy_id = NULL WHERE id = $1', [accountId]);
+    await pool.query(
+      'UPDATE proxies SET assigned_account_id = NULL WHERE assigned_account_id = $1',
+      [accountId]
+    );
+  }
+
+  async rotateProxyForAccount(accountId) {
+    await this.releaseProxyFromAccount(accountId);
+    return this.assignProxyToAccount(accountId);
+  }
+
+  async assignSpecificProxyToAccount(accountId, proxyId) {
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const proxyRes = await client.query(
+        `SELECT p.id, p.host, p.port, p.is_active, p.proxy_type, p.auth_mode,
+                (SELECT COUNT(*)::int FROM accounts a WHERE a.proxy_id = p.id AND a.id <> $2) AS other_assignments
+         FROM proxies p WHERE p.id = $1`,
+        [proxyId, accountId]
+      );
+      if (proxyRes.rows.length === 0) {
+        throw new Error('Proxy not found');
+      }
+      const proxy = proxyRes.rows[0];
+      if (!proxy.is_active) {
+        throw new Error('Proxy is not active');
+      }
+      if (PROXY_STRICT_ONE_TO_ONE && Number(proxy.other_assignments) > 0) {
+        throw new Error('Proxy is already assigned to another account');
+      }
+
+      await client.query(
+        'UPDATE proxies SET assigned_account_id = NULL WHERE assigned_account_id = $1',
+        [accountId]
+      );
+      await client.query(
+        'UPDATE proxies SET assigned_account_id = $1 WHERE id = $2',
+        [accountId, proxyId]
+      );
+      await client.query(
+        'UPDATE accounts SET proxy_id = $1 WHERE id = $2',
+        [proxyId, accountId]
+      );
+
+      await client.query('COMMIT');
+      return {
+        id: accountId,
+        proxy_id: proxy.id,
+        proxy_url: `${proxy.host}:${proxy.port}`,
+        proxy_type: proxy.proxy_type || 'http',
+        auth_mode: proxy.auth_mode || 'credentials',
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async assignProxyToAccount(accountId) {
     const pool = getPool();
 
@@ -38,19 +180,23 @@ class ProxyManager {
     try {
       await client.query('BEGIN');
       
-      // Select best proxy based on usage count and then latency
+      const havingClause = PROXY_STRICT_ONE_TO_ONE ? 'HAVING COUNT(a.id) = 0' : '';
       const res = await client.query(`
         SELECT p.id, p.host, p.port, p.proxy_type, p.auth_mode, COUNT(a.id) as assigned_count
         FROM proxies p
         LEFT JOIN accounts a ON p.id = a.proxy_id
         WHERE p.is_active = true
         GROUP BY p.id
+        ${havingClause}
         ORDER BY assigned_count ASC, COALESCE(p.response_time, 9999) ASC
         LIMIT 1 FOR UPDATE SKIP LOCKED
       `);
-      
+
       if (res.rows.length === 0) {
-        throw new Error('No available active proxies in pool');
+        const msg = PROXY_STRICT_ONE_TO_ONE
+          ? 'No unassigned active proxy available (strict 1:1 policy)'
+          : 'No available active proxies in pool';
+        throw new Error(msg);
       }
       
       const proxy = res.rows[0];
@@ -274,7 +420,7 @@ class ProxyManager {
     const pool = getPool();
     const result = await pool.query(
       `SELECT id, host, port, is_active, response_time, success_rate, total_requests, provider, country, last_checked_at,
-              proxy_type, auth_mode
+              proxy_type, auth_mode, assigned_account_id
        FROM proxies 
        ORDER BY is_active DESC, response_time ASC NULLS LAST`
     );

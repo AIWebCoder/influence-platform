@@ -1,10 +1,10 @@
-from datetime import date
+from datetime import date, datetime
 from typing import List, Optional
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
 
 from src.core.database import get_db
 from src.services.scheduling_service import SchedulingService
@@ -15,20 +15,22 @@ router = APIRouter()
 class StatusUpdate(BaseModel):
     status: str
 
-# Re-use ContentPacket response model from api/content.py conceptually
-# But redefine here for simplicity, or ideally import it. We'll specify a simplified response
+
+class ScheduleUpdate(BaseModel):
+    scheduled_at: datetime
+
+
 class CalendarResponse(BaseModel):
     id: uuid.UUID
     caption: Optional[str] = None
     visual_url: Optional[str] = None
     hashtags: list[str] = []
-    scheduled_at: Optional[date] = None # Or datetime
+    scheduled_at: Optional[datetime] = None
     niche: Optional[str] = None
     status: str
     template_id: Optional[uuid.UUID] = None
-    
-    class Config:
-        from_attributes = True
+
+    model_config = ConfigDict(from_attributes=True)
 
 @router.get("/calendar", response_model=List[CalendarResponse])
 async def get_calendar(
@@ -53,6 +55,19 @@ async def update_packet_status(
         raise HTTPException(status_code=400, detail="Invalid status")
         
     packet = await svc.update_status(packet_id, update_data.status)
+    if not packet:
+        raise HTTPException(status_code=404, detail="ContentPacket not found")
+    return packet
+
+
+@router.patch("/{packet_id}/schedule", response_model=CalendarResponse)
+async def update_packet_schedule(
+    packet_id: uuid.UUID,
+    update_data: ScheduleUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    svc = SchedulingService(db)
+    packet = await svc.update_scheduled_at(packet_id, update_data.scheduled_at)
     if not packet:
         raise HTTPException(status_code=404, detail="ContentPacket not found")
     return packet

@@ -1,8 +1,5 @@
 from pydantic_settings import BaseSettings
-from passlib.context import CryptContext
 import warnings
-
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 class Settings(BaseSettings):
@@ -39,6 +36,9 @@ class Settings(BaseSettings):
     JWT_EXPIRE_MINUTES: int = 1440  # 24h
     ENVIRONMENT: str = "development"
     CONTENT_QUEUE_NAME: str = "content:ready"
+    # publish_intents = studio uses intents only (no content:ready push from orchestrator)
+    # legacy_queue = also push JSON to CONTENT_QUEUE_NAME after job completes
+    GENERATION_DISTRIBUTION_MODE: str = "publish_intents"
     # Server-side gate for publish-intent validation (must match ops intent; dashboard uses NEXT_PUBLIC_*).
     FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED: bool = True
     PUBLISH_OUTBOX_POLL_INTERVAL_MS: int = 250
@@ -86,12 +86,11 @@ class Settings(BaseSettings):
     # If True, multi-clip ffmpeg failure still sets output_url to first scene clip (demo only)
     GENERATION_ASSEMBLY_FALLBACK_ON_CONCAT_FAIL: bool = True
     
-    # Admin credentials - MUST be set in production
-    ADMIN_USERNAME: str = "admin"
+    # Bootstrap admin — used only to seed the first admin row into the `users` table when it is empty.
+    # Login no longer accepts these env vars at runtime; only DB users can authenticate.
+    ADMIN_USERNAME: str = "admin"  # kept for compatibility / display
+    ADMIN_EMAIL: str = "admin@influence.local"
     ADMIN_PASSWORD: str = "admin"
-    
-    # Enable/disable admin fallback (disable in production)
-    ADMIN_FALLBACK_ENABLED: bool = True
     
     # CORS — comma-separated list of allowed origins
     ALLOWED_ORIGINS: str = "http://localhost:3000"
@@ -187,8 +186,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
-# Pre-compute the bcrypt hash once at startup for login verification
-# bcrypt has a 72-byte limit — safely truncate bytes
-safe_pwd = settings.ADMIN_PASSWORD.encode("utf-8", "ignore")[:72].decode("utf-8", "ignore")
-ADMIN_PASSWORD_HASH = _pwd_context.hash(safe_pwd)

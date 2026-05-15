@@ -29,7 +29,7 @@ from src.services.gemini_service import GeminiService
 from src.services.generation_job_service import PIPELINE_STEPS, GenerationJobService, default_step_control
 from src.services.kie_service import KieService
 from src.services.seedance_service import SeedanceService
-from src.services.ailiveai_service import AiliveaiService
+from src.services.ailiveai_service import AiliveaiService, _blocking_optionals_from_persona
 from src.services.pipeline_trace import emit
 
 logger = logging.getLogger(__name__)
@@ -340,6 +340,11 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
     payload = job.input_payload or {}
     niche = payload.get("niche") or "lifestyle"
     topic = payload.get("topic") or niche
+    if payload.get("template_visual_hint"):
+        topic = f"{topic}. Visual direction: {str(payload['template_visual_hint'])[:500]}"
+    caption_topic = topic
+    if payload.get("template_caption_hint"):
+        caption_topic = f"{topic}\n\nCaption style: {str(payload['template_caption_hint'])[:800]}"
     content_type = payload.get("content_type") or payload.get("type") or "reel"
     mode = payload.get("mode") or "faceless"
 
@@ -388,7 +393,7 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
                 scene_count=scene_count,
                 ailiveai_on_camera_topic_scene=ailive_topic_scene,
             )
-            copy = await text_svc.generate_caption(niche=niche, topic=topic)
+            copy = await text_svc.generate_caption(niche=niche, topic=caption_topic)
         except Exception as e:
             if settings.GEMINI_API_KEY and _is_anthropic_credit_error(e):
                 emit(
@@ -410,7 +415,7 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
                     trace=gtrace,
                     ailiveai_on_camera_topic_scene=ailive_topic_scene,
                 )
-                copy = await gemini.generate_caption(niche=niche, topic=topic, trace=gtrace)
+                copy = await gemini.generate_caption(niche=niche, topic=caption_topic, trace=gtrace)
             else:
                 raise
     else:
@@ -423,7 +428,7 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
             trace=gtrace,
             ailiveai_on_camera_topic_scene=ailive_topic_scene,
         )
-        copy = await text_svc.generate_caption(niche=niche, topic=topic, trace=gtrace)
+        copy = await text_svc.generate_caption(niche=niche, topic=caption_topic, trace=gtrace)
     merged = dict(payload)
     if ailive_topic_scene and not appearance_override:
         if persona_profile:
@@ -433,7 +438,11 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
         else:
             merged["ailiveai_image_appearance"] = _ailive_fallback_appearance(niche, topic)
     merged["caption"] = copy.get("caption", "")
-    merged["hashtags"] = copy.get("hashtags", [])
+    hashtags = list(copy.get("hashtags") or [])
+    template_tags = payload.get("template_hashtags") or []
+    if template_tags:
+        hashtags = list(dict.fromkeys([*hashtags, *[str(t) for t in template_tags]]))[:30]
+    merged["hashtags"] = hashtags
     job.input_payload = merged
 
     for row in plan:
@@ -787,6 +796,9 @@ async def _execute_pipeline(db, job_id: uuid.UUID) -> Optional[str]:
         )
 
     await _register_generated_assets(db, job)
+    from src.services.content_service import ContentService
+
+    await ContentService(db).upsert_from_generation_job(job)
     job.status = "completed"
     job.progress = 100
     svc.touch(job)
@@ -1936,10 +1948,21 @@ async def _step_ailiveai_single_video(db, svc: GenerationJobService, job: Genera
         raise RuntimeError(f"AILIVEAI generation failed: {msg}")
 
     job.output_url = str(result["video_url"])
+    src_mid = result.get("source_media_id")
+    src_img = result.get("source_image_url")
     for sc in scenes:
         md = dict(sc.scene_metadata or {})
         md["generated_via"] = "ailiveai_single"
+        md["preview_video_url"] = str(result["video_url"])
+        md["preview_video_source"] = "ailiveai_pipeline"
+        if src_img and str(src_img).strip():
+            md["preview_image_url"] = str(src_img).strip()
+            md["preview_image_source"] = "ailiveai_pipeline"
+        if src_mid and str(src_mid).strip():
+            md["ailiveai_source_media_id"] = str(src_mid).strip()
         sc.scene_metadata = md
+    if scenes:
+        scenes[0].video_url = str(result["video_url"])
     step.step_metadata = {
         "execution_mode": "ailiveai_single_video",
         "provider": "ailiveai",
@@ -2114,7 +2137,7 @@ async def generate_scene_preview(
     scene_id: uuid.UUID,
     kind: str,
 ) -> GenerationScene:
-    """Return already-stored media URLs when available; only call Kie.ai if nothing is stored yet."""
+    """Persist preview URLs on scene metadata. Provider depends on job execution_mode (AliveAI vs Kie)."""
     svc = GenerationJobService(db)
     job = await svc.get_job(job_id, with_children=False)
     if not job:
@@ -2123,10 +2146,106 @@ async def generate_scene_preview(
     if not sc:
         raise ValueError("Scene not found")
 
-    kie = KieService()
     payload = job.input_payload or {}
     ctype = payload.get("content_type") or payload.get("type") or "reel"
     aspect = "2:3" if ctype in ("reel", "story") else "1:1"
+    meta = dict(sc.scene_metadata or {})
+    preview_trace = {"job_id": str(job_id), "scene_id": str(scene_id), "step": "preview"}
+    exec_mode = str(getattr(job, "execution_mode", "") or "").strip()
+
+    if exec_mode == "ailiveai_single_video":
+        if meta.get("preview_video_source") == "kie_quick_preview":
+            meta.pop("preview_video_url", None)
+            meta.pop("preview_video_source", None)
+        if meta.get("preview_image_source") == "kie_quick_preview":
+            meta.pop("preview_image_url", None)
+            meta.pop("preview_image_source", None)
+
+        ailive = AiliveaiService()
+
+        if kind == "video":
+            if sc.video_url and str(sc.video_url).strip():
+                meta["preview_video_url"] = str(sc.video_url).strip()
+                meta["preview_video_source"] = "scene_pipeline"
+            elif job.output_url and str(job.output_url).strip():
+                meta["preview_video_url"] = str(job.output_url).strip()
+                meta["preview_video_source"] = "ailiveai_pipeline"
+            elif (
+                isinstance(meta.get("preview_video_url"), str)
+                and meta["preview_video_url"].strip()
+                and meta.get("preview_video_source") == "ailiveai_pipeline"
+            ):
+                pass
+            else:
+                raise RuntimeError(
+                    "AliveAI single-video preview: no clip yet. Run the job until video_generation succeeds "
+                    "(final URL is stored on the job), then open Vid preview again."
+                )
+            meta["preview_kind"] = "video"
+        else:
+            pis = meta.get("preview_image_source")
+            piu = meta.get("preview_image_url")
+            if isinstance(piu, str) and piu.strip() and pis == "ailiveai_pipeline":
+                meta["preview_kind"] = "image"
+            elif sc.start_image_url and str(sc.start_image_url).strip():
+                meta["preview_image_url"] = str(sc.start_image_url).strip()
+                meta["preview_image_source"] = "scene_pipeline"
+                meta["preview_kind"] = "image"
+            elif isinstance(piu, str) and piu.strip() and pis == "ailiveai_blocking_preview":
+                meta["preview_kind"] = "image"
+            else:
+                aliveai_aspect = "PORTRAIT" if ctype in ("reel", "story") else "LANDSCAPE"
+                persona_dict = payload.get("ailiveai_persona") if isinstance(payload.get("ailiveai_persona"), dict) else None
+                image_name = str(payload.get("topic") or payload.get("niche") or "Character").strip()[:200]
+                if persona_dict and str(persona_dict.get("full_name") or "").strip():
+                    image_name = str(persona_dict["full_name"]).strip()[:200]
+                explicit_appearance = str(payload.get("ailiveai_image_appearance") or "").strip()
+                image_app = explicit_appearance or (str(sc.prompt or "").strip() or "")
+                if not str(image_app).strip():
+                    raise RuntimeError(
+                        "AliveAI image preview needs ailiveai_image_appearance or scene prompt text on the job."
+                    )
+                opt = _blocking_optionals_from_persona(persona_dict)
+                bec = None
+                if isinstance(persona_dict, dict):
+                    raw_bec = persona_dict.get("block_explicit_content")
+                    if isinstance(raw_bec, bool):
+                        bec = raw_bec
+                img = await ailive.create_blocking_source_image(
+                    str(image_app).strip()[:1500],
+                    name=image_name,
+                    detail_level=str(payload.get("ailiveai_detail_level") or "MEDIUM").strip() or "MEDIUM",
+                    gender=str(payload.get("ailiveai_gender") or "FEMALE").strip() or "FEMALE",
+                    aspect_ratio_aliveai=aliveai_aspect,
+                    server_id=str(payload.get("ailiveai_server_id") or "").strip() or None,
+                    face_details=opt.get("face_details"),
+                    background=opt.get("background"),
+                    from_location=opt.get("from_location"),
+                    image_scene=opt.get("image_scene"),
+                    negative_details=opt.get("negative_details"),
+                    block_explicit_content=bec,
+                    seed=str(payload.get("ailiveai_seed") or "").strip() or None,
+                    trace=preview_trace,
+                )
+                if img.get("status") != "completed" or not img.get("media_id"):
+                    raise RuntimeError(str(img.get("error") or "AliveAI blocking portrait preview failed"))
+                url = img.get("image_url")
+                if not (isinstance(url, str) and url.strip()):
+                    raise RuntimeError(
+                        "AliveAI returned a portrait media id but no image URL in the API response yet; retry shortly."
+                    )
+                meta["preview_image_url"] = url.strip()
+                meta["preview_image_source"] = "ailiveai_blocking_preview"
+                meta["preview_kind"] = "image"
+
+        meta["preview_generated_at"] = _now().isoformat()
+        sc.scene_metadata = meta
+        svc.touch(job)
+        await db.flush()
+        await db.refresh(sc)
+        return sc
+
+    kie = KieService()
     meta = dict(sc.scene_metadata or {})
     preview_trace = {"job_id": str(job_id), "scene_id": str(scene_id), "step": "preview"}
 
@@ -2135,6 +2254,7 @@ async def generate_scene_preview(
         if sc.video_url:
             meta["preview_video_url"] = sc.video_url
             meta["preview_kind"] = "video"
+            meta["preview_video_source"] = "scene_pipeline"
         else:
             if not settings.KIE_API_KEY or settings.KIE_API_KEY in ("",):
                 raise RuntimeError("KIE_API_KEY not configured")
@@ -2149,12 +2269,15 @@ async def generate_scene_preview(
                 )
             meta["preview_video_url"] = url
             meta["preview_kind"] = "video"
+            # Kie sidecar preview — not AliveAI /prompts/image-to-video output (see video_generation step).
+            meta["preview_video_source"] = "kie_quick_preview"
     else:
         # ✅ Return already-stored image URL first — zero credit cost
         existing_image = sc.start_image_url or sc.end_image_url
         if existing_image:
             meta["preview_image_url"] = existing_image
             meta["preview_kind"] = "image"
+            meta["preview_image_source"] = "scene_pipeline"
         else:
             if not settings.KIE_API_KEY or settings.KIE_API_KEY in ("",):
                 raise RuntimeError("KIE_API_KEY not configured")
@@ -2176,6 +2299,7 @@ async def generate_scene_preview(
                 raise RuntimeError("Image preview failed")
             meta["preview_image_url"] = url
             meta["preview_kind"] = "image"
+            meta["preview_image_source"] = "kie_quick_preview"
 
     meta["preview_generated_at"] = _now().isoformat()
     sc.scene_metadata = meta
@@ -2188,6 +2312,23 @@ async def generate_scene_preview(
 async def _step_distribution(db, svc: GenerationJobService, job: GenerationJob, step: GenerationStep) -> None:
     gid = str(job.id)
     await _abort_if_job_or_step_cancelling(db, svc, job, step, "distribution")
+    dist_mode = (settings.GENERATION_DISTRIBUTION_MODE or "publish_intents").strip().lower()
+    if dist_mode in ("publish_intents", "skip", "none"):
+        step.step_metadata = {
+            "skipped_legacy_queue": True,
+            "distribution_mode": dist_mode,
+            "note": "Use Generation Studio publish-intents; see docs/runbooks/publish-instagram.md",
+        }
+        step.progress = 100
+        job.progress = max(job.progress or 0, 100)
+        emit(
+            "distribution_skipped_legacy_queue",
+            job_id=gid,
+            step="distribution",
+            outcome="success",
+            distribution_mode=dist_mode,
+        )
+        return
     payload = job.input_payload or {}
     caption = payload.get("caption") or ""
     hashtags = payload.get("hashtags") or []

@@ -38,6 +38,7 @@ CREATE TABLE content_packets (
     caption TEXT,
     visual_url TEXT,
     visual_urls JSONB DEFAULT '[]',
+    visual_type VARCHAR(10),
     hashtags JSONB DEFAULT '[]',
     target_accounts JSONB DEFAULT '[]',
     scheduled_at TIMESTAMPTZ,
@@ -171,8 +172,24 @@ CREATE TABLE proxies (
     is_active BOOLEAN DEFAULT true,
     assigned_account_id UUID REFERENCES accounts(id),
     last_checked_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    -- V004 proxy health / usage
+    response_time INTEGER,
+    success_rate DECIMAL(5,2) DEFAULT 100.00,
+    failure_count INTEGER DEFAULT 0,
+    total_requests INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
+    total_response_time BIGINT DEFAULT 0,
+    last_success_at TIMESTAMPTZ,
+    -- V009 proxy metadata
+    proxy_type VARCHAR(16) NOT NULL DEFAULT 'http',
+    auth_mode VARCHAR(16) NOT NULL DEFAULT 'credentials',
+    rotation_hint VARCHAR(64),
+    session_id VARCHAR(128)
 );
+
+CREATE INDEX IF NOT EXISTS idx_proxies_health ON proxies(is_active, response_time ASC);
+CREATE INDEX IF NOT EXISTS idx_proxies_usage ON proxies(assigned_account_id);
 
 -- Lier les proxies aux comptes
 ALTER TABLE accounts ADD CONSTRAINT fk_proxy FOREIGN KEY (proxy_id) REFERENCES proxies(id);

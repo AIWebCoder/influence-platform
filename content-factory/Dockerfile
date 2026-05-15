@@ -11,13 +11,15 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Entrypoint outside /app so dev bind-mount (./content-factory:/app) does not replace it with CRLF host copies.
+COPY docker-entrypoint.sh /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
+
 # Code source
 COPY . .
-
-RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8000
 
 # Run Alembic then API so generation_jobs / organizations / etc. exist on fresh DB.
 # No --reload in Docker: bind-mounted src triggers the reloader and drops in-flight requests (ERR_EMPTY_RESPONSE).
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]

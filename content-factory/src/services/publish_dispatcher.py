@@ -8,6 +8,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.services.publish_pipeline_log import log_publish_event, summarize_public_url
+from src.services.publish_validation import (
+    instagram_account_missing_fields,
+    is_public_http_url,
+)
 
 PUBLISH_COMMANDS_QUEUE = "publish:commands"
 logger = logging.getLogger(__name__)
@@ -46,7 +50,8 @@ async def dispatch_publish_intent(intent_id: str, db: AsyncSession) -> dict[str,
                     content_type,
                     caption,
                     hashtags,
-                    primary_asset_id::text
+                    primary_asset_id::text,
+                    generation_job_id::text
                 FROM publication_intents
                 WHERE id = :intent_id
                 LIMIT 1
@@ -100,10 +105,17 @@ async def dispatch_publish_intent(intent_id: str, db: AsyncSession) -> dict[str,
         if not asset:
             raise ValueError("Primary asset is missing")
 
+        public_url = str(asset[1] or "").strip()
+        if not is_public_http_url(public_url):
+            raise ValueError(
+                "Primary asset public_url must be a reachable http(s) URL for Instagram Graph API"
+            )
+
         targets_res = await db.execute(
             text(
                 """
-                SELECT pt.id::text, pt.account_id::text, pt.platform, COALESCE(a.ig_user_id, '')
+                SELECT pt.id::text, pt.account_id::text, pt.platform,
+                       COALESCE(a.ig_user_id, ''), COALESCE(a.ig_access_token, '')
                 FROM publication_targets pt
                 JOIN accounts a ON a.id = pt.account_id
                 WHERE publication_intent_id = :intent_id
@@ -132,18 +144,27 @@ async def dispatch_publish_intent(intent_id: str, db: AsyncSession) -> dict[str,
         created_at = datetime.now(timezone.utc).isoformat()
         hashtags = _normalize_hashtags(intent[4])
         for target in targets:
+            platform = str(target[2] or "").strip().lower()
             ig_user_id = str(target[3] or "").strip()
-            if not ig_user_id:
-                raise ValueError(f"Instagram user id missing for account {str(target[1])}")
+            ig_access_token = str(target[4] or "").strip()
+            if platform in ("instagram", ""):
+                missing = instagram_account_missing_fields(ig_user_id, ig_access_token)
+                if missing:
+                    raise ValueError(
+                        f"Account {str(target[1])} missing Instagram publish fields: "
+                        + ", ".join(missing)
+                    )
+            generation_job_id = str(intent[6] or "").strip() or None
             message = {
                 "intent_id": str(intent[0]),
                 "target_id": str(target[0]),
                 "account_id": str(target[1]),
                 "platform": str(target[2]),
                 "ig_user_id": ig_user_id,
+                "generation_job_id": generation_job_id,
                 "content_type": str(intent[2]),
                 "asset": {
-                    "public_url": str(asset[1]),
+                    "public_url": public_url,
                     "mime_type": str(asset[2]),
                 },
                 "caption": str(intent[3] or ""),
@@ -153,6 +174,7 @@ async def dispatch_publish_intent(intent_id: str, db: AsyncSession) -> dict[str,
             log_publish_event(
                 "outbox_row_payload_built",
                 intent_id=message["intent_id"],
+                generation_job_id=generation_job_id,
                 target_id=message["target_id"],
                 account_id=message["account_id"],
                 platform=message["platform"],

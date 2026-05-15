@@ -32,20 +32,67 @@ class AccountService {
     return result.rows;
   }
 
-  async createAccount(username, password, status = 'warming', proxy = null, platform = 'instagram') {
+  async createAccount(
+    username,
+    password,
+    status = 'warming',
+    proxy = null,
+    platform = 'instagram',
+    igUserId = null,
+    igAccessToken = null
+  ) {
     const pool = getPool();
     const id = uuidv4();
     const salt = await bcrypt.genSalt(10);
     const passwordEncrypted = await bcrypt.hash(password, salt);
     const healthScore = 100;
     const plat = (platform || 'instagram').toLowerCase().trim() || 'instagram';
+    const igUid = igUserId ? String(igUserId).trim() : null;
+    const igTok = igAccessToken ? String(igAccessToken).trim() : null;
 
+    const statusNorm = (status || 'warming').toLowerCase();
     const result = await pool.query(
-      `INSERT INTO accounts (id, username, password_encrypted, status, health_score, metadata, platform)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, username, status, health_score, metadata, platform`,
-      [id, username, passwordEncrypted, status, healthScore, JSON.stringify({ proxy: proxy || null }), plat]
+      `INSERT INTO accounts (
+         id, username, password_encrypted, status, health_score, metadata, platform,
+         ig_user_id, ig_access_token, warmup_started_at, warmup_completed_at
+       )
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9,
+         CASE WHEN $4 = 'warming' THEN NOW() ELSE NULL END,
+         CASE WHEN $4 = 'active' THEN NOW() ELSE NULL END
+       )
+       RETURNING id, username, status, health_score, metadata, platform, ig_user_id,
+         (ig_access_token IS NOT NULL AND btrim(ig_access_token) <> '') AS ig_token_configured`,
+      [
+        id,
+        username,
+        passwordEncrypted,
+        statusNorm,
+        healthScore,
+        JSON.stringify({ proxy: proxy || null }),
+        plat,
+        igUid,
+        igTok,
+      ]
     );
+    return result.rows[0];
+  }
+
+  async updateInstagramCredentials(id, igUserId, igAccessToken) {
+    const pool = getPool();
+    const igUid = igUserId != null ? String(igUserId).trim() : null;
+    const igTok = igAccessToken != null ? String(igAccessToken).trim() : null;
+    const result = await pool.query(
+      `UPDATE accounts
+       SET ig_user_id = COALESCE($2, ig_user_id),
+           ig_access_token = COALESCE($3, ig_access_token),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, username, status, platform, ig_user_id,
+         (ig_access_token IS NOT NULL AND btrim(ig_access_token) <> '') AS ig_token_configured`,
+      [id, igUid, igTok]
+    );
+    if (result.rows.length === 0) throw new Error('Account not found');
     return result.rows[0];
   }
 

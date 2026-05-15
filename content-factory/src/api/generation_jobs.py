@@ -623,6 +623,9 @@ async def create_generation_job(
             payload["mode"] = "persona"
         payload["target_accounts"] = await _resolve_target_accounts(db, payload.get("target_accounts") or [])
         payload.setdefault("content_type", body.content_type)
+        from src.services.template_service import resolve_template_payload
+
+        payload = await resolve_template_payload(db, payload)
         svc = GenerationJobService(db)
         job = await svc.create_job(payload, execution_mode=body.execution_mode)
         await db.flush()
@@ -775,7 +778,7 @@ async def create_publish_intent(job_id: str, body: PublishIntentCreateRequest, d
     asset_row = await db.execute(
         text(
             """
-            SELECT id::text
+            SELECT id::text, COALESCE(public_url, '') AS public_url
             FROM generated_assets
             WHERE id = :asset_id
               AND generation_job_id = :job_id
@@ -785,13 +788,28 @@ async def create_publish_intent(job_id: str, body: PublishIntentCreateRequest, d
         ),
         {"asset_id": asset_uuid, "job_id": str(jid)},
     )
-    if not asset_row.first():
+    asset_hit = asset_row.first()
+    if not asset_hit:
         raise HTTPException(status_code=400, detail="asset_id must belong to job and be ready")
+
+    from src.services.publish_validation import is_public_http_url
+
+    if not is_public_http_url(str(asset_hit[1])):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Asset must have a public http(s) URL before publish. "
+                "Wait for generation to finish or fix assembly output."
+            ),
+        )
 
     account_rows = await db.execute(
         text(
             """
-            SELECT id::text, COALESCE(platform, 'instagram') AS platform
+            SELECT id::text,
+                   COALESCE(platform, 'instagram') AS platform,
+                   COALESCE(ig_user_id, '') AS ig_user_id,
+                   COALESCE(ig_access_token, '') AS ig_access_token
             FROM accounts
             WHERE id = ANY(CAST(:account_ids AS uuid[]))
             """
@@ -802,6 +820,22 @@ async def create_publish_intent(job_id: str, body: PublishIntentCreateRequest, d
     missing = [aid for aid in account_ids if aid not in accounts_map]
     if missing:
         raise HTTPException(status_code=400, detail=f"Unknown account(s): {', '.join(missing)}")
+
+    from src.services.publish_validation import instagram_account_missing_fields
+
+    for row in account_rows.fetchall():
+        acc_id, platform, ig_uid, ig_tok = str(row[0]), str(row[1]).lower(), str(row[2]), str(row[3])
+        if platform in ("instagram", ""):
+            ig_missing = instagram_account_missing_fields(ig_uid, ig_tok)
+            if ig_missing:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Account {acc_id} is not ready for Instagram publish "
+                        f"(missing: {', '.join(ig_missing)}). "
+                        "Set ig_user_id and ig_access_token on the account first."
+                    ),
+                )
 
     # One active publish_now intent per (job, primary asset, account set). Prevents multiple
     # Instagram posts when idempotency_key drifts (caption edits, old clients, double clicks).

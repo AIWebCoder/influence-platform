@@ -17,7 +17,22 @@ from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from src.core.database import init_db
 from src.core.redis import init_redis
 from src.services.cache_service import init_cache
-from src.api import content, templates, niches, health, auth, scheduling, hashtags, alerts, users, reports, analytics, billing, generation_jobs
+from src.api import (
+    content,
+    templates,
+    niches,
+    health,
+    auth,
+    scheduling,
+    hashtags,
+    alerts,
+    users,
+    reports,
+    analytics,
+    billing,
+    generation_jobs,
+    ready_queue,
+)
 from src.services.pipeline_trace import configure_pipeline_trace_logging
 from src.services.publish_outbox_worker import publish_outbox_runner
 
@@ -143,6 +158,7 @@ app.include_router(content.router, prefix="/content", tags=["Content"])
 app.include_router(generation_jobs.router, prefix="/generation-jobs", tags=["Generation Jobs"])
 app.include_router(generation_jobs.publish_router, tags=["Publication Intents"])
 app.include_router(scheduling.router, prefix="/scheduling", tags=["Scheduling"])
+app.include_router(ready_queue.router, prefix="/ready-queue", tags=["Ready Queue"])
 app.include_router(hashtags.router, prefix="/hashtags", tags=["Hashtags"])
 app.include_router(alerts.router, prefix="/alerts", tags=["Alerts"])
 app.include_router(users.router, prefix="/users", tags=["Users"])

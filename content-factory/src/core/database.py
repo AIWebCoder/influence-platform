@@ -74,9 +74,67 @@ async def verify_migrations():
 
 async def init_db():
     async with engine.begin() as conn:
+        from src.core.content_schema import ensure_content_schema
+
+        await ensure_content_schema(conn)
         # Verify migrations/tables exist
         await verify_migrations()
+    await seed_first_admin()
     logger.info("✅ Database initialized and verified")
+
+
+async def seed_first_admin():
+    """Insert a single bootstrap admin into `users` if no admin row exists.
+
+    Uses ``ADMIN_EMAIL`` + ``ADMIN_PASSWORD`` from settings. Runs once at startup so the
+    operator workflow can remove the legacy env-var login fallback without locking us out.
+    """
+    from sqlalchemy import select, func
+    from src.models.user import User
+    from src.core.security import hash_password
+
+    async with AsyncSessionLocal() as session:
+        admin_count = await session.execute(
+            select(func.count(User.id)).where(User.role == "admin")
+        )
+        if (admin_count.scalar() or 0) > 0:
+            return
+
+        email = (settings.ADMIN_EMAIL or "").strip().lower()
+        if not email:
+            # Fall back to ADMIN_USERNAME when it already looks like an email; otherwise synthesize one
+            legacy = (settings.ADMIN_USERNAME or "admin").strip().lower()
+            email = legacy if "@" in legacy else f"{legacy}@influence.local"
+        password = settings.ADMIN_PASSWORD or ""
+        if not email or not password:
+            logger.warning("Skipping admin seed: ADMIN_EMAIL/ADMIN_USERNAME or ADMIN_PASSWORD is empty.")
+            return
+
+        # bcrypt's 72-byte limit — match the historical hash policy
+        safe_pwd = password.encode("utf-8", "ignore")[:72].decode("utf-8", "ignore")
+
+        existing = await session.execute(select(User).where(User.email == email))
+        existing_user = existing.scalar_one_or_none()
+        if existing_user:
+            if existing_user.role != "admin":
+                existing_user.role = "admin"
+                existing_user.is_active = True
+                await session.commit()
+                logger.warning("Promoted existing user '%s' to admin during bootstrap.", email)
+            return
+
+        admin = User(
+            email=email,
+            hashed_password=hash_password(safe_pwd),
+            role="admin",
+            is_active=True,
+        )
+        session.add(admin)
+        await session.commit()
+        logger.warning(
+            "Seeded bootstrap admin '%s'. Change this password immediately via the dashboard.",
+            email,
+        )
 
 
 async def get_db():

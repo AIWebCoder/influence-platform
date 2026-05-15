@@ -9,6 +9,8 @@ async function initDB() {
     idleTimeoutMillis: 30000
   });
   await pool.query('SELECT 1');
+  const { ensureProxySchema } = require('./proxySchema');
+  await ensureProxySchema(pool);
   console.log('✅ PostgreSQL connecté (Distribution Engine)');
 }
 

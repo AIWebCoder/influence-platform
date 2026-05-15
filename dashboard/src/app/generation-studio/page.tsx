@@ -4,8 +4,10 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { api, formatContentApiError } from "@/lib/api";
+import { summarizeJobPipelineErrors } from "@/lib/generation-errors";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -81,6 +83,9 @@ type SceneMetadata = {
   preview_image_url?: string;
   preview_video_url?: string;
   preview_kind?: string;
+  /** scene_pipeline = from DB scene fields; kie_quick_preview = dashboard "Img/Vid preview" API (Kie), not AliveAI. */
+  preview_image_source?: string;
+  preview_video_source?: string;
 };
 
 type JobScene = {
@@ -100,6 +105,8 @@ type JobScene = {
 type GenerationJobDetail = {
   id: string;
   status: string;
+  /** scene_based | multi_scene_single_video | ailiveai_single_video */
+  execution_mode?: string;
   progress: number;
   step_control?: Record<string, string>;
   input_payload: Record<string, unknown>;
@@ -168,17 +175,35 @@ function stepMetadataSkipped(metadata: Record<string, unknown> | undefined): boo
   return metadata?.skipped === true;
 }
 
+/** Reasons where the work IS done, just inside the video_generation step (not a true skip). */
+function stepMergedIntoVideoGeneration(metadata: Record<string, unknown> | undefined): boolean {
+  if (!stepMetadataSkipped(metadata)) return false;
+  const r = metadata?.reason;
+  return r === "ailiveai_single_video_path" || r === "single_seedance_video_path";
+}
+
+/** Short label shown under the step name in place of "Skipped". */
+function pipelineStepInlineLabel(metadata: Record<string, unknown> | undefined): string {
+  if (stepMergedIntoVideoGeneration(metadata)) return "Done inside video_generation";
+  const reason = metadata?.reason;
+  if (reason === "single_video_no_assembly_required") return "Not needed (single clip)";
+  return "Skipped";
+}
+
 function pipelineStepSkipHint(metadata: Record<string, unknown> | undefined): string | null {
   if (!stepMetadataSkipped(metadata)) return null;
   const reason = metadata?.reason;
-  if (reason === "single_seedance_video_path") {
-    return "Not used in Seedance single-video mode (one video pass, no per-scene images).";
-  }
   if (reason === "ailiveai_single_video_path") {
-    return "Not used in AILIVEAI single-video mode (one video pass, no per-scene images).";
+    return (
+      "AliveAI creates the blocking portrait and runs /prompts/image-to-video inside the " +
+      "video_generation step — no separate KIE keyframe pass is needed here."
+    );
+  }
+  if (reason === "single_seedance_video_path") {
+    return "Seedance single-video mode generates the full clip in video_generation — no per-scene keyframes here.";
   }
   if (reason === "single_video_no_assembly_required") {
-    return "Not used — final output is a single clip with no assembly step.";
+    return "Final output is a single clip; no ffmpeg concat is needed.";
   }
   if (typeof reason === "string" && reason.length > 0) {
     return reason;
@@ -200,10 +225,21 @@ function formatVideoGenExecutionStart(metadata: Record<string, unknown> | undefi
   });
 }
 
-function StepIcon({ status, skipped }: { status: string; skipped?: boolean }) {
+function StepIcon({
+  status,
+  skipped,
+  mergedIntoVideo,
+}: {
+  status: string;
+  skipped?: boolean;
+  mergedIntoVideo?: boolean;
+}) {
   if (status === "completed" && skipped) {
+    const tooltip = mergedIntoVideo
+      ? "Done inside video_generation"
+      : "Skipped for this execution mode";
     return (
-      <span title="Skipped for this execution mode" className="inline-flex">
+      <span title={tooltip} className="inline-flex">
         <SkipForward className="h-4 w-4 text-muted-foreground" aria-hidden />
       </span>
     );
@@ -611,6 +647,7 @@ function GenerationStudioPageInner() {
   const [ailiveaiGender, setAiliveaiGender] = useState<AiliveaiGender>("FEMALE");
   const [videoDuration, setVideoDuration] = useState<number>(15);
   const [niche, setNiche] = useState<string>("fitness");
+  const [templateId, setTemplateId] = useState<string>("");
   const [topic, setTopic] = useState("");
   const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
   const [schedule, setSchedule] = useState<Date | undefined>(undefined);
@@ -667,6 +704,34 @@ function GenerationStudioPageInner() {
     { refreshInterval: jobId ? 2000 : 0 }
   );
 
+  const { data: dbNiches = [] } = useSWR<Array<{ id: string; name: string }>>(
+    "content-niches",
+    () => api.content.getNiches(),
+    { revalidateOnFocus: false }
+  );
+
+  const nicheOptions = useMemo(() => {
+    if (dbNiches.length > 0) {
+      return dbNiches.map((n) => n.name);
+    }
+    return [...NICHE_OPTIONS];
+  }, [dbNiches]);
+
+  const nicheUuid = useMemo(
+    () => dbNiches.find((n) => n.name === niche)?.id,
+    [dbNiches, niche]
+  );
+
+  const { data: nicheTemplates = [] } = useSWR<Array<{ id: string; name: string }>>(
+    nicheUuid ? ["content-templates", nicheUuid] : null,
+    () => api.content.getTemplates({ niche_id: nicheUuid, active_only: true }),
+    { revalidateOnFocus: false }
+  );
+
+  useEffect(() => {
+    setTemplateId("");
+  }, [niche]);
+
   const { data: accountChoices = [], isLoading: accountsLoading } = useSWR<Array<{ id: string; username: string }>>(
     "distribution-accounts",
     async () => {
@@ -685,11 +750,37 @@ function GenerationStudioPageInner() {
     { refreshInterval: 0 }
   );
 
-  const finalPlayableUrl = useMemo(() => {
-    if (!job || job.status !== "completed") return null;
-    if (job.output_url) return job.output_url;
-    const v = generatedAssets.find((a) => a.asset_type === "video");
-    return v?.public_url ?? null;
+  const liveJobClip = useMemo(() => {
+    if (!job) return { url: null as string | null, note: "" as string };
+    if (job.status === "completed") {
+      if (job.output_url) return { url: job.output_url, note: "" };
+      const v = generatedAssets.find((a) => a.asset_type === "video");
+      return { url: v?.public_url ?? null, note: "" };
+    }
+    if (job.output_url) {
+      return {
+        url: job.output_url,
+        note: "Output URL present while job is not completed — may be partial or stale.",
+      };
+    }
+    const scenes = [...(job.scenes || [])].sort((a, b) => a.scene_index - b.scene_index);
+    const first = scenes[0] as JobScene | undefined;
+    const m = first?.metadata;
+    const pv = m && typeof m.preview_video_url === "string" && m.preview_video_url.trim() ? m.preview_video_url.trim() : "";
+    if (!pv) return { url: null, note: "" };
+    if (m?.preview_video_source === "kie_quick_preview") {
+      return {
+        url: pv,
+        note: "This is a Kie.ai “Vid preview” sample from the dashboard — not the AliveAI clip from video_generation.",
+      };
+    }
+    if (m?.preview_video_source === "scene_pipeline") {
+      return {
+        url: pv,
+        note: "Stored scene video URL — may pre-date the latest pipeline failure.",
+      };
+    }
+    return { url: pv, note: "Scene preview URL — source not tagged; see Timeline / logs." };
   }, [job, generatedAssets]);
 
   useEffect(() => {
@@ -732,6 +823,11 @@ function GenerationStudioPageInner() {
   const sceneRegenDisabled = Boolean(jobIsCancelling || jobIsCancelled);
   const livePollActive = job && ["running", "pending", "cancelling"].includes(job.status);
   const isVerticalVideo = contentType === "reel" || contentType === "story";
+  const pipelineFailureSummary = useMemo(
+    () => (job ? summarizeJobPipelineErrors(job) : null),
+    [job],
+  );
+  const parseApiError = (e: unknown, fallback: string) => formatContentApiError(e, fallback);
 
   const handlePreview = async () => {
     if (!topic.trim()) {
@@ -751,8 +847,8 @@ function GenerationStudioPageInner() {
       setJobId(null);
       router.replace("/generation-studio", { scroll: false });
       toast.success("Scene preview ready (not saved as a job).");
-    } catch {
-      toast.error("Preview failed. Check Content API and Claude configuration.");
+    } catch (e: unknown) {
+      toast.error(parseApiError(e, "Preview failed. Check text provider API keys on Content Factory."));
     } finally {
       setPreviewLoading(false);
     }
@@ -773,6 +869,7 @@ function GenerationStudioPageInner() {
         topic: topic.trim(),
         target_accounts: selectedAccounts,
         scheduled_at: schedule ? schedule.toISOString() : undefined,
+        ...(templateId ? { template_id: templateId } : {}),
         video_duration:
           executionMode === "multi_scene_single_video" || executionMode === "ailiveai_single_video"
             ? videoDuration
@@ -784,17 +881,7 @@ function GenerationStudioPageInner() {
       router.replace(`/generation-studio?job=${encodeURIComponent(res.job_id)}`, { scroll: false });
       toast.success("Draft job created with scenes. Edit, preview, then launch.");
     } catch (e: unknown) {
-      const msg =
-        e && typeof e === "object" && "response" in e
-          ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
-          : null;
-      const code =
-        e && typeof e === "object" && "code" in e ? String((e as { code?: string }).code || "") : "";
-      if (code === "ECONNABORTED") {
-        toast.error("Create draft request timed out on frontend. Retrying usually succeeds.");
-      } else {
-        toast.error(typeof msg === "string" ? msg : "Could not create draft job.");
-      }
+      toast.error(parseApiError(e, "Could not create draft job."));
     } finally {
       setCreateLoading(false);
     }
@@ -809,8 +896,7 @@ function GenerationStudioPageInner() {
       await mutate();
       toast.success("Pipeline started.");
     } catch (e: unknown) {
-      const msg = e && typeof e === "object" && "response" in e ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail : null;
-      toast.error(typeof msg === "string" ? msg : "Launch failed.");
+      toast.error(parseApiError(e, "Launch failed."));
     } finally {
       setLaunchLoading(false);
     }
@@ -824,8 +910,7 @@ function GenerationStudioPageInner() {
       await mutate();
       toast.success("Stopping… partial results are kept.");
     } catch (e: unknown) {
-      const msg = e && typeof e === "object" && "response" in e ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail : null;
-      toast.error(typeof msg === "string" ? msg : "Could not request stop.");
+      toast.error(parseApiError(e, "Could not request stop."));
     } finally {
       setCancelLoading(false);
     }
@@ -838,8 +923,8 @@ function GenerationStudioPageInner() {
       await api.generationJobs.markReady(jobId);
       await mutate();
       toast.success("Marked ready.");
-    } catch {
-      toast.error("Could not mark ready.");
+    } catch (e: unknown) {
+      toast.error(parseApiError(e, "Could not mark ready."));
     } finally {
       setReadyLoading(false);
     }
@@ -855,8 +940,8 @@ function GenerationStudioPageInner() {
       if (kind === "video") {
         setOpenSceneVideoId(sceneId);
       }
-    } catch {
-      toast.error("Preview generation failed.");
+    } catch (e: unknown) {
+      toast.error(parseApiError(e, "Preview generation failed. Check Kie/AliveAI keys and credits."));
     } finally {
       setPreviewingTarget(null);
     }
@@ -888,8 +973,8 @@ function GenerationStudioPageInner() {
     try {
       await api.generationJobs.reorderScenes(jobId, next);
       await mutate();
-    } catch {
-      toast.error("Reorder failed.");
+    } catch (e: unknown) {
+      toast.error(parseApiError(e, "Reorder failed."));
     }
   };
 
@@ -930,8 +1015,8 @@ function GenerationStudioPageInner() {
         });
         await mutate();
         toast.success("Scene updated.");
-      } catch {
-        toast.error("Update failed.");
+      } catch (e: unknown) {
+        toast.error(parseApiError(e, "Update failed."));
         return;
       }
     } else {
@@ -958,8 +1043,8 @@ function GenerationStudioPageInner() {
         await api.generationJobs.retryScene(jobId, (scene as JobScene).id);
         await mutate();
         toast.success("Scene regeneration scheduled.");
-      } catch {
-        toast.error("Retry failed.");
+      } catch (e: unknown) {
+        toast.error(parseApiError(e, "Retry failed."));
       }
       return;
     }
@@ -972,8 +1057,8 @@ function GenerationStudioPageInner() {
       await api.generationJobs.retryStep(jobId, stepName);
       await mutate();
       toast.success(`Retry scheduled for ${stepName}.`);
-    } catch {
-      toast.error("Retry step failed.");
+    } catch (e: unknown) {
+      toast.error(parseApiError(e, "Retry step failed."));
     }
   };
 
@@ -985,11 +1070,7 @@ function GenerationStudioPageInner() {
       await mutate();
       toast.success(`Stopping ${stepName}…`);
     } catch (e: unknown) {
-      const msg =
-        e && typeof e === "object" && "response" in e
-          ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
-          : null;
-      toast.error(typeof msg === "string" ? msg : "Cancel step failed.");
+      toast.error(parseApiError(e, "Cancel step failed."));
     } finally {
       setCancelStepLoading(null);
     }
@@ -1082,9 +1163,28 @@ function GenerationStudioPageInner() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {NICHE_OPTIONS.map((n) => (
+                    {nicheOptions.map((n) => (
                       <SelectItem key={n} value={n}>
                         {n}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Template (optional)</Label>
+                <Select
+                  value={templateId || "__none__"}
+                  onValueChange={(v) => setTemplateId(v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="No template" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">No template</SelectItem>
+                    {nicheTemplates.map((tpl) => (
+                      <SelectItem key={tpl.id} value={tpl.id}>
+                        {tpl.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1442,7 +1542,7 @@ function GenerationStudioPageInner() {
                             {imagePreviewSrc ? (
                               <div
                                 className={cn(
-                                  "relative overflow-hidden rounded-lg border border-border/50 bg-muted/20 ring-1 ring-black/[0.04] dark:ring-white/[0.06]",
+                                  "relative mx-auto overflow-hidden rounded-lg border border-border/50 bg-muted/20 ring-1 ring-black/[0.04] dark:ring-white/[0.06]",
                                   isVerticalVideo ? "max-w-[min(100%,240px)]" : "max-w-md"
                                 )}
                               >
@@ -1481,7 +1581,7 @@ function GenerationStudioPageInner() {
                                 {!imageFolded ? (
                                   <button
                                     type="button"
-                                    className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                    className="flex w-full justify-center bg-black/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                                     onClick={() => setImageLightboxSrc(imagePreviewSrc)}
                                     aria-label="Open image preview fullscreen"
                                   >
@@ -1490,8 +1590,8 @@ function GenerationStudioPageInner() {
                                       alt=""
                                       src={imagePreviewSrc}
                                       className={cn(
-                                        "h-auto w-full object-cover",
-                                        isVerticalVideo ? "aspect-[9/16] max-h-[360px]" : "aspect-video max-h-[280px]"
+                                        "max-h-[360px] w-auto max-w-full object-contain",
+                                        isVerticalVideo ? "aspect-[9/16]" : "aspect-video max-h-[280px]"
                                       )}
                                     />
                                   </button>
@@ -1500,6 +1600,17 @@ function GenerationStudioPageInner() {
                                     <span className="text-xs text-muted-foreground">Image preview hidden</span>
                                   </div>
                                 )}
+                                {meta?.preview_image_source === "kie_quick_preview" && !imageFolded ? (
+                                  <p className="border-t border-border/40 bg-muted/20 px-2 py-1 text-center text-[10px] text-muted-foreground">
+                                    Kie.ai still frame — used for scene_based / multi_scene previews only.
+                                  </p>
+                                ) : null}
+                                {meta?.preview_image_source === "ailiveai_blocking_preview" && !imageFolded ? (
+                                  <p className="border-t border-border/40 bg-muted/20 px-2 py-1 text-center text-[10px] text-muted-foreground">
+                                    AliveAI blocking portrait (POST /prompts). Final reel uses the same path inside
+                                    video_generation (image-to-video).
+                                  </p>
+                                ) : null}
                               </div>
                             ) : null}
                             {videoSrc ? (
@@ -1516,6 +1627,11 @@ function GenerationStudioPageInner() {
                                     videoPanelOpen ? "opacity-100" : "pointer-events-none opacity-0"
                                   )}
                                 >
+                                  {meta?.preview_video_source === "kie_quick_preview" ? (
+                                    <p className="mb-1 text-center text-[10px] leading-tight text-amber-700 dark:text-amber-300/90">
+                                      Kie.ai quick preview — other execution modes only.
+                                    </p>
+                                  ) : null}
                                   <video
                                     src={videoSrc}
                                     className={cn(
@@ -1606,15 +1722,27 @@ function GenerationStudioPageInner() {
                     </div>
                   </div>
 
-                  {finalPlayableUrl ? (
-                    <div className="overflow-hidden rounded-md border bg-black">
-                      <video
-                        key={finalPlayableUrl}
-                        src={finalPlayableUrl}
-                        className="aspect-[9/16] max-h-[320px] w-full object-contain"
-                        controls
-                        playsInline
-                      />
+                  {job.status === "failed" && pipelineFailureSummary ? (
+                    <Alert variant="destructive">
+                      <AlertTitle>Pipeline failed</AlertTitle>
+                      <AlertDescription className="text-sm">{pipelineFailureSummary}</AlertDescription>
+                    </Alert>
+                  ) : null}
+
+                  {liveJobClip.url ? (
+                    <div className="space-y-1">
+                      {liveJobClip.note ? (
+                        <p className="text-[11px] leading-snug text-amber-700 dark:text-amber-300/90">{liveJobClip.note}</p>
+                      ) : null}
+                      <div className="overflow-hidden rounded-md border bg-black">
+                        <video
+                          key={liveJobClip.url}
+                          src={liveJobClip.url}
+                          className="aspect-[9/16] max-h-[320px] w-full object-contain"
+                          controls
+                          playsInline
+                        />
+                      </div>
                     </div>
                   ) : job.status === "completed" && assetsLoading ? (
                     <div className="flex aspect-video items-center justify-center gap-2 rounded-md border border-dashed px-3 text-sm text-muted-foreground">
@@ -1627,7 +1755,9 @@ function GenerationStudioPageInner() {
                         ? "Job was cancelled. Partial scene media is preserved; no final assembly was run."
                         : job.status === "completed"
                           ? "No final video URL yet. If assets exist below, use Publish or scene previews."
-                          : "Final video appears when assembly completes."}
+                          : job.status === "failed"
+                            ? "No output or scene preview URL on this job. Use Timeline “Vid preview” or Retry after fixing provider limits."
+                            : "Final video appears when the pipeline completes successfully."}
                     </div>
                   )}
 
@@ -1644,6 +1774,7 @@ function GenerationStudioPageInner() {
                       {job.steps.map((s) => {
                         const ctrl = pipelineStepControl(s.step_name, s.status);
                         const stepSkipped = stepMetadataSkipped(s.metadata);
+                        const stepMergedIntoVideo = stepMergedIntoVideoGeneration(s.metadata);
                         const skipHint = pipelineStepSkipHint(s.metadata);
                         const videoGenStartedAt =
                           s.step_name === "video_generation"
@@ -1665,11 +1796,17 @@ function GenerationStudioPageInner() {
                             className="flex items-start justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm"
                           >
                             <div className="flex min-w-0 flex-1 items-start gap-2">
-                              <StepIcon status={s.status} skipped={stepSkipped} />
+                              <StepIcon
+                                status={s.status}
+                                skipped={stepSkipped}
+                                mergedIntoVideo={stepMergedIntoVideo}
+                              />
                               <div className="min-w-0">
                                 <p className="font-medium leading-none">{s.step_name}</p>
                                 {stepSkipped && s.status === "completed" ? (
-                                  <p className="text-xs text-muted-foreground">Skipped</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {pipelineStepInlineLabel(s.metadata)}
+                                  </p>
                                 ) : (
                                   <>
                                     <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
@@ -1800,17 +1937,19 @@ function GenerationStudioPageInner() {
           if (!open) setImageLightboxSrc(null);
         }}
       >
-        <DialogContent className="max-h-[95vh] max-w-[min(96vw,1200px)] border-border/40 bg-background p-2 sm:p-4">
-          <DialogHeader>
-            <DialogTitle className="sr-only">Scene image preview</DialogTitle>
+        <DialogContent className="flex max-h-[95vh] max-w-[min(96vw,1200px)] flex-col gap-0 border-border/40 bg-black p-2 sm:p-4">
+          <DialogHeader className="sr-only">
+            <DialogTitle>Scene image preview</DialogTitle>
           </DialogHeader>
           {imageLightboxSrc ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={imageLightboxSrc}
-              alt=""
-              className="mx-auto max-h-[min(88vh,900px)] w-full max-w-full object-contain"
-            />
+            <div className="flex min-h-[min(88vh,900px)] w-full flex-1 items-center justify-center overflow-auto">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={imageLightboxSrc}
+                alt=""
+                className="h-auto max-h-[min(88vh,900px)] w-auto max-w-full object-contain"
+              />
+            </div>
           ) : null}
         </DialogContent>
       </Dialog>

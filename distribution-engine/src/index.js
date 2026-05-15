@@ -73,6 +73,9 @@ app.use('/ab-tests', abTestingRouter);
 const campaignRouter = require('./managers/campaignRouter');
 app.use('/campaigns', campaignRouter);
 
+const dashboardRouter = require('./managers/dashboardRouter');
+app.use('/dashboard', dashboardRouter);
+
 app.get('/', (req, res) => {
   res.json({
     service: 'Distribution Engine',
@@ -138,6 +141,27 @@ async function start() {
       console.log('[DistributionEngine] Running scheduled A/B test evaluations...');
       WinnerDetectionService.runAutoEvaluation();
     }, 4 * 60 * 60 * 1000);
+
+    // 5. Shadowban engagement scan (every 12 hours, Instagram accounts)
+    const ShadowbanMonitor = require('./health/ShadowbanMonitor');
+    const runShadowbanSweep = async () => {
+      try {
+        const pool = require('./core/database').getPool();
+        const res = await pool.query(
+          `SELECT id FROM accounts
+           WHERE LOWER(COALESCE(platform, 'instagram')) = 'instagram'
+             AND LOWER(status) IN ('active', 'warming')`
+        );
+        for (const row of res.rows) {
+          await ShadowbanMonitor.analyzeEngagement(row.id);
+        }
+        console.log(`[ShadowbanMonitor] Sweep completed for ${res.rows.length} accounts`);
+      } catch (err) {
+        console.warn('[ShadowbanMonitor] Scheduled sweep failed:', err.message);
+      }
+    };
+    setInterval(runShadowbanSweep, 12 * 60 * 60 * 1000);
+    runShadowbanSweep().catch(() => {});
 
     const PORT = process.env.PORT || 3001;
     app.listen(PORT, () => {
