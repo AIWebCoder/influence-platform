@@ -213,6 +213,7 @@ Weekly sync: publish path diagram + checklist % per block.
 - GitHub issues: prefix `int/P0-`, `int/P2-`, etc.
 - Definition of Done: acceptance criteria + automated test or runbook step
 - Update [livrable-client-checklist.md](./livrable-client-checklist.md) at M1-M5
+- **Last checklist refresh:** 18 May 2026 — global **~68%** (was ~55% on 15 May)
 
 ---
 

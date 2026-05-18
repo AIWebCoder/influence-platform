@@ -138,6 +138,30 @@ test("create, publish, and monitor flow", async ({ page }) => {
         total_retries: 1,
         published_today: 0,
         failed_today: 0,
+        published_7d: 3,
+        failed_7d: 1,
+      }),
+    });
+  });
+
+  await page.route("**/dashboard/ops-summary", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        generated_at: now,
+        publication_windows: {
+          last_1h: { published: 1, failed: 0, permanently_failed: 0 },
+        },
+        queue: {
+          publish_commands_pending: 0,
+          content_ready: 0,
+          publish_delayed: 0,
+          publish_failed_dlq: 0,
+        },
+        accounts: { total: 1, active: 1, warming: 0, low_health: 0 },
+        failure_breakdown: [],
+        proxy_capacity: { slots_available: 5, strict_one_to_one: true },
       }),
     });
   });
