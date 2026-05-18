@@ -62,6 +62,16 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
+router.delete('/:id', async (req, res) => {
+  try {
+    const result = await ProxyManager.deleteProxy(req.params.id);
+    res.json(result);
+  } catch (err) {
+    const code = err.message === 'Proxy not found' ? 404 : 400;
+    res.status(code).json({ error: 'Failed to delete proxy', details: err.message });
+  }
+});
+
 router.post('/check', async (req, res) => {
   try {
     ProxyManager.runHealthCheckAll();

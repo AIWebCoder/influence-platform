@@ -258,6 +258,23 @@ export const api = {
       const response = await distributionClient.post('/proxies', payload);
       return response.data;
     },
+    updateProxy: async (
+      id: string,
+      payload: {
+        host?: string;
+        port?: number;
+        provider?: string | null;
+        country?: string | null;
+        is_active?: boolean;
+      },
+    ) => {
+      const response = await distributionClient.patch(`/proxies/${id}`, payload);
+      return response.data;
+    },
+    deleteProxy: async (id: string) => {
+      const response = await distributionClient.delete(`/proxies/${id}`);
+      return response.data;
+    },
     bulkImportAccounts: async (
       accounts: Array<{
         username: string;

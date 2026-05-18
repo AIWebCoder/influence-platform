@@ -86,6 +86,27 @@ class ProxyManager {
     return result.rows[0];
   }
 
+  async deleteProxy(proxyId) {
+    const pool = getPool();
+    const existing = await pool.query(
+      `SELECT p.id,
+              p.assigned_account_id,
+              (SELECT COUNT(*)::int FROM accounts a WHERE a.proxy_id = p.id) AS account_links
+       FROM proxies p
+       WHERE p.id = $1`,
+      [proxyId],
+    );
+    if (existing.rows.length === 0) {
+      throw new Error('Proxy not found');
+    }
+    const row = existing.rows[0];
+    if (row.assigned_account_id || Number(row.account_links) > 0) {
+      throw new Error('Proxy is assigned to an account. Unassign it from Accounts before deleting.');
+    }
+    await pool.query('DELETE FROM proxies WHERE id = $1', [proxyId]);
+    return { success: true, id: proxyId };
+  }
+
   async releaseProxyFromAccount(accountId) {
     const pool = getPool();
     await pool.query('UPDATE accounts SET proxy_id = NULL WHERE id = $1', [accountId]);

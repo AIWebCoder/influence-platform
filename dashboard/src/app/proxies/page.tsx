@@ -8,21 +8,23 @@ import {
   Loader2,
   Plus,
   RefreshCw,
-  Search,
   XCircle,
   Zap,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useLocale } from "@/components/i18n/LocaleProvider";
+import {
+  createProxiesColumns,
+  type ProxyRow,
+} from "@/components/proxies/proxies-columns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
+import { DataTable } from "@/components/ui/data-table";
 import {
   Dialog,
   DialogContent,
@@ -32,26 +34,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-
-interface Proxy {
-  id: string;
-  host: string;
-  port: number;
-  is_active: boolean;
-  response_time: number | null;
-  success_rate: string;
-  total_requests: number;
-  provider: string | null;
-  country: string | null;
-  last_checked_at: string | null;
-}
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface ProxyStats {
   total: number;
@@ -95,23 +83,29 @@ function StatCard({
   );
 }
 
-function latencyProgressValue(ms: number) {
-  return Math.min(100, (ms / 2000) * 100);
-}
-
 export default function ProxiesPage() {
   const { text } = useLocale();
   const p = text.proxies;
 
-  const [proxies, setProxies] = useState<Proxy[]>([]);
+  const [proxies, setProxies] = useState<ProxyRow[]>([]);
   const [stats, setStats] = useState<ProxyStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [editing, setEditing] = useState<ProxyRow | null>(null);
+  const [deletingProxy, setDeletingProxy] = useState<ProxyRow | null>(null);
   const [newHost, setNewHost] = useState("");
   const [newPort, setNewPort] = useState("18080");
-  const [search, setSearch] = useState("");
+  const [editHost, setEditHost] = useState("");
+  const [editPort, setEditPort] = useState("");
+  const [editProvider, setEditProvider] = useState("");
+  const [editCountry, setEditCountry] = useState("");
+  const [editActive, setEditActive] = useState("true");
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -121,7 +115,7 @@ export default function ProxiesPage() {
         api.distribution.getProxies(),
         api.distribution.getProxyStats(),
       ]);
-      setProxies(list);
+      setProxies(list as ProxyRow[]);
       setStats(summary);
     } catch {
       setError(p.loadError);
@@ -136,16 +130,48 @@ export default function ProxiesPage() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return proxies;
-    return proxies.filter(
-      (proxy) =>
-        proxy.host.toLowerCase().includes(q) ||
-        (proxy.provider?.toLowerCase().includes(q) ?? false) ||
-        (proxy.country?.toLowerCase().includes(q) ?? false),
-    );
-  }, [proxies, search]);
+  const columnLabels = useMemo(
+    () => ({
+      proxyNode: p.proxyNode,
+      status: p.status,
+      latency: p.latency,
+      successRate: p.successRate,
+      usage: p.usage,
+      lastChecked: p.lastChecked,
+      actions: p.actions,
+      edit: p.edit,
+      delete: p.delete,
+      healthy: p.healthy,
+      dead: p.dead,
+      never: p.never,
+      reqs: p.reqs,
+      public: p.public,
+      intl: p.intl,
+      assigned: p.assigned,
+      free: p.free,
+    }),
+    [p],
+  );
+
+  const openEdit = useCallback((proxy: ProxyRow) => {
+    setEditing(proxy);
+    setEditHost(proxy.host);
+    setEditPort(String(proxy.port));
+    setEditProvider(proxy.provider || "");
+    setEditCountry(proxy.country || "");
+    setEditActive(proxy.is_active ? "true" : "false");
+    setEditOpen(true);
+  }, []);
+
+  const openDelete = useCallback((proxy: ProxyRow) => {
+    setDeletingProxy(proxy);
+    setDeleteOpen(true);
+  }, []);
+
+  const columns = useMemo(
+    () => createProxiesColumns(openEdit, openDelete, columnLabels),
+    [columnLabels, openDelete, openEdit],
+  );
 
   const handleAddProxy = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -166,6 +192,49 @@ export default function ProxiesPage() {
       setError(p.addError);
     } finally {
       setAdding(false);
+    }
+  };
+
+  const handleEditProxy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editing) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.distribution.updateProxy(editing.id, {
+        host: editHost.trim(),
+        port: parseInt(editPort, 10),
+        provider: editProvider.trim() || null,
+        country: editCountry.trim() || null,
+        is_active: editActive === "true",
+      });
+      setEditOpen(false);
+      setEditing(null);
+      await fetchData();
+    } catch {
+      setError(p.updateError);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteProxy = async () => {
+    if (!deletingProxy) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await api.distribution.deleteProxy(deletingProxy.id);
+      setDeleteOpen(false);
+      setDeletingProxy(null);
+      await fetchData();
+    } catch (err: unknown) {
+      const msg =
+        err && typeof err === "object" && "response" in err
+          ? (err as { response?: { data?: { details?: string } } }).response?.data?.details
+          : null;
+      setError(msg || p.deleteError);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -259,18 +328,8 @@ export default function ProxiesPage() {
       </div>
 
       <Card>
-        <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <CardHeader>
           <CardTitle className="text-base">{p.proxyNode}</CardTitle>
-          <div className="relative w-full sm:max-w-xs">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              type="search"
-              placeholder={p.search}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-9"
-            />
-          </div>
         </CardHeader>
         <CardContent>
           {loading && proxies.length === 0 ? (
@@ -280,90 +339,13 @@ export default function ProxiesPage() {
               <Skeleton className="h-10 w-full" />
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{p.proxyNode}</TableHead>
-                  <TableHead>{p.status}</TableHead>
-                  <TableHead>{p.latency}</TableHead>
-                  <TableHead>{p.successRate}</TableHead>
-                  <TableHead>{p.usage}</TableHead>
-                  <TableHead className="text-right">{p.lastChecked}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                      {search.trim() ? p.noResults : p.empty}
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  filtered.map((proxy) => {
-                    const success = parseFloat(proxy.success_rate);
-                    return (
-                      <TableRow key={proxy.id}>
-                        <TableCell>
-                          <div className="font-medium">
-                            {proxy.host}:{proxy.port}
-                          </div>
-                          <div className="mt-1 flex items-center gap-2">
-                            <Badge variant="secondary" className="text-xs font-normal">
-                              {proxy.provider || p.public}
-                            </Badge>
-                            <span className="text-xs text-muted-foreground uppercase">
-                              {proxy.country || p.intl}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={proxy.is_active ? "default" : "destructive"}>
-                            {proxy.is_active ? p.healthy : p.dead}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {proxy.response_time != null ? (
-                            <div className="flex items-center gap-2 min-w-[120px]">
-                              <Progress
-                                value={latencyProgressValue(proxy.response_time)}
-                                className="h-2 flex-1"
-                              />
-                              <span className="text-xs tabular-nums text-muted-foreground">
-                                {proxy.response_time}ms
-                              </span>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <span
-                            className={cn(
-                              "text-sm font-medium",
-                              success > 95
-                                ? "text-emerald-600 dark:text-emerald-400"
-                                : success > 80
-                                  ? "text-amber-600 dark:text-amber-400"
-                                  : "text-destructive",
-                            )}
-                          >
-                            {Number.isFinite(success) ? `${success.toFixed(1)}%` : "—"}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {proxy.total_requests} {p.reqs}
-                        </TableCell>
-                        <TableCell className="text-right text-muted-foreground text-sm tabular-nums">
-                          {proxy.last_checked_at
-                            ? new Date(proxy.last_checked_at).toLocaleTimeString()
-                            : p.never}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
+            <DataTable
+              columns={columns}
+              data={proxies}
+              filterColumnId="host"
+              filterPlaceholder={p.search}
+              emptyMessage={p.empty}
+            />
           )}
         </CardContent>
       </Card>
@@ -407,6 +389,107 @@ export default function ProxiesPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{p.editModalTitle}</DialogTitle>
+            <DialogDescription>{p.editModalDescription}</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleEditProxy} className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-host">{p.host}</Label>
+                <Input
+                  id="edit-host"
+                  value={editHost}
+                  onChange={(e) => setEditHost(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-port">{p.port}</Label>
+                <Input
+                  id="edit-port"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={editPort}
+                  onChange={(e) => setEditPort(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-provider">{p.provider}</Label>
+                <Input
+                  id="edit-provider"
+                  value={editProvider}
+                  onChange={(e) => setEditProvider(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-country">{p.country}</Label>
+                <Input
+                  id="edit-country"
+                  value={editCountry}
+                  onChange={(e) => setEditCountry(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>{p.status}</Label>
+              <Select value={editActive} onValueChange={setEditActive}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="true">{p.activeStatus}</SelectItem>
+                  <SelectItem value="false">{p.inactiveStatus}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
+                {p.cancel}
+              </Button>
+              <Button type="submit" disabled={saving}>
+                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {p.save}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{p.deleteModalTitle}</DialogTitle>
+            <DialogDescription>{p.deleteModalDescription}</DialogDescription>
+          </DialogHeader>
+          {deletingProxy ? (
+            <p className="text-sm font-medium">
+              {deletingProxy.host}:{deletingProxy.port}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setDeleteOpen(false)}>
+              {p.cancel}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={deleting}
+              onClick={() => void handleDeleteProxy()}
+            >
+              {deleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {p.confirmDelete}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
