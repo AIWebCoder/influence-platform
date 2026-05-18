@@ -6,9 +6,15 @@ export const config = {
     "/analytics(.*)",
     "/ab-tests(.*)",
     "/accounts(.*)",
+    "/account-health(.*)",
     "/campaigns(.*)",
+    "/calendar(.*)",
+    "/queue(.*)",
+    "/templates(.*)",
+    "/proxies(.*)",
+    "/users(.*)",
     "/generation-studio(.*)",
     "/publications(.*)",
-    "/emulators(.*)"
-  ]
+    "/emulators(.*)",
+  ],
 };

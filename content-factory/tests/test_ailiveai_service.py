@@ -120,7 +120,13 @@ async def test_generate_video_timeout(instant_sleep, ailiveai_settings, monkeypa
 @pytest.mark.asyncio
 async def test_service_init_missing_key_generates_error_dict(monkeypatch):
     monkeypatch.setattr(ailiveai_service.settings, "AILIVEAI_API_KEY", "", raising=False)
+    monkeypatch.setattr(ailiveai_service.settings, "AILIVEAI_API_TOKEN", "", raising=False)
     monkeypatch.setattr(ailiveai_service.settings, "AILIVEAI_BASE_URL", "https://api.example.test", raising=False)
+    monkeypatch.setattr(
+        type(ailiveai_service.settings),
+        "resolved_ailiveai_api_key",
+        lambda _self: "",
+    )
 
     svc = ailiveai_service.AiliveaiService()
     out = await svc.generate_video("x", media_id="m1")

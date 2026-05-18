@@ -2,25 +2,23 @@ import pytest
 import pytest_asyncio
 from unittest.mock import patch, AsyncMock
 from httpx import AsyncClient, ASGITransport
-from src.main import app
-from src.core.database import Base, engine
-
-
 from sqlalchemy import text
+
+from src.main import app
+from src.core.database import engine
+
+_CONTENT_TABLES = ("content_packets", "templates", "niches")
+
 
 @pytest_asyncio.fixture(autouse=True)
 async def setup_db():
-    # Setup DB: just clean data before the test, assuming schema exists from init.sql
     async with engine.begin() as conn:
-        for table in reversed(Base.metadata.sorted_tables):
-            await conn.execute(text(f"TRUNCATE TABLE {table.name} CASCADE;"))
-            
+        for table in _CONTENT_TABLES:
+            await conn.execute(text(f'TRUNCATE TABLE "{table}" RESTART IDENTITY CASCADE'))
     yield
-    
-    # Teardown DB: clean data again
     async with engine.begin() as conn:
-        for table in reversed(Base.metadata.sorted_tables):
-            await conn.execute(text(f"TRUNCATE TABLE {table.name} CASCADE;"))
+        for table in _CONTENT_TABLES:
+            await conn.execute(text(f'TRUNCATE TABLE "{table}" RESTART IDENTITY CASCADE'))
 
 
 @pytest.fixture(autouse=True)

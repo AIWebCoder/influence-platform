@@ -53,7 +53,7 @@ async def list_templates(
     serialized = [TemplateResponse.model_validate(t).model_dump(mode="json") for t in result]
 
     await cache_service.set(cache_key, serialized, CACHE_TTL)
-    return result
+    return serialized
 
 @router.get("/{template_id}", response_model=TemplateResponse)
 async def get_template(template_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
