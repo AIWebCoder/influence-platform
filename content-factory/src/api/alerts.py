@@ -45,6 +45,19 @@ async def get_unread_count(db: AsyncSession = Depends(get_db)):
     return {"unread_count": row.count if row else 0}
 
 
+@router.post("/read-all")
+async def mark_all_alerts_read(db: AsyncSession = Depends(get_db)):
+    """Mark every unread alert as read (must be registered before /read/{alert_id})."""
+    result = await db.execute(
+        text(
+            "UPDATE alerts SET is_read = true WHERE is_read = false RETURNING id"
+        )
+    )
+    rows = result.fetchall()
+    await db.commit()
+    return {"status": "ok", "marked_count": len(rows)}
+
+
 @router.post("/read/{alert_id}")
 async def mark_alert_read(alert_id: str, db: AsyncSession = Depends(get_db)):
     """Mark a single alert as read."""
@@ -60,16 +73,3 @@ async def mark_alert_read(alert_id: str, db: AsyncSession = Depends(get_db)):
         )
     await db.commit()
     return {"status": "ok", "id": alert_id}
-
-
-@router.post("/read-all")
-async def mark_all_alerts_read(db: AsyncSession = Depends(get_db)):
-    """Mark every unread alert as read."""
-    result = await db.execute(
-        text(
-            "UPDATE alerts SET is_read = true WHERE is_read = false RETURNING id"
-        )
-    )
-    rows = result.fetchall()
-    await db.commit()
-    return {"status": "ok", "marked_count": len(rows)}
