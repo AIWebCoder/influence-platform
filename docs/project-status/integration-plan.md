@@ -127,7 +127,7 @@ Order: P0 then P1 then P2 and P3 parallel then P4 then P5
 | P4.2 | Protect admin routes | `middleware.ts` | `/users`, `/account-health` require auth |
 | P4.3 | **Campaigns V1** (if in contract) | `campaigns/page.tsx`, `LaunchCampaignForm.tsx`, `CampaignManager.js` | Create campaign -> N generation jobs |
 | P4.3b | **Or** defer campaigns | Update `livrable-client-checklist.md` | Client sign-off on scope cut |
-| P4.4 | Analytics page (light) | `analytics/page.tsx` | 7-day publish stats, not placeholder |
+| P4.4 | Analytics page (light) | `analytics/page.tsx` | 7-day publish stats + ops-summary (in progress May 2026) |
 | P4.5 | Alerts with JWT | `AlertBell.tsx`, `dashboard/src/lib/api.ts` | Authenticated alert list |
 | P4.6 | Account onboarding for IG publish | `accounts/page.tsx` | Token status visible before dispatch |
 

@@ -117,7 +117,7 @@ export function AppSidebar() {
       label: text.nav.groupOverview,
       items: [
         { name: text.nav.dashboard, href: "/", icon: LayoutDashboard },
-        { name: text.nav.analytics, href: "/analytics", icon: BarChart3, comingSoon: true },
+        { name: text.nav.analytics, href: "/analytics", icon: BarChart3 },
       ],
     },
     {

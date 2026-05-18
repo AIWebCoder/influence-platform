@@ -15,3 +15,5 @@ Legacy content:ready is skipped when GENERATION_DISTRIBUTION_MODE=publish_intent
 - ENVIRONMENT=production (distribution-engine)
 
 See integration-plan.md phase P0.
+
+Operator smoke: [operator-smoke-test.md](./operator-smoke-test.md). Scale 50 accounts: [scale-50-accounts.md](./scale-50-accounts.md).

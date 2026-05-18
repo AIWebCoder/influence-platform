@@ -101,7 +101,12 @@ router.get('/stats', async (req, res) => {
         COUNT(*) FILTER (WHERE status = 'retrying') as retrying,
         COALESCE(SUM(retry_count), 0) as total_retries,
         COUNT(*) FILTER (WHERE published_at >= CURRENT_DATE) as published_today,
-        COUNT(*) FILTER (WHERE status IN ('failed', 'permanently_failed') AND created_at >= CURRENT_DATE) as failed_today
+        COUNT(*) FILTER (WHERE status IN ('failed', 'permanently_failed') AND created_at >= CURRENT_DATE) as failed_today,
+        COUNT(*) FILTER (WHERE published_at >= NOW() - INTERVAL '7 days') as published_7d,
+        COUNT(*) FILTER (
+          WHERE status IN ('failed', 'permanently_failed')
+            AND updated_at >= NOW() - INTERVAL '7 days'
+        ) as failed_7d
       FROM publications
     `);
 
@@ -117,6 +122,8 @@ router.get('/stats', async (req, res) => {
       total_retries: parseInt(stats.total_retries, 10),
       published_today: parseInt(stats.published_today, 10),
       failed_today: parseInt(stats.failed_today, 10),
+      published_7d: parseInt(stats.published_7d, 10),
+      failed_7d: parseInt(stats.failed_7d, 10),
     });
   } catch (error) {
     console.error('Error GET /publications/stats:', error);
