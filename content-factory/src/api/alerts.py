@@ -60,3 +60,16 @@ async def mark_alert_read(alert_id: str, db: AsyncSession = Depends(get_db)):
         )
     await db.commit()
     return {"status": "ok", "id": alert_id}
+
+
+@router.post("/read-all")
+async def mark_all_alerts_read(db: AsyncSession = Depends(get_db)):
+    """Mark every unread alert as read."""
+    result = await db.execute(
+        text(
+            "UPDATE alerts SET is_read = true WHERE is_read = false RETURNING id"
+        )
+    )
+    rows = result.fetchall()
+    await db.commit()
+    return {"status": "ok", "marked_count": len(rows)}

@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { Bell, X, ShieldAlert, AlertTriangle, Info } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Bell, X, ShieldAlert, AlertTriangle, Info, Loader2 } from "lucide-react";
 import { useLocale } from "@/components/i18n/LocaleProvider";
+import { api } from "@/lib/api";
+import { Button } from "@/components/ui/button";
 
 interface Alert {
   id: string;
@@ -13,46 +15,44 @@ interface Alert {
   created_at: string;
 }
 
-const CONTENT_API = process.env.NEXT_PUBLIC_CONTENT_API_URL || "http://localhost:8000";
-
 export function AlertBell() {
   const { t } = useLocale();
   const [unreadCount, setUnreadCount] = useState(0);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [hasBanAlert, setHasBanAlert] = useState(false);
+  const [markingAll, setMarkingAll] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const fetchUnreadCount = async () => {
-      try {
-        const res = await fetch(`${CONTENT_API}/alerts/unread/count`);
-        const data = await res.json();
-        setUnreadCount(data.unread_count || 0);
-      } catch {}
-    };
+  const refreshUnreadCount = useCallback(async () => {
+    try {
+      const data = await api.alerts.getUnreadCount();
+      setUnreadCount(data.unread_count || 0);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
-    fetchUnreadCount();
-    const interval = setInterval(fetchUnreadCount, 60_000);
-    return () => clearInterval(interval);
+  const loadAlerts = useCallback(async () => {
+    try {
+      const data: Alert[] = await api.alerts.getAlerts();
+      setAlerts(data.slice(0, 20));
+      setHasBanAlert(data.some((a) => a.type === "ban" && !a.is_read));
+    } catch {
+      setAlerts([]);
+    }
   }, []);
 
   useEffect(() => {
+    void refreshUnreadCount();
+    const interval = setInterval(() => void refreshUnreadCount(), 60_000);
+    return () => clearInterval(interval);
+  }, [refreshUnreadCount]);
+
+  useEffect(() => {
     if (!isOpen) return;
-
-    const fetchAlerts = async () => {
-      try {
-        const res = await fetch(`${CONTENT_API}/alerts`);
-        const data: Alert[] = await res.json();
-        setAlerts(data.slice(0, 10));
-        setHasBanAlert(data.some((a) => a.type === "ban" && !a.is_read));
-      } catch {
-        setAlerts([]);
-      }
-    };
-
-    fetchAlerts();
-  }, [isOpen]);
+    void loadAlerts();
+  }, [isOpen, loadAlerts]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -66,10 +66,26 @@ export function AlertBell() {
 
   const markAsRead = async (alertId: string) => {
     try {
-      await fetch(`${CONTENT_API}/alerts/read/${alertId}`, { method: "POST" });
+      await api.alerts.markAsRead(alertId);
       setAlerts((prev) => prev.map((a) => (a.id === alertId ? { ...a, is_read: true } : a)));
       setUnreadCount((prev) => Math.max(0, prev - 1));
-    } catch {}
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const markAllAsRead = async () => {
+    setMarkingAll(true);
+    try {
+      await api.alerts.markAllAsRead();
+      setAlerts((prev) => prev.map((a) => ({ ...a, is_read: true })));
+      setUnreadCount(0);
+      setHasBanAlert(false);
+    } catch {
+      /* ignore */
+    } finally {
+      setMarkingAll(false);
+    }
   };
 
   const getIcon = (type: string) => {
@@ -95,6 +111,8 @@ export function AlertBell() {
     return t("alerts.daysAgo", { count: Math.floor(diffH / 24) });
   };
 
+  const unreadInList = alerts.filter((a) => !a.is_read).length;
+
   return (
     <div className="relative" ref={dropdownRef}>
       {hasBanAlert && (
@@ -104,6 +122,7 @@ export function AlertBell() {
       )}
 
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
         className="relative rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
         aria-label={t("alerts.ariaLabel")}
@@ -118,16 +137,40 @@ export function AlertBell() {
 
       {isOpen && (
         <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-lg border bg-background shadow-xl">
-          <div className="flex items-center justify-between border-b px-4 py-2.5">
+          <div className="flex items-center justify-between gap-2 border-b px-4 py-2.5">
             <h3 className="text-sm font-semibold">{t("alerts.title")}</h3>
-            <button onClick={() => setIsOpen(false)} className="text-muted-foreground hover:text-foreground">
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              {(unreadCount > 0 || unreadInList > 0) && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={markingAll}
+                  onClick={() => void markAllAsRead()}
+                >
+                  {markingAll ? (
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  ) : null}
+                  {t("alerts.markAllRead")}
+                </Button>
+              )}
+              <button
+                type="button"
+                onClick={() => setIsOpen(false)}
+                className="rounded p-1 text-muted-foreground hover:text-foreground"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
           <div className="max-h-80 overflow-y-auto">
             {alerts.length === 0 ? (
-              <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t("alerts.none")}</div>
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                {t("alerts.none")}
+              </div>
             ) : (
               alerts.map((alert) => (
                 <div
@@ -150,7 +193,8 @@ export function AlertBell() {
                   </div>
                   {!alert.is_read && (
                     <button
-                      onClick={() => markAsRead(alert.id)}
+                      type="button"
+                      onClick={() => void markAsRead(alert.id)}
                       className="mt-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/50"
                     >
                       {t("alerts.read")}

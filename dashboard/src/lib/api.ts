@@ -684,7 +684,11 @@ export const api = {
     markAsRead: async (alertId: string) => {
       const response = await contentClient.post(`/alerts/read/${alertId}`);
       return response.data;
-    }
+    },
+    markAllAsRead: async () => {
+      const response = await contentClient.post('/alerts/read-all');
+      return response.data as { status: string; marked_count: number };
+    },
   },
   users: {
     me: async () => {
