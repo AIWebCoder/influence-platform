@@ -11,6 +11,8 @@
   "dependencies": {
     "@sentry/node": "^7.100.0",
     "axios": "^1.6.7",
+    "https-proxy-agent": "^7.0.5",
+    "socks-proxy-agent": "^8.0.4",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.6",
     "dotenv": "^16.4.5",

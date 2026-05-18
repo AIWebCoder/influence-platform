@@ -55,6 +55,7 @@ router.get('/', async (req, res) => {
         a.metadata,
         a.created_at,
         COALESCE(NULLIF(TRIM(a.platform), ''), 'instagram') AS platform,
+        a.persona_id,
         a.ig_user_id,
         (a.ig_access_token IS NOT NULL AND btrim(a.ig_access_token) <> '') AS ig_token_configured,
         (
@@ -151,6 +152,7 @@ router.get('/:id', async (req, res) => {
         a.metadata,
         a.created_at,
         COALESCE(NULLIF(TRIM(a.platform), ''), 'instagram') AS platform,
+        a.persona_id,
         a.ig_user_id,
         (a.ig_access_token IS NOT NULL AND btrim(a.ig_access_token) <> '') AS ig_token_configured,
         (
@@ -192,38 +194,16 @@ router.get('/:id/safety', async (req, res) => {
 router.get('/:id/proxy-credentials', async (req, res) => {
   try {
     const pool = getPool();
-    const result = await pool.query(
-      `SELECT p.id, p.host, p.port, p.username, p.password_encrypted, p.provider, p.country,
-              p.proxy_type, p.auth_mode, p.rotation_hint, p.session_id
-       FROM accounts a
-       LEFT JOIN proxies p ON p.id = a.proxy_id
-       WHERE a.id = $1`,
-      [req.params.id]
-    );
-    if (result.rows.length === 0) {
+    const exists = await pool.query('SELECT id FROM accounts WHERE id = $1', [req.params.id]);
+    if (exists.rows.length === 0) {
       return res.status(404).json({ error: 'Account not found' });
     }
-    const row = result.rows[0];
-    if (!row.id) {
-      return res.status(404).json({ error: 'No proxy assigned for this account' });
-    }
-
-    const password = decryptProxyPassword(row.password_encrypted);
-    return res.json({
-      proxy_id: row.id,
-      host: row.host,
-      port: row.port,
-      username: row.username,
-      password,
-      provider: row.provider,
-      country: row.country,
-      proxy_type: row.proxy_type || 'http',
-      auth_mode: row.auth_mode || (row.username ? 'credentials' : 'none'),
-      rotation_hint: row.rotation_hint || null,
-      session_id: row.session_id || null,
-    });
+    const PersonaService = require('../persona/personaService');
+    const payload = await PersonaService.getProxyCredentialsPayload(req.params.id);
+    return res.json(payload);
   } catch (err) {
-    return res.status(500).json({ error: 'Failed to fetch proxy credentials', details: err.message });
+    const status = err.statusCode === 404 ? 404 : 500;
+    return res.status(status).json({ error: 'Failed to fetch proxy credentials', details: err.message });
   }
 });
 
@@ -397,6 +377,20 @@ router.post('/', async (req, res) => {
         detail: proxyErr.message,
         hint: 'Add an unassigned active proxy to the pool (strict 1:1 per account).',
       });
+    }
+    const PersonaService = require('../persona/personaService');
+    const poolAfterProxy = getPool();
+    const accRow = await poolAfterProxy.query(
+      'SELECT proxy_id FROM accounts WHERE id = $1',
+      [account.id],
+    );
+    const proxyId = accRow.rows[0]?.proxy_id;
+    if (proxyId) {
+      const persona = await PersonaService.createPersona({
+        name: `persona-${String(account.username).slice(0, 40)}`,
+        proxy_id: proxyId,
+      });
+      await PersonaService.assignAccountToPersona(account.id, persona.id);
     }
     const pool = getPool();
     const withProxy = await pool.query(

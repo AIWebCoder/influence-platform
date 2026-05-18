@@ -279,9 +279,10 @@ class EmulatorOrchestrator:
             logger.info("No active campaigns. Sleeping on idle interval.")
             return self.settings.idle_poll_interval_seconds
 
-        # Pair accounts to available emulators deterministically
-        work_items = list(zip(active_accounts, devices))
-        work_items = work_items[: self.settings.max_parallel_emulators]
+        work_items = await self._build_work_items(active_accounts, devices)
+        if not work_items:
+            logger.info("No persona/device work items for this cycle.")
+            return self.settings.idle_poll_interval_seconds
 
         tasks = [
             self._run_account_on_device(account, device, campaigns)
@@ -308,6 +309,51 @@ class EmulatorOrchestrator:
             extra={"status": "cycle", "duration": duration},
         )
         return self.settings.poll_interval_seconds
+
+    async def _build_work_items(
+        self,
+        active_accounts: list[dict[str, Any]],
+        devices: list[Any],
+    ) -> list[tuple[dict[str, Any], Any]]:
+        use_persona = os.getenv("USE_PERSONA_ORCHESTRATION", "true").lower() == "true"
+        if not use_persona:
+            return list(zip(active_accounts, devices))[: self.settings.max_parallel_emulators]
+
+        device_by_serial = {d.serial: d for d in devices}
+        accounts_by_persona: dict[str, list[dict[str, Any]]] = {}
+        for account in active_accounts:
+            persona_id = str(account.get("persona_id") or "").strip()
+            if persona_id:
+                accounts_by_persona.setdefault(persona_id, []).append(account)
+
+        try:
+            personas = await self.api_client.get_personas("active")
+        except Exception:
+            logger.exception("persona_list_failed; falling back to zip pairing")
+            return list(zip(active_accounts, devices))[: self.settings.max_parallel_emulators]
+
+        work_items: list[tuple[dict[str, Any], Any]] = []
+        for persona in personas:
+            persona_id = str(persona.get("id") or "").strip()
+            serial = str(persona.get("emulator_serial") or "").strip()
+            if not persona_id or not serial or serial not in device_by_serial:
+                continue
+            bound_accounts = accounts_by_persona.get(persona_id, [])
+            if not bound_accounts:
+                continue
+            instagram_accounts = [
+                a
+                for a in bound_accounts
+                if str(a.get("platform", "instagram")).lower() == "instagram"
+            ]
+            account = instagram_accounts[0] if instagram_accounts else bound_accounts[0]
+            work_items.append((account, device_by_serial[serial]))
+
+        if work_items:
+            return work_items[: self.settings.max_parallel_emulators]
+
+        logger.warning("persona_orchestration_no_bindings; using legacy zip pairing")
+        return list(zip(active_accounts, devices))[: self.settings.max_parallel_emulators]
 
     async def _run_account_on_device(
         self,
@@ -338,7 +384,7 @@ class EmulatorOrchestrator:
                 logger.info("Skipping account due to post rate limit account=%s", account_id)
                 return False
 
-            await self._enforce_proxy(account_id=account_id, device=device)
+            await self._enforce_proxy(account_id=account_id, account=account, device=device)
             await bot.connect()
             content = await self.content_generator.generate_for_account(
                 niche=niche,
@@ -780,14 +826,27 @@ class EmulatorOrchestrator:
     def _counter_key(self, account_id: str, action_type: str, window: str) -> str:
         return f"rate:{account_id}:{action_type}:{window}"
 
-    async def _enforce_proxy(self, *, account_id: str, device: EmulatorDevice) -> None:
+    async def _enforce_proxy(
+        self,
+        *,
+        account_id: str,
+        account: dict[str, Any],
+        device: EmulatorDevice,
+    ) -> None:
         assert self.action_logger is not None
         lock = self._get_proxy_lock(device.serial)
         async with lock:
             if not self._allow_proxy_reconfigure(account_id):
                 self.proxy_bridge_events.labels(status="throttled", operation="assign").inc()
                 raise RuntimeError("Proxy reconfiguration throttled for account")
-            proxy = await self.api_client.get_proxy_credentials(account_id)
+
+            async def _load_proxy() -> dict[str, Any]:
+                persona_id = str(account.get("persona_id") or "").strip()
+                if persona_id:
+                    return await self.api_client.get_persona_proxy_credentials(persona_id)
+                return await self.api_client.get_proxy_credentials(account_id)
+
+            proxy = await _load_proxy()
             bridge_runtime = await self._ensure_proxy_bridge(
                 account_id=account_id,
                 emulator_serial=device.serial,
@@ -804,7 +863,7 @@ class EmulatorOrchestrator:
             ok = ok_setting and ok_bridge
             if not ok:
                 await self.api_client.rotate_proxy(account_id)
-                proxy = await self.api_client.get_proxy_credentials(account_id)
+                proxy = await _load_proxy()
                 bridge_runtime = await self._ensure_proxy_bridge(
                     account_id=account_id,
                     emulator_serial=device.serial,
@@ -828,6 +887,7 @@ class EmulatorOrchestrator:
                         bridge_id=bridge_runtime.bridge_id,
                         status="error",
                         last_error="Bridge not healthy after proxy rotation",
+                        persona_id=str(account.get("persona_id") or "") or None,
                     )
                     self.proxy_bridge_events.labels(status="error", operation="assign").inc()
                     raise RuntimeError("Proxy bridge unreachable after rotation")
@@ -840,6 +900,7 @@ class EmulatorOrchestrator:
                 bridge_id=bridge_runtime.bridge_id,
                 status="active",
                 last_error=None,
+                persona_id=str(account.get("persona_id") or "") or None,
             )
             self.proxy_bridge_events.labels(status="success", operation="assign").inc()
         await self.action_logger.log_action(
@@ -882,15 +943,17 @@ class EmulatorOrchestrator:
         bridge_id: str,
         status: str,
         last_error: str | None,
+        persona_id: str | None = None,
     ) -> None:
         assert self.db_pool is not None
         query = """
             INSERT INTO emulator_proxy_bindings (
-                emulator_serial, account_id, proxy_id, bridge_host, bridge_port, bridge_id, status, last_error, last_applied_at
-            ) VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, NOW())
+                emulator_serial, account_id, persona_id, proxy_id, bridge_host, bridge_port, bridge_id, status, last_error, last_applied_at
+            ) VALUES ($1, $2, NULLIF($9, '')::uuid, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, NOW())
             ON CONFLICT (emulator_serial)
             DO UPDATE SET
                 account_id = EXCLUDED.account_id,
+                persona_id = EXCLUDED.persona_id,
                 proxy_id = EXCLUDED.proxy_id,
                 bridge_host = EXCLUDED.bridge_host,
                 bridge_port = EXCLUDED.bridge_port,
@@ -910,6 +973,7 @@ class EmulatorOrchestrator:
                 bridge_id,
                 status,
                 last_error,
+                persona_id or "",
             )
 
     async def _reconcile_proxy_bindings(self) -> None:
@@ -933,7 +997,18 @@ class EmulatorOrchestrator:
                 continue
             account_id = str(row["account_id"])
             try:
-                proxy = await self.api_client.get_proxy_credentials(account_id)
+                persona_id = ""
+                async with self.db_pool.acquire() as conn:
+                    acc_row = await conn.fetchrow(
+                        "SELECT persona_id FROM accounts WHERE id = $1::uuid",
+                        account_id,
+                    )
+                    if acc_row and acc_row["persona_id"]:
+                        persona_id = str(acc_row["persona_id"])
+                if persona_id:
+                    proxy = await self.api_client.get_persona_proxy_credentials(persona_id)
+                else:
+                    proxy = await self.api_client.get_proxy_credentials(account_id)
                 bridge = await self._ensure_proxy_bridge(
                     account_id=account_id,
                     emulator_serial=serial,

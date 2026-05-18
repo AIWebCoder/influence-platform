@@ -1,9 +1,11 @@
 ﻿const axios = require('axios');
 const { getValidToken } = require('../../services/tokenService');
 const { publishPipelineLog } = require('../../core/publishPipelineLog');
+const ProxyHttpClient = require('../../persona/proxyHttpClient');
+const PersonaService = require('../../persona/personaService');
+const { recordProxyRequest } = require('../../persona/personaMetrics');
 
 const GRAPH_BASE = 'https://graph.instagram.com/v25.0';
-/** IG container status poll: `status` holds human-readable processing detail (incl. error codes when ERROR). */
 const CONTAINER_STATUS_FIELDS = 'id,status,status_code';
 const POLL_INTERVAL_MS = 10_000;
 const MAX_RETRIES = 20;
@@ -22,7 +24,24 @@ function normalizeCaption(caption, hashtags) {
   return [base, tags.join(' ')].filter(Boolean).join('\n\n');
 }
 
-async function createContainer({ igUserId, videoUrl, caption, accessToken }) {
+async function resolveHttpClient(accountId) {
+  if (!ProxyHttpClient.USE_PERSONA_PROXY_FOR_GRAPH) {
+    return axios;
+  }
+  try {
+    return await ProxyHttpClient.getAxiosForAccount(accountId, { timeout: 30_000 });
+  } catch (err) {
+    if (err.code === 'PERSONA_PROXY_REQUIRED') throw err;
+    publishPipelineLog('persona_proxy_fallback_direct', {
+      account_id: accountId,
+      reason: err.message,
+    });
+    return axios;
+  }
+}
+
+async function createContainer({ igUserId, videoUrl, caption, accessToken, httpClient }) {
+  const client = httpClient || axios;
   const url = `${GRAPH_BASE}/${encodeURIComponent(igUserId)}/media`;
   const params = new URLSearchParams();
   params.set('media_type', 'REELS');
@@ -30,7 +49,7 @@ async function createContainer({ igUserId, videoUrl, caption, accessToken }) {
   params.set('caption', caption);
   params.set('access_token', accessToken);
 
-  const response = await axios.post(url, params.toString(), {
+  const response = await client.post(url, params.toString(), {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     timeout: 30_000,
   });
@@ -41,15 +60,12 @@ async function createContainer({ igUserId, videoUrl, caption, accessToken }) {
   return containerId;
 }
 
-/**
- * Polls GET /{container_id} until FINISHED, ERROR, or max attempts.
- * @returns {{ status_detail: string | null, graph_response: object }}
- */
-async function waitForContainer({ containerId, accessToken }) {
+async function waitForContainer({ containerId, accessToken, httpClient }) {
+  const client = httpClient || axios;
   const statusUrl = `${GRAPH_BASE}/${encodeURIComponent(containerId)}`;
   let lastPayload = null;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const response = await axios.get(statusUrl, {
+    const response = await client.get(statusUrl, {
       params: { fields: CONTAINER_STATUS_FIELDS, access_token: accessToken },
       timeout: 20_000,
     });
@@ -75,23 +91,18 @@ async function waitForContainer({ containerId, accessToken }) {
     }
     await sleep(POLL_INTERVAL_MS);
   }
-  publishPipelineLog('instagram_graph_container_status_timeout', {
-    container_id: containerId,
-    poll_attempts: MAX_RETRIES,
-    poll_interval_ms: POLL_INTERVAL_MS,
-    last_graph_response: lastPayload,
-  });
   const timeoutErr = new Error(`Instagram container timeout for ${containerId}`);
   timeoutErr.code = CONTAINER_TIMEOUT_SENTINEL;
   throw timeoutErr;
 }
 
-async function publishContainer({ igUserId, creationId, accessToken }) {
+async function publishContainer({ igUserId, creationId, accessToken, httpClient }) {
+  const client = httpClient || axios;
   const url = `${GRAPH_BASE}/${encodeURIComponent(igUserId)}/media_publish`;
   const params = new URLSearchParams();
   params.set('creation_id', creationId);
   params.set('access_token', accessToken);
-  const response = await axios.post(url, params.toString(), {
+  const response = await client.post(url, params.toString(), {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     timeout: 30_000,
   });
@@ -114,22 +125,19 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
 
   let currentStage = 'fetch_token';
   let containerId = null;
+  const started = Date.now();
+  const persona = await PersonaService.getPersonaForAccount(accountId);
 
   publishPipelineLog('instagram_adapter_start', {
     account_id: accountId,
+    persona_id: persona?.id || null,
     ig_user_id: igUserId,
-    mime_type: asset?.mime_type || null,
+    persona_proxy_enabled: ProxyHttpClient.USE_PERSONA_PROXY_FOR_GRAPH,
     video_url_preview: videoUrl.length > 220 ? `${videoUrl.slice(0, 220)}…` : videoUrl,
-    caption_len: String(caption || '').length,
-    hashtag_count: Array.isArray(hashtags) ? hashtags.length : 0,
-    graph_request: {
-      endpoint: 'POST /{ig_user_id}/media',
-      media_type: 'REELS',
-      video_url_set: Boolean(videoUrl),
-    },
   });
 
   try {
+    const httpClient = await resolveHttpClient(accountId);
     const accessToken = await getValidToken(accountId);
     currentStage = 'create_container';
     const fullCaption = normalizeCaption(caption, hashtags);
@@ -138,29 +146,23 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
       videoUrl,
       caption: fullCaption,
       accessToken,
-    });
-    publishPipelineLog('instagram_graph_create_container_response', {
-      ig_user_id: igUserId,
-      container_id: containerId,
-      response_summary: { id: containerId },
+      httpClient,
     });
     currentStage = 'wait_container';
-    const containerReady = await waitForContainer({ containerId, accessToken });
-    publishPipelineLog('instagram_graph_container_status', {
-      container_id: containerId,
-      status_code: 'FINISHED',
-      status_detail: containerReady?.status_detail || null,
-    });
+    const containerReady = await waitForContainer({ containerId, accessToken, httpClient });
     currentStage = 'publish_container';
     const postId = await publishContainer({
       igUserId,
       creationId: containerId,
       accessToken,
+      httpClient,
     });
-    publishPipelineLog('instagram_graph_media_publish_response', {
-      ig_user_id: igUserId,
-      creation_id: containerId,
-      response_summary: { id: postId },
+    recordProxyRequest({
+      personaId: persona?.id,
+      platform: 'instagram',
+      success: true,
+      durationMs: Date.now() - started,
+      stage: 'publish',
     });
     return {
       success: true,
@@ -168,8 +170,16 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
       external_post_url: `https://www.instagram.com/p/${encodeURIComponent(postId)}/`,
       container_id: containerId,
       stage: 'published',
+      persona_id: persona?.id || null,
     };
   } catch (err) {
+    recordProxyRequest({
+      personaId: persona?.id,
+      platform: 'instagram',
+      success: false,
+      durationMs: Date.now() - started,
+      stage: currentStage,
+    });
     const status = err?.response?.status;
     const data = err?.response?.data;
     const msg = data
@@ -178,9 +188,10 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
     publishPipelineLog('instagram_graph_error', {
       stage: currentStage,
       container_id: containerId,
+      persona_id: persona?.id || null,
       http_status: status || null,
-      error_body: data || null,
       message: err?.message || String(err),
+      code: err?.code || null,
     });
     const unsafeToRetry =
       currentStage === 'wait_container' ||

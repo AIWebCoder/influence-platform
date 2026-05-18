@@ -123,6 +123,7 @@ export function AppSidebar() {
     {
       label: text.nav.groupOperations,
       items: [
+        { name: text.nav.personas, href: "/personas", icon: ShieldCheck },
         { name: text.nav.accounts, href: "/accounts", icon: Users },
         { name: text.nav.proxies, href: "/proxies", icon: Network },
         { name: text.nav.generationStudio, href: "/generation-studio", icon: Clapperboard },

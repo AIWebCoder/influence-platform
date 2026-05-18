@@ -11,6 +11,8 @@ async function initDB() {
   await pool.query('SELECT 1');
   const { ensureProxySchema } = require('./proxySchema');
   await ensureProxySchema(pool);
+  const { ensurePersonaSchema } = require('./personaSchema');
+  await ensurePersonaSchema(pool);
   console.log('✅ PostgreSQL connecté (Distribution Engine)');
 }
 

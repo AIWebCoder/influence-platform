@@ -5,6 +5,7 @@ export const config = {
     "/",
     "/analytics(.*)",
     "/ab-tests(.*)",
+    "/personas(.*)",
     "/accounts(.*)",
     "/account-health(.*)",
     "/campaigns(.*)",

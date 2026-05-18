@@ -97,7 +97,14 @@ export function formatContentApiError(error: unknown, fallback: string): string 
       if (msgs.length) return humanizeGenerationMessage(msgs.join(" "));
     }
   }
-  if (typeof data?.error === "string") return humanizeGenerationMessage(data.error);
+  if (typeof data?.error === "string") {
+    const base = humanizeGenerationMessage(data.error);
+    const hint =
+      data && typeof data === "object" && "hint" in data && typeof (data as { hint?: string }).hint === "string"
+        ? (data as { hint: string }).hint
+        : "";
+    return hint ? `${base} ${hint}` : base;
+  }
   if (typeof data?.details === "string") return humanizeGenerationMessage(data.details);
   if (typeof data?.message === "string") return humanizeGenerationMessage(data.message);
   return fallback;
@@ -299,6 +306,42 @@ export const api = {
     checkProxies: async () => {
       const response = await distributionClient.post('/proxies/check');
       return response.data;
+    },
+    listPersonas: async (status?: string) => {
+      const response = await distributionClient.get('/personas', {
+        params: status ? { status } : undefined,
+      });
+      return response.data as { personas: import('@/types/persona').PersonaRow[] };
+    },
+    getPersona: async (id: string) => {
+      const response = await distributionClient.get(`/personas/${id}`);
+      return response.data as import('@/types/persona').PersonaRow;
+    },
+    createPersona: async (payload: {
+      name: string;
+      proxy_id?: string;
+      timezone?: string;
+      locale?: string;
+    }) => {
+      const response = await distributionClient.post('/personas', payload);
+      return response.data;
+    },
+    assignPersonaProxy: async (personaId: string, proxyId: string) => {
+      const response = await distributionClient.post(`/personas/${personaId}/proxy/assign`, {
+        proxy_id: proxyId,
+      });
+      return response.data;
+    },
+    bindPersonaDevice: async (
+      personaId: string,
+      payload: { emulator_serial: string; adb_port?: number; appium_port?: number },
+    ) => {
+      const response = await distributionClient.post(`/personas/${personaId}/device/bind`, payload);
+      return response.data;
+    },
+    verifyPersonaEgress: async (personaId: string) => {
+      const response = await distributionClient.post(`/personas/${personaId}/verify-egress`);
+      return response.data as { success: boolean; egress_ip: string };
     },
     getPostAnalytics: async () => {
       const response = await distributionClient.get('/analytics/posts');

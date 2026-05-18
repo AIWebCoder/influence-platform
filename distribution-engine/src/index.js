@@ -64,6 +64,9 @@ app.use('/queue', queueRouter);
 const proxyRouter = require('./managers/proxyRouter');
 app.use('/proxies', proxyRouter);
 
+const personasRouter = require('./managers/personasRouter');
+app.use('/personas', personasRouter);
+
 const analyticsRouter = require('./managers/analyticsRouter');
 app.use('/analytics', analyticsRouter);
 

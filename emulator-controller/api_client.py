@@ -109,6 +109,16 @@ class DistributionApiClient:
         resp = await self._request("GET", f"/accounts/{account_id}/proxy-credentials")
         return resp.json()
 
+    async def get_personas(self, status: str | None = "active") -> list[dict[str, Any]]:
+        params = {"status": status} if status else None
+        resp = await self._request("GET", "/personas", params=params)
+        payload = resp.json()
+        return payload.get("personas", payload if isinstance(payload, list) else [])
+
+    async def get_persona_proxy_credentials(self, persona_id: str) -> dict[str, Any]:
+        resp = await self._request("GET", f"/personas/{persona_id}/proxy-credentials")
+        return resp.json()
+
     async def rotate_proxy(self, account_id: str) -> dict[str, Any]:
         resp = await self._request("POST", f"/accounts/{account_id}/proxy/rotate")
         return resp.json()

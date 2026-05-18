@@ -171,6 +171,12 @@ services:
       PUBLISH_SKIP_RACE_RECHECK: ${PUBLISH_SKIP_RACE_RECHECK:-false}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       PROXY_STRICT_ONE_TO_ONE: ${PROXY_STRICT_ONE_TO_ONE:-true}
+      USE_PERSONA_PROXY_FOR_GRAPH: ${USE_PERSONA_PROXY_FOR_GRAPH:-true}
+      PERSONA_ENFORCE_EGRESS: ${PERSONA_ENFORCE_EGRESS:-true}
+      PROXY_LOCAL_HOST_ALIAS: ${PROXY_LOCAL_HOST_ALIAS:-host.docker.internal}
+      PERSONA_EGRESS_CHECK_URLS: ${PERSONA_EGRESS_CHECK_URLS:-https://api.ipify.org,https://ifconfig.me/ip}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -217,6 +223,7 @@ services:
       ADB_HOST: ${ADB_HOST:-host.docker.internal}
       ADB_PORT: ${ADB_PORT:-5037}
       MAX_PARALLEL_EMULATORS: ${MAX_PARALLEL_EMULATORS:-5}
+      USE_PERSONA_ORCHESTRATION: ${USE_PERSONA_ORCHESTRATION:-true}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-30}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-15}
       IDLE_POLL_INTERVAL_SECONDS: ${IDLE_POLL_INTERVAL_SECONDS:-300}
