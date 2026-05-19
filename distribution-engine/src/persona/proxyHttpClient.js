@@ -19,7 +19,55 @@ const PROXY_UNREACHABLE_HINT =
   'Public IPs (e.g. 5.135.7.102) only work if a proxy daemon listens there; otherwise use ' +
   '127.0.0.1:11xx local forwarders and PROXY_LOCAL_HOST_ALIAS=host.docker.internal in compose.';
 
+/** Map proxy row port 101 → local bridge 19101 (PROXY_BRIDGE_PORT_BASE + port). */
+const PROXY_BRIDGE_PORT_BASE = parseInt(process.env.PROXY_BRIDGE_PORT_BASE || '19000', 10);
+
 /** @typedef {{ proxy_id: string, host: string, port: number, proxy_type: string, username?: string|null, password?: string|null }} ProxyConfig */
+
+/** Expand mistaken host `5.135.7` + port `102` → canonical `5.135.7.102`. */
+function canonicalProxyHost(host, port) {
+  const h = String(host || '').trim();
+  const p = Number(port);
+  if (h === '5.135.7' && p >= 101 && p <= 199) return `5.135.7.${p}`;
+  return h;
+}
+
+function localBridgePortForProxyRow(host, port) {
+  const p = Number(port);
+  if (!Number.isFinite(p) || p < 101 || p > 199) return null;
+  const h = String(host || '').trim();
+  if (h === '5.135.7' || /^5\.135\.7\.\d+$/.test(h)) {
+    return PROXY_BRIDGE_PORT_BASE + p;
+  }
+  return null;
+}
+
+/**
+ * Where the distribution engine should connect for egress (Docker cannot use bare `5.135.7`).
+ * Prefers emulator bridge binding, then local bridge port convention, then upstream host.
+ */
+async function resolveEgressConnectConfig(proxyConfig, personaId) {
+  const bridge = await PersonaService.getBridgeBindingForPersona(personaId);
+  if (bridge?.bridge_port) {
+    return {
+      ...proxyConfig,
+      host: '127.0.0.1',
+      port: Number(bridge.bridge_port),
+      connect_via: 'emulator_bridge',
+    };
+  }
+  const localPort = localBridgePortForProxyRow(proxyConfig.host, proxyConfig.port);
+  if (localPort) {
+    return {
+      ...proxyConfig,
+      host: '127.0.0.1',
+      port: localPort,
+      connect_via: 'local_bridge',
+      canonical_host: canonicalProxyHost(proxyConfig.host, proxyConfig.port),
+    };
+  }
+  return { ...proxyConfig, connect_via: 'upstream' };
+}
 
 /** Map localhost proxy rows to a host reachable from inside Docker. */
 function rewriteProxyHost(host) {
@@ -149,55 +197,77 @@ async function verifyEgressIp(axiosInstance) {
 async function verifyEgressForPersona(personaId) {
   const proxyConfig = await PersonaService.resolveProxyConfigForPersona(personaId);
   if (!proxyConfig?.host || !proxyConfig?.port) {
-    const err = new Error('No active proxy assigned to this persona');
+    const assigned = await PersonaService.getAssignedProxyForPersona(personaId);
+    if (assigned?.proxy_id) {
+      const err = new Error(
+        `Proxy ${assigned.host}:${assigned.port} is assigned but inactive (health check failed or disabled). ` +
+          'Fix the proxy host/port, ensure a listener is running, re-enable it on the Proxies page, or assign another proxy.',
+      );
+      err.code = 'PROXY_INACTIVE';
+      err.status = 409;
+      err.proxy = { host: assigned.host, port: assigned.port, is_active: false };
+      throw err;
+    }
+    const err = new Error('No proxy assigned to this persona. Assign one on the Personas page first.');
     err.code = 'NO_ACTIVE_PROXY';
     err.status = 404;
     throw err;
   }
 
-  const runtimeConfig = withRuntimeProxyHost(proxyConfig);
+  const connectConfig = await resolveEgressConnectConfig(proxyConfig, personaId);
+  const runtimeConfig = withRuntimeProxyHost(connectConfig);
+  const displayHost = connectConfig.canonical_host || proxyConfig.host;
   try {
     await testTcpReachability(runtimeConfig.host, runtimeConfig.port);
   } catch (tcpErr) {
+    const via = connectConfig.connect_via || 'upstream';
     const err = new Error(
-      `Cannot reach proxy at ${proxyConfig.host}:${proxyConfig.port} (from DE: ${runtimeConfig.host}:${proxyConfig.port})`,
+      `Cannot reach proxy at ${displayHost}:${proxyConfig.port} (from DE: ${runtimeConfig.host}:${runtimeConfig.port}, via=${via})`,
     );
     err.code = 'PROXY_UNREACHABLE';
     err.status = 502;
-    err.hint = PROXY_UNREACHABLE_HINT;
+    err.hint =
+      via === 'local_bridge' || via === 'emulator_bridge'
+        ? `${PROXY_UNREACHABLE_HINT} Start the proxy bridge: bind the persona device on Emulators and assign the proxy to the account so emulator-controller opens port ${connectConfig.port}.`
+        : PROXY_UNREACHABLE_HINT;
     err.detail = tcpErr.message;
     err.proxy = {
-      host: proxyConfig.host,
+      host: displayHost,
       port: proxyConfig.port,
       connect_host: runtimeConfig.host,
+      connect_port: runtimeConfig.port,
+      connect_via: via,
     };
     throw err;
   }
 
-  const client = createProxyAxios(runtimeConfig, { timeout: 20_000, personaId });
+  const client = createProxyAxios(connectConfig, { timeout: 20_000, personaId });
 
   try {
     const ip = await verifyEgressIp(client);
     return {
       egress_ip: ip,
       proxy: {
-        host: proxyConfig.host,
+        host: displayHost,
         port: proxyConfig.port,
         connect_host: runtimeConfig.host,
+        connect_port: runtimeConfig.port,
+        connect_via: connectConfig.connect_via,
       },
     };
   } catch (err) {
     const wrapped = new Error(
-      `Proxy reachable but egress check failed via ${proxyConfig.host}:${proxyConfig.port}: ${err.message}`,
+      `Proxy reachable but egress check failed via ${displayHost}:${proxyConfig.port}: ${err.message}`,
     );
     wrapped.code = err.code || 'EGRESS_CHECK_FAILED';
     wrapped.status = 502;
     wrapped.hint = PROXY_UNREACHABLE_HINT;
     wrapped.detail = err.message;
     wrapped.proxy = {
-      host: proxyConfig.host,
+      host: displayHost,
       port: proxyConfig.port,
       connect_host: runtimeConfig.host,
+      connect_port: runtimeConfig.port,
     };
     throw wrapped;
   }

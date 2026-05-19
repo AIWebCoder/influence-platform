@@ -98,6 +98,33 @@ class PersonaService {
     return this._rowToProxyConfig(result.rows[0]);
   }
 
+  /** Proxy row linked on persona (including inactive) — for clearer egress errors. */
+  async getAssignedProxyForPersona(personaId) {
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT pr.id AS proxy_id, pr.host, pr.port, pr.is_active
+       FROM personas p
+       JOIN proxies pr ON pr.id = p.proxy_id
+       WHERE p.id = $1`,
+      [personaId],
+    );
+    return result.rows[0] || null;
+  }
+
+  /** Active emulator bridge for persona (local forwarder on host, e.g. 19102). */
+  async getBridgeBindingForPersona(personaId) {
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT bridge_host, bridge_port, status, emulator_serial
+       FROM emulator_proxy_bindings
+       WHERE persona_id = $1 AND status = 'active'
+       ORDER BY last_applied_at DESC NULLS LAST
+       LIMIT 1`,
+      [personaId],
+    );
+    return result.rows[0] || null;
+  }
+
   async resolveProxyConfigForAccount(accountId) {
     const persona = await this.getPersonaForAccount(accountId);
     if (persona?.id) {

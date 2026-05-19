@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Globe,
@@ -37,12 +38,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-
 type ProxyOption = {
   id: string;
   host: string;
   port: number;
   is_active?: boolean;
+};
+
+type EmulatorOption = {
+  serial: string;
+  status: string;
+  model?: string | null;
 };
 
 function StatCard({
@@ -91,6 +97,33 @@ function formatProxy(row: PersonaRow) {
   return `${row.proxy_host}:${row.proxy_port ?? "?"}`;
 }
 
+function ManageSection({
+  icon: Icon,
+  title,
+  description,
+  children,
+}: {
+  icon: React.ElementType;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-border/60 bg-muted/20 p-4 shadow-sm">
+      <div className="mb-4 flex gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Icon className="h-4 w-4" aria-hidden />
+        </div>
+        <div className="min-w-0 space-y-0.5">
+          <h3 className="text-sm font-semibold leading-none">{title}</h3>
+          <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
 export default function PersonasPage() {
   const { text } = useLocale();
   const p = text.personas;
@@ -113,6 +146,10 @@ export default function PersonasPage() {
 
   const [assignProxyId, setAssignProxyId] = useState("");
   const [deviceSerial, setDeviceSerial] = useState("");
+  const [emulators, setEmulators] = useState<EmulatorOption[]>([]);
+  const [emulatorsLoading, setEmulatorsLoading] = useState(false);
+  const [emulatorsError, setEmulatorsError] = useState<string | null>(null);
+  const [manualSerial, setManualSerial] = useState(false);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [egressById, setEgressById] = useState<Record<string, string>>({});
 
@@ -155,11 +192,54 @@ export default function PersonasPage() {
     return map[status] ?? status;
   };
 
+  const loadEmulators = useCallback(async () => {
+    setEmulatorsLoading(true);
+    setEmulatorsError(null);
+    try {
+      const res = await fetch("/api/emulators", { cache: "no-store" });
+      const payload = (await res.json()) as {
+        items?: EmulatorOption[];
+        error?: string;
+      };
+      if (!res.ok) {
+        throw new Error(payload.error || `HTTP ${res.status}`);
+      }
+      setEmulators(Array.isArray(payload.items) ? payload.items : []);
+      if (payload.error) {
+        setEmulatorsError(payload.error);
+      }
+    } catch (err) {
+      setEmulators([]);
+      setEmulatorsError(
+        err instanceof Error ? err.message : "Unable to fetch emulator list",
+      );
+    } finally {
+      setEmulatorsLoading(false);
+    }
+  }, []);
+
+  const emulatorChoices = useMemo(() => {
+    const bySerial = new Map<string, EmulatorOption>();
+    for (const item of emulators) {
+      if (item.serial) {
+        bySerial.set(item.serial, item);
+      }
+    }
+    if (deviceSerial && !bySerial.has(deviceSerial)) {
+      bySerial.set(deviceSerial, { serial: deviceSerial, status: "bound" });
+    }
+    return Array.from(bySerial.values()).sort((a, b) =>
+      a.serial.localeCompare(b.serial),
+    );
+  }, [emulators, deviceSerial]);
+
   const openManage = async (row: PersonaRow) => {
     setSelected(row);
     setAssignProxyId(row.proxy_id ?? "");
     setDeviceSerial(row.emulator_serial ?? "");
+    setManualSerial(false);
     setManageOpen(true);
+    void loadEmulators();
     try {
       const detail = await api.distribution.getPersona(row.id);
       setDetailAccounts(
@@ -467,71 +547,179 @@ export default function PersonasPage() {
           if (!open) setSelected(null);
         }}
       >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{p.manageTitle}</DialogTitle>
-            <DialogDescription>
-              {selected ? `${selected.name} (${selected.id})` : p.manageDescription}
-            </DialogDescription>
+        <DialogContent className="flex max-h-[min(90vh,40rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
+          <DialogHeader className="space-y-3 border-b border-border/60 bg-muted/30 px-6 py-5">
+            <DialogTitle className="text-lg">{p.manageTitle}</DialogTitle>
+            {selected ? (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium text-foreground">{selected.name}</span>
+                  <Badge className={cn("text-[10px] font-medium", statusBadgeClass(selected.status))}>
+                    {statusLabel(selected.status)}
+                  </Badge>
+                </div>
+                <p className="break-all font-mono text-[11px] leading-relaxed text-muted-foreground">
+                  {selected.id}
+                </p>
+              </div>
+            ) : (
+              <DialogDescription>{p.manageDescription}</DialogDescription>
+            )}
           </DialogHeader>
+
           {selected ? (
-            <div className="grid gap-4 py-2">
-              <div className="space-y-2">
-                <Label>{p.assignProxy}</Label>
-                <Select value={assignProxyId} onValueChange={setAssignProxyId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder={p.selectProxy} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {proxies.map((px) => (
-                      <SelectItem key={px.id} value={px.id}>
-                        {px.host}:{px.port}
-                        {!px.is_active ? " (inactive)" : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button size="sm" disabled={saving || !assignProxyId} onClick={handleAssignProxy}>
-                  {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                  {p.assignProxy}
-                </Button>
-              </div>
+            <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
+              <ManageSection icon={Globe} title={p.assignProxy} description={p.manageProxyHint}>
+                <div className="space-y-3">
+                  <Select value={assignProxyId} onValueChange={setAssignProxyId}>
+                    <SelectTrigger className="h-10 bg-background">
+                      <SelectValue placeholder={p.selectProxy} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {proxies.map((px) => (
+                        <SelectItem key={px.id} value={px.id}>
+                          <span className="flex items-center gap-2">
+                            <span>
+                              {px.host}:{px.port}
+                            </span>
+                            {!px.is_active ? (
+                              <span className="text-xs text-amber-600 dark:text-amber-400">
+                                ({p.proxyInactive})
+                              </span>
+                            ) : null}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {assignProxyId &&
+                  proxies.find((px) => px.id === assignProxyId)?.is_active === false ? (
+                    <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                      {p.proxyInactive}
+                    </p>
+                  ) : null}
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="min-w-[7.5rem]"
+                      disabled={saving || !assignProxyId}
+                      onClick={handleAssignProxy}
+                    >
+                      {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      {p.assignProxy}
+                    </Button>
+                  </div>
+                </div>
+              </ManageSection>
 
-              <div className="space-y-2">
-                <Label htmlFor="device-serial">{p.emulatorSerial}</Label>
-                <Input
-                  id="device-serial"
-                  value={deviceSerial}
-                  onChange={(e) => setDeviceSerial(e.target.value)}
-                  placeholder="emulator-5554"
-                />
-                <Button
-                  size="sm"
-                  disabled={saving || !deviceSerial.trim()}
-                  onClick={handleBindDevice}
-                >
-                  {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                  {p.bind}
-                </Button>
-              </div>
+              <ManageSection icon={Smartphone} title={p.bindDevice} description={p.manageDeviceHint}>
+                <div className="space-y-3">
+                  {emulatorsLoading ? (
+                    <Skeleton className="h-10 w-full rounded-md" />
+                  ) : emulatorChoices.length > 0 && !manualSerial ? (
+                    <Select value={deviceSerial} onValueChange={setDeviceSerial}>
+                      <SelectTrigger className="h-10 bg-background">
+                        <SelectValue placeholder={p.selectEmulator} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {emulatorChoices.map((em) => (
+                          <SelectItem key={em.serial} value={em.serial}>
+                            <span className="flex flex-col items-start gap-0.5 sm:flex-row sm:items-center sm:gap-2">
+                              <span className="font-mono text-xs">{em.serial}</span>
+                              {em.model ? (
+                                <span className="text-xs text-muted-foreground">{em.model}</span>
+                              ) : null}
+                              {em.status !== "device" ? (
+                                <span className="text-xs text-amber-600 dark:text-amber-400">
+                                  ({em.status})
+                                </span>
+                              ) : null}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <div className="space-y-3 rounded-lg border border-dashed border-border/80 bg-background/50 p-3">
+                      {emulatorChoices.length === 0 ? (
+                        <p className="text-sm leading-relaxed text-muted-foreground">
+                          {emulatorsError ?? p.noEmulators}{" "}
+                          <Link
+                            href="/emulators"
+                            className="font-medium text-primary underline-offset-4 hover:underline"
+                          >
+                            {p.openEmulators}
+                          </Link>
+                        </p>
+                      ) : null}
+                      <div className="space-y-2">
+                        <Label htmlFor="device-serial" className="text-xs text-muted-foreground">
+                          {p.emulatorManualSerial}
+                        </Label>
+                        <Input
+                          id="device-serial"
+                          className="h-10 bg-background font-mono text-sm"
+                          value={deviceSerial}
+                          onChange={(e) => setDeviceSerial(e.target.value)}
+                          placeholder="emulator-5554"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {emulatorChoices.length > 0 ? (
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+                      onClick={() => setManualSerial((v) => !v)}
+                    >
+                      {manualSerial ? p.selectEmulator : p.emulatorManualSerial}
+                    </button>
+                  ) : null}
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="min-w-[7.5rem]"
+                      disabled={saving || !deviceSerial.trim()}
+                      onClick={handleBindDevice}
+                    >
+                      {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      {p.bind}
+                    </Button>
+                  </div>
+                </div>
+              </ManageSection>
 
-              <div className="space-y-2">
-                <Label>{p.linkedAccountsList}</Label>
+              <ManageSection
+                icon={Users}
+                title={p.linkedAccountsList}
+                description={p.manageAccountsHint}
+              >
                 {detailAccounts.length === 0 ? (
                   <p className="text-sm text-muted-foreground">{p.noAccounts}</p>
                 ) : (
-                  <ul className="text-sm space-y-1 max-h-32 overflow-y-auto">
+                  <ul className="max-h-36 space-y-2 overflow-y-auto">
                     {detailAccounts.map((a) => (
-                      <li key={a.id} className="font-mono text-xs">
-                        @{a.username}
+                      <li
+                        key={a.id}
+                        className="flex items-center gap-3 rounded-lg border border-border/50 bg-background/60 px-3 py-2"
+                      >
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold uppercase text-muted-foreground">
+                          {a.username.slice(0, 1)}
+                        </span>
+                        <span className="min-w-0 truncate font-mono text-sm">@{a.username}</span>
                       </li>
                     ))}
                   </ul>
                 )}
-              </div>
+              </ManageSection>
             </div>
           ) : null}
-          <DialogFooter>
+
+          <DialogFooter className="border-t border-border/60 bg-muted/20 px-6 py-4 sm:justify-end">
             <Button variant="outline" onClick={() => setManageOpen(false)}>
               {p.cancel}
             </Button>
