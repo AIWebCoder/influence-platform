@@ -5,6 +5,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Monitor,
+  Plus,
   RefreshCw,
   RotateCcw,
   Smartphone,
@@ -14,6 +15,24 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 type EmulatorInfo = {
   serial: string;
@@ -69,6 +88,7 @@ export default function EmulatorsPage() {
   const [rippleBySerial, setRippleBySerial] = useState<
     Record<string, { x: number; y: number; key: number } | undefined>
   >({});
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
   const dragStartRef = useRef<Record<string, { x: number; y: number; at: number }>>({});
   const lastActionAtRef = useRef<Record<string, number>>({});
 
@@ -307,8 +327,21 @@ export default function EmulatorsPage() {
             <RefreshCw className={`h-4 w-4 ${refreshingAll ? "animate-spin" : ""}`} />
             {refreshingAll ? "Refreshing..." : "Refresh now"}
           </Button>
+          <Button type="button" onClick={() => setAddDialogOpen(true)}>
+            <Plus className="h-4 w-4" />
+            Add emulator
+          </Button>
         </div>
       </div>
+
+      <AddEmulatorDialog
+        open={addDialogOpen}
+        onOpenChange={setAddDialogOpen}
+        onAdded={() => {
+          void loadEmulators();
+          setTick((t) => t + 1);
+        }}
+      />
 
       {data.error ? (
         <Alert variant="destructive">
@@ -431,5 +464,346 @@ export default function EmulatorsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+type AvdResponse = {
+  count: number;
+  items: string[];
+  error?: string;
+};
+
+type PreflightResponse = {
+  ready?: boolean;
+  verdict?:
+    | "ready"
+    | "no_kvm"
+    | "no_emulator_binary"
+    | "no_avd"
+    | "no_agent_configured"
+    | "agent_unreachable"
+    | "agent_timeout"
+    | "agent_error"
+    | "proxy_error"
+    | "internal_error"
+    | "unknown";
+  message?: string;
+  emulator_binary?: string | null;
+  kvm?: {
+    ready?: boolean;
+    has_virt_flag?: boolean;
+    dev_kvm_exists?: boolean;
+    dev_kvm_readable?: boolean;
+    message?: string;
+  };
+  avds?: string[];
+};
+
+type AddEmulatorResult = {
+  success?: boolean;
+  phase?: string;
+  message?: string;
+  serial?: string | null;
+  avd_name?: string;
+  target?: string;
+};
+
+function AddEmulatorDialog({
+  open,
+  onOpenChange,
+  onAdded,
+}: {
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+  onAdded: () => void;
+}) {
+  const [mode, setMode] = useState<"launch_avd" | "adb_connect">("launch_avd");
+  const [avds, setAvds] = useState<string[]>([]);
+  const [avdsLoading, setAvdsLoading] = useState(false);
+  const [avdsLoaded, setAvdsLoaded] = useState(false);
+  const [avdsError, setAvdsError] = useState<string | undefined>(undefined);
+  const [preflight, setPreflight] = useState<PreflightResponse | undefined>(undefined);
+  const [selectedAvd, setSelectedAvd] = useState<string>("");
+  const [headless, setHeadless] = useState(true);
+  const [hostPort, setHostPort] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
+  const [successMessage, setSuccessMessage] = useState<string | undefined>(undefined);
+
+  const loadAvds = useCallback(async (): Promise<{ items: string[]; error?: string }> => {
+    setAvdsLoading(true);
+    setAvdsError(undefined);
+    try {
+      const res = await fetch("/api/avds", { cache: "no-store" });
+      const payload = (await res.json()) as AvdResponse;
+      const items = payload.items || [];
+      const errMsg = !res.ok
+        ? payload.error || `Failed to load AVDs (HTTP ${res.status})`
+        : payload.error;
+      setAvds(items);
+      setAvdsError(errMsg);
+      return { items, error: errMsg };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : "Failed to load AVDs";
+      setAvds([]);
+      setAvdsError(errMsg);
+      return { items: [], error: errMsg };
+    } finally {
+      setAvdsLoading(false);
+      setAvdsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      setAvdsLoaded(false);
+      setPreflight(undefined);
+      return;
+    }
+    setErrorMessage(undefined);
+    setSuccessMessage(undefined);
+    void loadAvds().then((result) => {
+      if (result.items.length === 0) {
+        setMode("adb_connect");
+      } else {
+        setMode("launch_avd");
+      }
+    });
+    void fetch("/api/emulators/preflight", { cache: "no-store" })
+      .then(async (res) => (await res.json()) as PreflightResponse)
+      .then((data) => setPreflight(data))
+      .catch(() => setPreflight({ ready: false, verdict: "proxy_error" }));
+  }, [open, loadAvds]);
+
+  const launchAvdAvailable = avds.length > 0;
+  const showAvdUnavailableAlert = avdsLoaded && !avdsLoading && !launchAvdAvailable;
+
+  const hostPortValid = useMemo(
+    () => /^[A-Za-z0-9._-]+:\d{1,5}$/.test(hostPort.trim()),
+    [hostPort]
+  );
+
+  const handleSubmit = async () => {
+    setErrorMessage(undefined);
+    setSuccessMessage(undefined);
+
+    const body: Record<string, unknown> = { mode };
+    if (mode === "launch_avd") {
+      if (!selectedAvd) {
+        setErrorMessage("Pick an AVD to launch.");
+        return;
+      }
+      body.avd_name = selectedAvd;
+      body.headless = headless;
+    } else {
+      if (!hostPortValid) {
+        setErrorMessage("Enter a valid host:port (e.g. 192.168.1.10:5555).");
+        return;
+      }
+      body.host_port = hostPort.trim();
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/emulators/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = (await res.json()) as AddEmulatorResult;
+      if (!res.ok || !payload.success) {
+        setErrorMessage(payload.message || payload.phase || `Request failed (HTTP ${res.status})`);
+        return;
+      }
+
+      const friendlySerial = payload.serial || payload.target || payload.avd_name || "device";
+      const phase = payload.phase || "completed";
+      setSuccessMessage(
+        phase === "completed"
+          ? `Added ${friendlySerial}.`
+          : `Added ${friendlySerial} (${phase}). It may take a moment to appear.`
+      );
+      onAdded();
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Network error while adding emulator");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add emulator</DialogTitle>
+          <DialogDescription>
+            Launch a local Android Virtual Device or connect to a remote device over ADB.
+          </DialogDescription>
+        </DialogHeader>
+
+        <Tabs value={mode} onValueChange={(v) => setMode(v as typeof mode)}>
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="launch_avd" disabled={showAvdUnavailableAlert}>
+              Launch AVD
+            </TabsTrigger>
+            <TabsTrigger value="adb_connect">Connect via ADB</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="launch_avd" className="space-y-3">
+            {showAvdUnavailableAlert ? (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>No AVDs available</AlertTitle>
+                <AlertDescription className="space-y-2">
+                  <p>
+                    The emulator controller can&apos;t list any Android Virtual Devices.
+                    {avdsError ? (
+                      <>
+                        {" "}
+                        Upstream said: <code className="font-mono">{avdsError}</code>.
+                      </>
+                    ) : null}
+                  </p>
+                  <p>
+                    Launching AVDs requires the Android SDK on the host. Run the
+                    host-agent (
+                    <code className="font-mono">
+                      emulator-controller/host_agent/README.md
+                    </code>
+                    ) and set <code className="font-mono">EMULATOR_AGENT_URL</code> +{" "}
+                    <code className="font-mono">EMULATOR_AGENT_TOKEN</code> in your
+                    <code className="font-mono"> .env</code>, then restart the
+                    controller. Or use the <strong>Connect via ADB</strong> tab to
+                    attach a remote / cloud emulator.
+                  </p>
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <>
+                {preflight && preflight.ready === false && preflight.verdict !== "no_avd" ? (
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>
+                      {preflight.verdict === "no_kvm"
+                        ? "Host has no KVM — Launch AVD will fail"
+                        : "Host not ready to launch AVDs"}
+                    </AlertTitle>
+                    <AlertDescription className="space-y-1">
+                      <p>{preflight.kvm?.message || preflight.message || "Preflight reported the host is not ready."}</p>
+                      {preflight.verdict === "no_kvm" ? (
+                        <p>
+                          Enable nested virtualization on the hypervisor for this VM, or run the
+                          host-agent on a different machine with KVM. Verify with{" "}
+                          <code className="font-mono">sudo ./scripts/setup-emulator-host.sh --check</code>{" "}
+                          on the agent host.
+                        </p>
+                      ) : null}
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="avd-select">Available AVDs</Label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={avdsLoading}
+                      onClick={() => void loadAvds()}
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${avdsLoading ? "animate-spin" : ""}`} />
+                      Reload
+                    </Button>
+                  </div>
+                  <Select
+                    value={selectedAvd}
+                    onValueChange={setSelectedAvd}
+                    disabled={avdsLoading || avds.length === 0}
+                  >
+                    <SelectTrigger id="avd-select">
+                      <SelectValue
+                        placeholder={avdsLoading ? "Loading AVDs..." : "Pick an AVD"}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {avds.map((name) => (
+                        <SelectItem key={name} value={name}>
+                          {name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={headless}
+                    onChange={(event) => setHeadless(event.target.checked)}
+                  />
+                  Headless (no window, no audio)
+                </label>
+              </>
+            )}
+          </TabsContent>
+
+          <TabsContent value="adb_connect" className="space-y-3">
+            <div className="space-y-2">
+              <Label htmlFor="host-port">ADB target (host:port)</Label>
+              <Input
+                id="host-port"
+                placeholder="192.168.1.10:5555"
+                value={hostPort}
+                onChange={(event) => setHostPort(event.target.value)}
+                autoComplete="off"
+              />
+              <p className="text-xs text-muted-foreground">
+                Used for cloud emulators, Genymotion, or a TCP-exposed device. Equivalent to
+                running <code className="font-mono">adb connect host:port</code>.
+              </p>
+            </div>
+          </TabsContent>
+        </Tabs>
+
+        {errorMessage ? (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Could not add emulator</AlertTitle>
+            <AlertDescription>{errorMessage}</AlertDescription>
+          </Alert>
+        ) : null}
+        {successMessage ? (
+          <Alert>
+            <CheckCircle2 className="h-4 w-4" />
+            <AlertTitle>Done</AlertTitle>
+            <AlertDescription>{successMessage}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={submitting}
+            onClick={() => onOpenChange(false)}
+          >
+            Close
+          </Button>
+          <Button
+            type="button"
+            disabled={
+              submitting ||
+              (mode === "launch_avd" &&
+                (avdsLoading || !selectedAvd || showAvdUnavailableAlert)) ||
+              (mode === "adb_connect" && !hostPortValid)
+            }
+            onClick={() => void handleSubmit()}
+          >
+            {submitting ? "Adding..." : mode === "launch_avd" ? "Launch AVD" : "Connect"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

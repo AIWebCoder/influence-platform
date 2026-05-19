@@ -22,7 +22,7 @@ from redis import asyncio as redis_async
 from api_client import DistributionApiClient
 from api_client import CircuitOpenError
 from content_generator import ContentGenerator
-from device_manager import DeviceManager, EmulatorDevice
+from device_manager import DeviceManager, EmulatorDevice, is_valid_emulator_serial
 from instagram_bot import InstagramBot
 from proxy_bridge_manager import ProxyBridgeManager, UpstreamProxy
 
@@ -279,10 +279,9 @@ class EmulatorOrchestrator:
             logger.info("No active campaigns. Sleeping on idle interval.")
             return self.settings.idle_poll_interval_seconds
 
-        work_items = await self._build_work_items(active_accounts, devices)
-        if not work_items:
-            logger.info("No persona/device work items for this cycle.")
-            return self.settings.idle_poll_interval_seconds
+        # Pair accounts to available emulators deterministically
+        work_items = list(zip(active_accounts, devices))
+        work_items = work_items[: self.settings.max_parallel_emulators]
 
         tasks = [
             self._run_account_on_device(account, device, campaigns)
@@ -309,51 +308,6 @@ class EmulatorOrchestrator:
             extra={"status": "cycle", "duration": duration},
         )
         return self.settings.poll_interval_seconds
-
-    async def _build_work_items(
-        self,
-        active_accounts: list[dict[str, Any]],
-        devices: list[Any],
-    ) -> list[tuple[dict[str, Any], Any]]:
-        use_persona = os.getenv("USE_PERSONA_ORCHESTRATION", "true").lower() == "true"
-        if not use_persona:
-            return list(zip(active_accounts, devices))[: self.settings.max_parallel_emulators]
-
-        device_by_serial = {d.serial: d for d in devices}
-        accounts_by_persona: dict[str, list[dict[str, Any]]] = {}
-        for account in active_accounts:
-            persona_id = str(account.get("persona_id") or "").strip()
-            if persona_id:
-                accounts_by_persona.setdefault(persona_id, []).append(account)
-
-        try:
-            personas = await self.api_client.get_personas("active")
-        except Exception:
-            logger.exception("persona_list_failed; falling back to zip pairing")
-            return list(zip(active_accounts, devices))[: self.settings.max_parallel_emulators]
-
-        work_items: list[tuple[dict[str, Any], Any]] = []
-        for persona in personas:
-            persona_id = str(persona.get("id") or "").strip()
-            serial = str(persona.get("emulator_serial") or "").strip()
-            if not persona_id or not serial or serial not in device_by_serial:
-                continue
-            bound_accounts = accounts_by_persona.get(persona_id, [])
-            if not bound_accounts:
-                continue
-            instagram_accounts = [
-                a
-                for a in bound_accounts
-                if str(a.get("platform", "instagram")).lower() == "instagram"
-            ]
-            account = instagram_accounts[0] if instagram_accounts else bound_accounts[0]
-            work_items.append((account, device_by_serial[serial]))
-
-        if work_items:
-            return work_items[: self.settings.max_parallel_emulators]
-
-        logger.warning("persona_orchestration_no_bindings; using legacy zip pairing")
-        return list(zip(active_accounts, devices))[: self.settings.max_parallel_emulators]
 
     async def _run_account_on_device(
         self,
@@ -384,7 +338,7 @@ class EmulatorOrchestrator:
                 logger.info("Skipping account due to post rate limit account=%s", account_id)
                 return False
 
-            await self._enforce_proxy(account_id=account_id, account=account, device=device)
+            await self._enforce_proxy(account_id=account_id, device=device)
             await bot.connect()
             content = await self.content_generator.generate_for_account(
                 niche=niche,
@@ -515,7 +469,7 @@ class EmulatorOrchestrator:
 
         async def emulator_frame(request: web.Request) -> web.StreamResponse:
             serial = request.match_info.get("serial", "")
-            if not serial.startswith("emulator-"):
+            if not is_valid_emulator_serial(serial):
                 return web.json_response({"error": "Invalid emulator serial"}, status=400)
 
             try:
@@ -584,10 +538,127 @@ class EmulatorOrchestrator:
                 started=started,
             )
 
+        async def list_avds(_request: web.Request) -> web.Response:
+            try:
+                names = await self.device_manager.list_avds()
+            except RuntimeError as exc:
+                return web.json_response(
+                    {"count": 0, "items": [], "error": str(exc)},
+                    status=503,
+                )
+            except Exception as exc:
+                logger.exception("list_avds_failed")
+                return web.json_response(
+                    {"count": 0, "items": [], "error": str(exc)},
+                    status=500,
+                )
+            return web.json_response({"count": len(names), "items": names})
+
+        async def preflight(_request: web.Request) -> web.Response:
+            try:
+                result = await self.device_manager.preflight()
+            except Exception as exc:
+                logger.exception("preflight_failed")
+                return web.json_response(
+                    {"ready": False, "verdict": "internal_error", "message": str(exc)},
+                    status=500,
+                )
+            status_code = 200 if result.get("ready") else 503
+            return web.json_response(result, status=status_code)
+
+        async def add_emulator(request: web.Request) -> web.Response:
+            started = monotonic()
+            try:
+                payload = await request.json()
+            except Exception:
+                return web.json_response(
+                    {
+                        "success": False,
+                        "phase": "validation_failed",
+                        "message": "Invalid JSON body",
+                        "elapsed_ms": int((monotonic() - started) * 1000),
+                    },
+                    status=400,
+                )
+
+            mode = str(payload.get("mode") or "").strip().lower()
+            if mode not in {"launch_avd", "adb_connect"}:
+                return web.json_response(
+                    {
+                        "success": False,
+                        "phase": "validation_failed",
+                        "message": "mode must be 'launch_avd' or 'adb_connect'",
+                        "elapsed_ms": int((monotonic() - started) * 1000),
+                    },
+                    status=400,
+                )
+
+            try:
+                if mode == "launch_avd":
+                    avd_name = str(payload.get("avd_name") or "").strip()
+                    if not avd_name:
+                        return web.json_response(
+                            {
+                                "success": False,
+                                "phase": "validation_failed",
+                                "message": "avd_name is required",
+                                "elapsed_ms": int((monotonic() - started) * 1000),
+                            },
+                            status=400,
+                        )
+                    headless = bool(payload.get("headless", True))
+                    result = await self.device_manager.launch_avd(
+                        avd_name, headless=headless
+                    )
+                else:
+                    host_port = str(payload.get("host_port") or "").strip()
+                    if not host_port:
+                        return web.json_response(
+                            {
+                                "success": False,
+                                "phase": "validation_failed",
+                                "message": "host_port is required",
+                                "elapsed_ms": int((monotonic() - started) * 1000),
+                            },
+                            status=400,
+                        )
+                    result = await self.device_manager.adb_connect(host_port)
+            except ValueError as exc:
+                return web.json_response(
+                    {
+                        "success": False,
+                        "phase": "validation_failed",
+                        "message": str(exc),
+                        "elapsed_ms": int((monotonic() - started) * 1000),
+                    },
+                    status=400,
+                )
+            except Exception as exc:
+                logger.exception("add_emulator_failed mode=%s", mode)
+                return web.json_response(
+                    {
+                        "success": False,
+                        "phase": "internal_error",
+                        "message": str(exc),
+                        "elapsed_ms": int((monotonic() - started) * 1000),
+                    },
+                    status=500,
+                )
+
+            status_code = 200 if result.get("success") else 500
+            logger.info(
+                "emulator_add mode=%s phase=%s success=%s elapsed_ms=%s",
+                mode,
+                result.get("phase"),
+                result.get("success"),
+                result.get("elapsed_ms"),
+            )
+            return web.json_response(result, status=status_code)
+
         async def restart_emulator(request: web.Request) -> web.Response:
             serial = request.match_info.get("serial", "")
             started = monotonic()
-            if not serial.startswith("emulator-"):
+            if not is_valid_emulator_serial(serial):
                 return web.json_response(
                     {
                         "success": False,
@@ -652,6 +723,9 @@ class EmulatorOrchestrator:
         app = web.Application()
         app.router.add_get("/screenshots", list_screenshots)
         app.router.add_get("/emulators", list_emulators)
+        app.router.add_get("/avds", list_avds)
+        app.router.add_get("/emulators/preflight", preflight)
+        app.router.add_post("/emulators/actions/add", add_emulator)
         app.router.add_get("/emulators/{serial}/frame.png", emulator_frame)
         app.router.add_post("/emulators/{serial}/input/tap", input_tap)
         app.router.add_post("/emulators/{serial}/input/swipe", input_swipe)
@@ -673,7 +747,7 @@ class EmulatorOrchestrator:
         runner,
         started: float,
     ) -> web.Response:
-        if not serial.startswith("emulator-"):
+        if not is_valid_emulator_serial(serial):
             return web.json_response(
                 {
                     "status": "error",
@@ -826,27 +900,14 @@ class EmulatorOrchestrator:
     def _counter_key(self, account_id: str, action_type: str, window: str) -> str:
         return f"rate:{account_id}:{action_type}:{window}"
 
-    async def _enforce_proxy(
-        self,
-        *,
-        account_id: str,
-        account: dict[str, Any],
-        device: EmulatorDevice,
-    ) -> None:
+    async def _enforce_proxy(self, *, account_id: str, device: EmulatorDevice) -> None:
         assert self.action_logger is not None
         lock = self._get_proxy_lock(device.serial)
         async with lock:
             if not self._allow_proxy_reconfigure(account_id):
                 self.proxy_bridge_events.labels(status="throttled", operation="assign").inc()
                 raise RuntimeError("Proxy reconfiguration throttled for account")
-
-            async def _load_proxy() -> dict[str, Any]:
-                persona_id = str(account.get("persona_id") or "").strip()
-                if persona_id:
-                    return await self.api_client.get_persona_proxy_credentials(persona_id)
-                return await self.api_client.get_proxy_credentials(account_id)
-
-            proxy = await _load_proxy()
+            proxy = await self.api_client.get_proxy_credentials(account_id)
             bridge_runtime = await self._ensure_proxy_bridge(
                 account_id=account_id,
                 emulator_serial=device.serial,
@@ -863,7 +924,7 @@ class EmulatorOrchestrator:
             ok = ok_setting and ok_bridge
             if not ok:
                 await self.api_client.rotate_proxy(account_id)
-                proxy = await _load_proxy()
+                proxy = await self.api_client.get_proxy_credentials(account_id)
                 bridge_runtime = await self._ensure_proxy_bridge(
                     account_id=account_id,
                     emulator_serial=device.serial,
@@ -887,7 +948,6 @@ class EmulatorOrchestrator:
                         bridge_id=bridge_runtime.bridge_id,
                         status="error",
                         last_error="Bridge not healthy after proxy rotation",
-                        persona_id=str(account.get("persona_id") or "") or None,
                     )
                     self.proxy_bridge_events.labels(status="error", operation="assign").inc()
                     raise RuntimeError("Proxy bridge unreachable after rotation")
@@ -900,7 +960,6 @@ class EmulatorOrchestrator:
                 bridge_id=bridge_runtime.bridge_id,
                 status="active",
                 last_error=None,
-                persona_id=str(account.get("persona_id") or "") or None,
             )
             self.proxy_bridge_events.labels(status="success", operation="assign").inc()
         await self.action_logger.log_action(
@@ -943,17 +1002,15 @@ class EmulatorOrchestrator:
         bridge_id: str,
         status: str,
         last_error: str | None,
-        persona_id: str | None = None,
     ) -> None:
         assert self.db_pool is not None
         query = """
             INSERT INTO emulator_proxy_bindings (
-                emulator_serial, account_id, persona_id, proxy_id, bridge_host, bridge_port, bridge_id, status, last_error, last_applied_at
-            ) VALUES ($1, $2, NULLIF($9, '')::uuid, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, NOW())
+                emulator_serial, account_id, proxy_id, bridge_host, bridge_port, bridge_id, status, last_error, last_applied_at
+            ) VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, NOW())
             ON CONFLICT (emulator_serial)
             DO UPDATE SET
                 account_id = EXCLUDED.account_id,
-                persona_id = EXCLUDED.persona_id,
                 proxy_id = EXCLUDED.proxy_id,
                 bridge_host = EXCLUDED.bridge_host,
                 bridge_port = EXCLUDED.bridge_port,
@@ -973,7 +1030,6 @@ class EmulatorOrchestrator:
                 bridge_id,
                 status,
                 last_error,
-                persona_id or "",
             )
 
     async def _reconcile_proxy_bindings(self) -> None:
@@ -997,18 +1053,7 @@ class EmulatorOrchestrator:
                 continue
             account_id = str(row["account_id"])
             try:
-                persona_id = ""
-                async with self.db_pool.acquire() as conn:
-                    acc_row = await conn.fetchrow(
-                        "SELECT persona_id FROM accounts WHERE id = $1::uuid",
-                        account_id,
-                    )
-                    if acc_row and acc_row["persona_id"]:
-                        persona_id = str(acc_row["persona_id"])
-                if persona_id:
-                    proxy = await self.api_client.get_persona_proxy_credentials(persona_id)
-                else:
-                    proxy = await self.api_client.get_proxy_credentials(account_id)
+                proxy = await self.api_client.get_proxy_credentials(account_id)
                 bridge = await self._ensure_proxy_bridge(
                     account_id=account_id,
                     emulator_serial=serial,
