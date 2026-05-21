@@ -494,6 +494,92 @@ export const api = {
         created_at?: string | null;
       }>;
     },
+    listEngagementPosts: async (params: { account_id: string; limit?: number; include_graph?: boolean }) => {
+      const response = await distributionClient.get('/engagement/posts', { params });
+      return response.data as {
+        posts: Array<{
+          media_id: string;
+          caption?: string | null;
+          permalink?: string | null;
+          published_at?: string | null;
+          source: string;
+          account_id: string;
+          comments_count?: number | null;
+          original_media_id?: string;
+          media_id_resolved?: boolean;
+        }>;
+        count: number;
+        graph_error?: string | null;
+      };
+    },
+    listPostComments: async (
+      mediaId: string,
+      params: { account_id: string; limit?: number; caption_hint?: string },
+    ) => {
+      const response = await distributionClient.get(`/engagement/posts/${encodeURIComponent(mediaId)}/comments`, {
+        params,
+      });
+      return response.data as {
+        media_id: string;
+        original_media_id?: string;
+        media_id_resolved?: boolean;
+        account_id: string;
+        comments: Array<{
+          id: string;
+          text: string;
+          username?: string | null;
+          from_id?: string | null;
+          timestamp?: string | null;
+          like_count?: number;
+          media_id: string;
+        }>;
+        count: number;
+        dry_run?: boolean;
+        hint?: string | null;
+        graph_error?: string | null;
+        comments_count_reported?: number | null;
+      };
+    },
+    listEngagementIntents: async (params?: { status?: string; action_type?: string; limit?: number }) => {
+      const response = await distributionClient.get('/engagement/intents', { params });
+      return response.data as Array<{
+        intent_id: string;
+        status: string;
+        action_type: string;
+        account_id: string;
+        target_id: string;
+        message_text?: string | null;
+        error_message?: string | null;
+        external_result_id?: string | null;
+        created_at?: string | null;
+      }>;
+    },
+    createEngagementIntent: async (body: {
+      account_id: string;
+      action_type: string;
+      target_id: string;
+      target_type?: string;
+      target_username?: string;
+      parent_target_id?: string;
+      message_text?: string;
+      platform?: string;
+      mode?: string;
+      scheduled_for?: string;
+      idempotency_key: string;
+    }) => {
+      const response = await distributionClient.post('/engagement/intents', body);
+      return response.data as {
+        intent_id: string;
+        status: string;
+        action_type: string;
+        account_id: string;
+        target_id: string;
+      };
+    },
+    dispatchEngagementIntent: async (intentId: string) => {
+      const response = await distributionClient.post(`/engagement/intents/${intentId}/dispatch`);
+      return response.data as { intent_id: string; status: string; action_type?: string; note?: string };
+    },
     generateContent: async (data: { niche: string, type?: string, target_accounts: string[], scheduled_at?: string }) => {
       const payload = {
         niche: data.niche,

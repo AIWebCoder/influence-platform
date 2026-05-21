@@ -649,12 +649,24 @@ class EmulatorOrchestrator:
                 )
                 return web.json_response(result, status=status_code)
 
+        async def launch_instagram_app(request: web.Request) -> web.Response:
+            serial = request.match_info.get("serial", "")
+            started = monotonic()
+            return await self._execute_input_action(
+                serial=serial,
+                action_type="launch_instagram",
+                data={"package": self.settings.android_app_package},
+                runner=lambda: self.device_manager.launch_instagram(serial),
+                started=started,
+            )
+
         app = web.Application()
         app.router.add_get("/screenshots", list_screenshots)
         app.router.add_get("/emulators", list_emulators)
         app.router.add_get("/emulators/{serial}/frame.png", emulator_frame)
         app.router.add_post("/emulators/{serial}/input/tap", input_tap)
         app.router.add_post("/emulators/{serial}/input/swipe", input_swipe)
+        app.router.add_post("/emulators/{serial}/apps/instagram", launch_instagram_app)
         app.router.add_post("/emulators/{serial}/actions/restart", restart_emulator)
         app.router.add_static("/screenshots/file/", self.settings.screenshot_dir, show_index=False)
 

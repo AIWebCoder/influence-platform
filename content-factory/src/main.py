@@ -32,9 +32,11 @@ from src.api import (
     billing,
     generation_jobs,
     ready_queue,
+    engagement,
 )
 from src.services.pipeline_trace import configure_pipeline_trace_logging
 from src.services.publish_outbox_worker import publish_outbox_runner
+from src.services.engagement_outbox_worker import engagement_outbox_runner
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -92,13 +94,19 @@ async def lifespan(app: FastAPI):
     await init_cache(os.getenv("REDIS_URL", "redis://localhost:6379"))
     _outbox_stop = asyncio.Event()
     _outbox_task = asyncio.create_task(publish_outbox_runner(_outbox_stop))
+    _engagement_outbox_task = asyncio.create_task(engagement_outbox_runner(_outbox_stop))
     print("✅ Content Factory démarré")
     yield
     # Shutdown
     _outbox_stop.set()
     _outbox_task.cancel()
+    _engagement_outbox_task.cancel()
     try:
         await _outbox_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await _engagement_outbox_task
     except asyncio.CancelledError:
         pass
     print("🛑 Content Factory arrêté")
@@ -159,6 +167,7 @@ app.include_router(generation_jobs.router, prefix="/generation-jobs", tags=["Gen
 app.include_router(generation_jobs.publish_router, tags=["Publication Intents"])
 app.include_router(scheduling.router, prefix="/scheduling", tags=["Scheduling"])
 app.include_router(ready_queue.router, prefix="/ready-queue", tags=["Ready Queue"])
+app.include_router(engagement.router, prefix="/engagement", tags=["Engagement"])
 app.include_router(hashtags.router, prefix="/hashtags", tags=["Hashtags"])
 app.include_router(alerts.router, prefix="/alerts", tags=["Alerts"])
 app.include_router(users.router, prefix="/users", tags=["Users"])

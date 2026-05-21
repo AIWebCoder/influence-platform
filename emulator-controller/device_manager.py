@@ -370,6 +370,42 @@ class DeviceManager:
             str(duration),
         )
 
+    async def launch_app(
+        self,
+        serial: str,
+        package: str,
+        activity: str | None = None,
+    ) -> None:
+        pkg = str(package or "").strip()
+        if not pkg:
+            raise ValueError("package is required")
+        act = str(activity or "").strip()
+        if act:
+            if "/" in act:
+                component = act
+            else:
+                component = f"{pkg}/{act}"
+            await self._adb(serial, "shell", "am", "start", "-W", "-n", component)
+            return
+        await self._adb(
+            serial,
+            "shell",
+            "monkey",
+            "-p",
+            pkg,
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "1",
+        )
+
+    async def launch_instagram(self, serial: str) -> None:
+        package = os.getenv("ANDROID_APP_PACKAGE", "com.instagram.android").strip()
+        activity = os.getenv(
+            "ANDROID_APP_ACTIVITY",
+            "com.instagram.mainactivity.MainActivity",
+        ).strip()
+        await self.launch_app(serial, package, activity)
+
     async def get_screen_size(self, serial: str) -> tuple[int, int] | None:
         _, out, _ = await self._adb(serial, "shell", "wm", "size")
         # Example: "Physical size: 1080x2400"

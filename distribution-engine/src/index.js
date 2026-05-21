@@ -52,6 +52,16 @@ app.get('/metrics', async (req, res) => {
   res.end(await register.metrics());
 });
 
+// Public smoke check (no JWT) — confirms engagement router is deployed
+app.get('/engagement/ping', (_req, res) => {
+  res.json({
+    ok: true,
+    module: 'engagement',
+    implementation: 'native',
+    routes: ['GET /engagement/posts', 'GET /engagement/posts/:mediaId/comments', 'GET /engagement/intents'],
+  });
+});
+
 app.use(authMiddleware);
 app.use('/accounts', accountsRouter);
 
@@ -78,6 +88,11 @@ app.use('/campaigns', campaignRouter);
 
 const dashboardRouter = require('./managers/dashboardRouter');
 app.use('/dashboard', dashboardRouter);
+
+const engagementRouter = require('./managers/engagementRouter');
+const engagementPostsRoutes = require('./managers/engagementPostsRoutes');
+app.use('/engagement', engagementRouter);
+app.use('/engagement', engagementPostsRoutes);
 
 app.get('/', (req, res) => {
   res.json({
@@ -111,16 +126,36 @@ async function start() {
 
     const PublishingWorker = require('./publisher/PublishingWorker');
     PublishingWorker.startPublishConsumer();
+    const EngagementWorker = require('./engagement/EngagementWorker');
+    EngagementWorker.startEngagementConsumer();
+    console.log(JSON.stringify({
+      event: 'engagement_pipeline_startup',
+      mode: require('./engagement/engagementMode').engagementModeLabel(),
+      ENGAGEMENT_DRY_RUN: process.env.ENGAGEMENT_DRY_RUN,
+      queue: 'engagement:commands',
+    }));
     const { startTokenExpiryCron } = require('./services/tokenExpiryMonitor');
     startTokenExpiryCron();
 
     // Initialize Automated Services (after DB/Redis are READY)
 
+    /** Never let scheduled async work reject unhandled — that can crash Node and drop all HTTP clients (ERR_EMPTY_RESPONSE). */
+    const runScheduled = (label, fn) => {
+      Promise.resolve()
+        .then(fn)
+        .catch((err) => {
+          console.error(`[DistributionEngine] Scheduled job "${label}" failed:`, err?.message || err);
+          if (process.env.SENTRY_DSN) {
+            Sentry.captureException(err);
+          }
+        });
+    };
+
     // 1. Proxy Health Check (every 5 minutes)
     const ProxyManager = require('./proxy/ProxyManager');
-    setInterval(async () => {
+    setInterval(() => {
       console.log('[DistributionEngine] Running scheduled proxy health checks...');
-      await ProxyManager.runHealthCheckAll();
+      runScheduled('proxy-health', () => ProxyManager.runHealthCheckAll());
     }, 5 * 60 * 1000);
     // Initial run
     ProxyManager.runHealthCheckAll().catch(err =>
@@ -135,14 +170,14 @@ async function start() {
     const MetricsCollector = require('./analytics/MetricsCollector');
     setInterval(() => {
       console.log('[DistributionEngine] Running scheduled metrics collection...');
-      MetricsCollector.collectAll();
+      runScheduled('metrics-collector', () => MetricsCollector.collectAll());
     }, 2 * 60 * 60 * 1000);
 
     // 4. A/B Test Auto-Evaluation (every 4 hours)
     const WinnerDetectionService = require('./analytics/WinnerDetectionService');
     setInterval(() => {
       console.log('[DistributionEngine] Running scheduled A/B test evaluations...');
-      WinnerDetectionService.runAutoEvaluation();
+      runScheduled('ab-auto-evaluation', () => WinnerDetectionService.runAutoEvaluation());
     }, 4 * 60 * 60 * 1000);
 
     // 5. Shadowban engagement scan (every 12 hours, Instagram accounts)
@@ -163,8 +198,8 @@ async function start() {
         console.warn('[ShadowbanMonitor] Scheduled sweep failed:', err.message);
       }
     };
-    setInterval(runShadowbanSweep, 12 * 60 * 60 * 1000);
-    runShadowbanSweep().catch(() => {});
+    setInterval(() => runScheduled('shadowban-sweep', runShadowbanSweep), 12 * 60 * 60 * 1000);
+    runScheduled('shadowban-sweep-initial', runShadowbanSweep);
 
     const PORT = process.env.PORT || 3001;
     app.listen(PORT, () => {
@@ -175,5 +210,18 @@ async function start() {
     process.exit(1);
   }
 }
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[DistributionEngine] unhandledRejection:', reason);
+  if (process.env.SENTRY_DSN) {
+    Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)));
+  }
+});
+process.on('uncaughtException', (err) => {
+  console.error('[DistributionEngine] uncaughtException:', err);
+  if (process.env.SENTRY_DSN) {
+    Sentry.captureException(err);
+  }
+});
 
 start();

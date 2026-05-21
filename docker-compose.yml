@@ -175,6 +175,7 @@ services:
       PERSONA_ENFORCE_EGRESS: ${PERSONA_ENFORCE_EGRESS:-true}
       PROXY_LOCAL_HOST_ALIAS: ${PROXY_LOCAL_HOST_ALIAS:-host.docker.internal}
       PERSONA_EGRESS_CHECK_URLS: ${PERSONA_EGRESS_CHECK_URLS:-https://api.ipify.org,https://ifconfig.me/ip}
+      CONTENT_FACTORY_URL: http://content-factory:8000
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -268,6 +269,8 @@ services:
       NEXT_PUBLIC_CONTENT_API_URL: ${NEXT_PUBLIC_CONTENT_API_URL:-http://localhost:8000}
       NEXT_PUBLIC_DISTRIBUTION_API_URL: ${NEXT_PUBLIC_DISTRIBUTION_API_URL:-http://localhost:3001}
       NEXT_PUBLIC_EMULATOR_CONTROLLER_URL: ${NEXT_PUBLIC_EMULATOR_CONTROLLER_URL:-http://localhost:9102}
+      # Server-side NextAuth login (not exposed to the browser)
+      CONTENT_FACTORY_URL: http://content-factory:8000
       EMULATOR_CONTROLLER_URL: http://emulator-controller:9102
       NEXTAUTH_SECRET: ${JWT_SECRET:-changeme_in_production}
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}

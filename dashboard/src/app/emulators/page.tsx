@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import {
   AlertCircle,
   CheckCircle2,
+  Instagram,
   Monitor,
   RefreshCw,
   RotateCcw,
@@ -64,6 +65,7 @@ export default function EmulatorsPage() {
   const [controlEnabled, setControlEnabled] = useState(true);
   const [busyBySerial, setBusyBySerial] = useState<Record<string, boolean>>({});
   const [restartingBySerial, setRestartingBySerial] = useState<Record<string, boolean>>({});
+  const [launchingIgBySerial, setLaunchingIgBySerial] = useState<Record<string, boolean>>({});
   const [refreshingBySerial, setRefreshingBySerial] = useState<Record<string, boolean>>({});
   const [errorBySerial, setErrorBySerial] = useState<Record<string, string | undefined>>({});
   const [rippleBySerial, setRippleBySerial] = useState<
@@ -185,6 +187,34 @@ export default function EmulatorsPage() {
     }
   };
 
+  const openInstagram = async (serial: string) => {
+    if (launchingIgBySerial[serial]) return;
+    setErrorBySerial((prev) => ({ ...prev, [serial]: undefined }));
+    setLaunchingIgBySerial((prev) => ({ ...prev, [serial]: true }));
+    try {
+      const res = await fetch(
+        `/api/emulators/${encodeURIComponent(serial)}/apps/instagram`,
+        { method: "POST", cache: "no-store" }
+      );
+      const body = (await res.json()) as { status: string; error?: string };
+      if (!res.ok || body.status !== "success") {
+        setErrorBySerial((prev) => ({
+          ...prev,
+          [serial]: body.error || "Failed to open Instagram",
+        }));
+        return;
+      }
+      setTick((t) => t + 1);
+    } catch {
+      setErrorBySerial((prev) => ({
+        ...prev,
+        [serial]: "Network error while opening Instagram",
+      }));
+    } finally {
+      setLaunchingIgBySerial((prev) => ({ ...prev, [serial]: false }));
+    }
+  };
+
   const refreshEmulator = async (serial: string) => {
     if (refreshingBySerial[serial]) return;
     setErrorBySerial((prev) => ({ ...prev, [serial]: undefined }));
@@ -273,9 +303,14 @@ export default function EmulatorsPage() {
 
   const busyCount = useMemo(
     () =>
-      data.items.filter((item) => item.busy || busyBySerial[item.serial] || restartingBySerial[item.serial])
-        .length,
-    [data.items, busyBySerial, restartingBySerial]
+      data.items.filter(
+        (item) =>
+          item.busy ||
+          busyBySerial[item.serial] ||
+          restartingBySerial[item.serial] ||
+          launchingIgBySerial[item.serial]
+      ).length,
+    [data.items, busyBySerial, restartingBySerial, launchingIgBySerial]
   );
 
   return (
@@ -360,6 +395,23 @@ export default function EmulatorsPage() {
                   </CardTitle>
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary">{emulator.status}</Badge>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={
+                        Boolean(launchingIgBySerial[emulator.serial]) ||
+                        Boolean(busyBySerial[emulator.serial]) ||
+                        Boolean(emulator.busy)
+                      }
+                      onClick={() => void openInstagram(emulator.serial)}
+                      title="Launch Instagram on this emulator via ADB"
+                    >
+                      <Instagram
+                        className={`mr-1 h-3.5 w-3.5 text-pink-500 ${launchingIgBySerial[emulator.serial] ? "animate-pulse" : ""}`}
+                      />
+                      {launchingIgBySerial[emulator.serial] ? "Opening…" : "Instagram"}
+                    </Button>
                     <Button
                       type="button"
                       variant="outline"

@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED: bool = True
     PUBLISH_OUTBOX_POLL_INTERVAL_MS: int = 250
     PUBLISH_OUTBOX_STALE_SENT_SECONDS: int = 300
+    ENGAGEMENT_OUTBOX_POLL_INTERVAL_MS: int = 500
 
     # Rough cost model for UI estimates (abstract credits; tune per provider)
     GENERATION_CREDITS_PER_IMAGE: float = 1.0

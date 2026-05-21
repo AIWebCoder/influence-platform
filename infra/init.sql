@@ -435,6 +435,51 @@ CREATE TABLE IF NOT EXISTS action_cooldowns (
 CREATE INDEX idx_action_cooldowns_account ON action_cooldowns(account_id);
 CREATE INDEX idx_action_cooldowns_until ON action_cooldowns(cooldown_until);
 
+-- Engagement automation (comment likes, replies, DMs)
+CREATE TABLE IF NOT EXISTS engagement_intents (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+    platform VARCHAR(30) NOT NULL DEFAULT 'instagram',
+    action_type VARCHAR(30) NOT NULL CHECK (action_type IN ('comment_like', 'comment_reply', 'dm_send')),
+    target_type VARCHAR(30) NOT NULL DEFAULT 'comment' CHECK (target_type IN ('comment', 'user', 'thread')),
+    target_id VARCHAR(255) NOT NULL,
+    target_username VARCHAR(255),
+    parent_target_id VARCHAR(255),
+    message_text TEXT,
+    mode VARCHAR(20) NOT NULL DEFAULT 'execute_now' CHECK (mode IN ('execute_now', 'scheduled')),
+    scheduled_for TIMESTAMPTZ,
+    status VARCHAR(20) NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'queued', 'processing', 'completed', 'failed')),
+    external_result_id TEXT,
+    error_message TEXT,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_engagement_intents_account ON engagement_intents(account_id);
+CREATE INDEX IF NOT EXISTS idx_engagement_intents_status ON engagement_intents(status);
+CREATE INDEX IF NOT EXISTS idx_engagement_intents_action ON engagement_intents(action_type);
+
+CREATE TABLE IF NOT EXISTS engagement_outbox (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    intent_id UUID NOT NULL REFERENCES engagement_intents(id) ON DELETE CASCADE,
+    payload_json TEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent')),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (intent_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_engagement_outbox_status_created ON engagement_outbox (status, created_at);
+
+CREATE TRIGGER trigger_engagement_intents_updated_at
+    BEFORE UPDATE ON engagement_intents
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TRIGGER trigger_engagement_outbox_updated_at
+    BEFORE UPDATE ON engagement_outbox
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
 -- ─────────────────────────────────────────
 -- PHASE 13: Publication Monitoring & Reliability
 -- ─────────────────────────────────────────

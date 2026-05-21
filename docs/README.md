@@ -40,6 +40,14 @@ docs/
 │   ├── v1-publish-failure-triage.md
 │   ├── v1-rollback-checklist.md
 │   └── v1-worker-restart-and-stuck-job-recovery.md
+├── fixes/                             Production incident fixes (mymultiflow / scm-101)
+│   ├── README.md
+│   ├── content-security-policy-aliveai.md
+│   ├── nginx-api-routing.md
+│   ├── dashboard-auth-login.md
+│   ├── generated-assets-schema.md
+│   ├── generation-failed-with-video.md
+│   └── troubleshooting-checklist.md
 └── suggestions/                       Conception / future (non-binding)
     └── conception-plan-v2.md
 ```

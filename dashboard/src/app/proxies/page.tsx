@@ -345,6 +345,7 @@ export default function ProxiesPage() {
               filterColumnId="host"
               filterPlaceholder={p.search}
               emptyMessage={p.empty}
+              paginationLabels={text.dataTable}
             />
           )}
         </CardContent>

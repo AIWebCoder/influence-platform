@@ -94,10 +94,14 @@ class WinnerDetectionService {
    * Auto-evaluate all running tests
    */
   async runAutoEvaluation() {
-    const pool = getPool();
-    const activeTests = await pool.query("SELECT id FROM ab_tests WHERE status = 'running'");
-    for (const test of activeTests.rows) {
-      await this.evaluateTest(test.id);
+    try {
+      const pool = getPool();
+      const activeTests = await pool.query("SELECT id FROM ab_tests WHERE status = 'running'");
+      for (const test of activeTests.rows) {
+        await this.evaluateTest(test.id);
+      }
+    } catch (err) {
+      console.error('[WinnerDetection] runAutoEvaluation failed:', err?.message || err);
     }
   }
 }
