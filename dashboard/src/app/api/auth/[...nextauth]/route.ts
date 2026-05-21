@@ -7,6 +7,26 @@ type FastApiTokenClaims = {
   exp?: number;
 };
 
+/** Server-side login must hit FastAPI directly (/auth/login), not the browser gateway path (/api/content). */
+function resolveContentFactoryAuthBaseUrl(): string {
+  const internal = (process.env.CONTENT_FACTORY_URL || "").trim();
+  if (internal) return internal.replace(/\/$/, "");
+
+  const publicUrl = (process.env.NEXT_PUBLIC_CONTENT_API_URL || "http://localhost:8000").trim();
+  if (
+    publicUrl.includes("localhost") ||
+    publicUrl.includes("127.0.0.1") ||
+    publicUrl.includes("content-factory")
+  ) {
+    return "http://content-factory:8000";
+  }
+  // Nginx exposes the API as /api/content; auth routes live at /auth/login on the app root.
+  if (publicUrl.includes("/api/content")) {
+    return "http://content-factory:8000";
+  }
+  return publicUrl.replace(/\/$/, "");
+}
+
 function decodeJwtPayload(token: string): FastApiTokenClaims | null {
   try {
     const [, payload] = token.split(".");
@@ -48,10 +68,7 @@ const authOptions: NextAuthOptions = {
             };
           }
 
-          let apiUrl = process.env.NEXT_PUBLIC_CONTENT_API_URL || "http://localhost:8000";
-          if (apiUrl.includes("localhost")) {
-            apiUrl = "http://content-factory:8000";
-          }
+          const apiUrl = resolveContentFactoryAuthBaseUrl();
           const res = await fetch(`${apiUrl}/auth/login`, {
             method: "POST",
             headers: {

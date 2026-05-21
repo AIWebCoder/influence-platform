@@ -52,10 +52,39 @@ async def health_check(
     redis=Depends(get_redis)
 ):
     is_healthy, checks = await _run_core_checks(db, redis)
+    engagement_api = False
+    try:
+        from src.main import app as cf_app
+        engagement_api = any(
+            getattr(r, "path", "") == "/engagement/intents"
+            for r in cf_app.routes
+        )
+    except Exception:
+        engagement_api = False
+
+    try:
+        result = await db.execute(
+            text(
+                """
+                SELECT EXISTS (
+                  SELECT 1 FROM information_schema.tables
+                  WHERE table_schema = 'public' AND table_name = 'engagement_intents'
+                )
+                """
+            )
+        )
+        engagement_tables = bool(result.scalar())
+    except Exception:
+        engagement_tables = False
+
     return {
         "status": "healthy" if is_healthy else "degraded",
         "service": "content-factory",
-        "checks": checks
+        "checks": checks,
+        "features": {
+            "engagement_api": engagement_api,
+            "engagement_tables": engagement_tables,
+        },
     }
 
 

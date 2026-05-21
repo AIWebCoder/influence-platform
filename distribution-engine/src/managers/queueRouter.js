@@ -16,6 +16,7 @@ router.get('/stats', async (req, res) => {
     const pendingInQueue = await redis.llen('content:ready').catch(() => 0);
     const delayedInQueue = await redis.zcard('content:delayed').catch(() => 0);
     const publishCommandsPending = await redis.llen('publish:commands').catch(() => 0);
+    const engagementCommandsPending = await redis.llen('engagement:commands').catch(() => 0);
     const publishFailedDlq = await redis.llen('publish:failed').catch(() => 0);
     let publishProcessing = 0;
     try {
@@ -54,6 +55,7 @@ router.get('/stats', async (req, res) => {
         publish_commands_pending: publishCommandsPending,
         publish_processing: publishProcessing,
         publish_failed_dlq: publishFailedDlq,
+        engagement_commands_pending: engagementCommandsPending,
       },
       publications: {
         total: parseInt(stats.total, 10),

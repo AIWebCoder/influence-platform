@@ -4,6 +4,7 @@ class ActionLimits {
   // Default limits per action type per day (Instagram's typical limits)
   static DEFAULT_LIMITS = {
     like: 350,
+    comment_like: 200,
     follow: 200,
     unfollow: 200,
     comment: 60,

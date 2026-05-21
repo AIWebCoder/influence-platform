@@ -8,6 +8,7 @@ class CooldownManager {
     unfollow: 1 * 60 * 60 * 1000,    // 1 hour between unfollows
     like: 5 * 60 * 1000,              // 5 min between likes on same user
     comment: 30 * 60 * 1000,           // 30 min between comments on same user
+    comment_like: 10 * 60 * 1000,      // 10 min between likes on same comment
     dm: 60 * 60 * 1000,               // 1 hour between DMs
     
     // Content-based actions

@@ -104,7 +104,7 @@ function StatCard({
 }
 
 export default function AccountsPage() {
-  const { text } = useLocale();
+  const { text, locale } = useLocale();
 
   const [open, setOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -404,16 +404,21 @@ export default function AccountsPage() {
           </h2>
           <p className="text-sm text-muted-foreground">{text.accounts.subtitle}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={loadAccounts} disabled={loading}>
+        <div className="flex h-10 gap-2">
+          <Button
+            variant="outline"
+            className="h-full min-h-0 shrink-0"
+            onClick={loadAccounts}
+            disabled={loading}
+          >
             <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </Button>
-          <Button variant="outline" onClick={() => setBulkOpen(true)}>
+          <Button variant="outline" className="h-full min-h-0 shrink-0" onClick={() => setBulkOpen(true)}>
             <Upload className="mr-2 h-4 w-4" />
             {text.accounts.bulkImport}
           </Button>
-          <Button onClick={() => setOpen(true)}>
+          <Button className="h-full min-h-0 shrink-0" onClick={() => setOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             {text.accounts.addNode}
           </Button>
@@ -476,6 +481,7 @@ export default function AccountsPage() {
               filterColumnId="username"
               filterPlaceholder={text.accountHealth.search}
               emptyMessage="No accounts synchronized."
+              paginationLabels={text.dataTable}
             />
           )}
         </CardContent>
@@ -573,6 +579,11 @@ export default function AccountsPage() {
                     placeholder="EAAG..."
                     autoComplete="off"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    {locale === "fr"
+                      ? "Pour lire/repondre aux commentaires (Engagement), le token Meta doit inclure instagram_business_manage_comments et instagram_business_basic (pas seulement la publication)."
+                      : "To read/reply to comments (Engagement), the Meta token must include instagram_business_manage_comments and instagram_business_basic—not publish-only."}
+                  </p>
                 </div>
               </>
             ) : null}

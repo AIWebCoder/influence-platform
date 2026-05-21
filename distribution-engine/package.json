@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "jest"
+    "test": "jest",
+    "diagnose:engagement": "node scripts/diagnose-engagement-comments.cjs"
   },
   "dependencies": {
     "@sentry/node": "^7.100.0",

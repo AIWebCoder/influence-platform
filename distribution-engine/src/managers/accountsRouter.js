@@ -2,20 +2,9 @@ const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
 const AccountService = require('./AccountService');
-const { Pool } = require('pg'); // Assuming pg is used for database interaction
-const dotenv = require('dotenv'); // Assuming dotenv is used for environment variables
-
-dotenv.config(); // Load environment variables
+const { getPool } = require('../core/database');
 
 const PROXY_STRICT_ONE_TO_ONE = process.env.PROXY_STRICT_ONE_TO_ONE !== 'false';
-
-// Database connection pool
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
-
-// Helper function to get the pool (if needed, otherwise use 'pool' directly)
-const getPool = () => pool;
 
 function decryptProxyPassword(passwordEncrypted) {
   if (!passwordEncrypted) return null;

@@ -77,6 +77,7 @@ If `/work` is not mounted in your container, run from host with `docker compose 
 - Input APIs (dashboard -> emulator-controller proxy):
   - `POST /api/emulators/:serial/input/tap`
   - `POST /api/emulators/:serial/input/swipe`
+  - `POST /api/emulators/:serial/apps/instagram` — launch Instagram on the emulator (ADB)
 
 ## Proxy Networking Notes
 

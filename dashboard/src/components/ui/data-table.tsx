@@ -28,6 +28,31 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+export type DataTablePaginationLabels = {
+  rowsPerPage: string;
+  rowsPerPageAria: string;
+  previous: string;
+  next: string;
+  pageOf: string;
+  rowCount: string;
+};
+
+const DEFAULT_PAGINATION_LABELS: DataTablePaginationLabels = {
+  rowsPerPage: "Rows per page",
+  rowsPerPageAria: "Rows per page",
+  previous: "Previous",
+  next: "Next",
+  pageOf: "Page {page} of {total}",
+  rowCount: "{count} row(s)",
+};
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
@@ -35,6 +60,7 @@ interface DataTableProps<TData, TValue> {
   filterColumnId?: string;
   filterPlaceholder?: string;
   emptyMessage?: string;
+  paginationLabels?: DataTablePaginationLabels;
 }
 
 export function DataTable<TData, TValue>({
@@ -43,6 +69,7 @@ export function DataTable<TData, TValue>({
   filterColumnId,
   filterPlaceholder = "Filter…",
   emptyMessage = "No results.",
+  paginationLabels,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -107,7 +134,7 @@ export function DataTable<TData, TValue>({
           </TableBody>
         </Table>
       </div>
-      <DataTablePagination table={table} />
+      <DataTablePagination table={table} labels={paginationLabels} />
     </div>
   );
 }
@@ -171,30 +198,45 @@ export function DataTableColumnHeader<TData, TValue>({
   );
 }
 
-export function DataTablePagination<TData>({ table }: { table: TanstackTable<TData> }) {
+export function DataTablePagination<TData>({
+  table,
+  labels: labelsProp,
+}: {
+  table: TanstackTable<TData>;
+  labels?: DataTablePaginationLabels;
+}) {
+  const labels = labelsProp ?? DEFAULT_PAGINATION_LABELS;
+  const rowCount = table.getFilteredRowModel().rows.length;
+  const pageIndex = table.getState().pagination.pageIndex;
+  const pageCount = table.getPageCount() || 1;
+  const rowCountLabel = labels.rowCount.replace("{count}", String(rowCount));
+  const pageOfLabel = labels.pageOf
+    .replace("{page}", String(pageIndex + 1))
+    .replace("{total}", String(pageCount));
+
   return (
     <div className="flex items-center justify-between px-2">
-      <div className="flex-1 text-sm text-muted-foreground">
-        {table.getFilteredRowModel().rows.length} row(s)
-      </div>
+      <div className="flex-1 text-sm text-muted-foreground">{rowCountLabel}</div>
       <div className="flex items-center space-x-6 lg:space-x-8">
         <div className="flex items-center space-x-2">
-          <p className="text-sm font-medium">Rows per page</p>
-          <select
-            className="h-8 w-[70px] rounded-md border border-input bg-background px-2 text-sm"
-            value={table.getState().pagination.pageSize}
-            onChange={(e) => table.setPageSize(Number(e.target.value))}
+          <p className="text-sm font-medium">{labels.rowsPerPage}</p>
+          <Select
+            value={String(table.getState().pagination.pageSize)}
+            onValueChange={(v) => table.setPageSize(Number(v))}
           >
-            {[10, 20, 50, 100].map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className="h-8 w-[72px] shadow-sm" aria-label={labels.rowsPerPageAria}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper" align="end">
+              {[10, 20, 50, 100].map((size) => (
+                <SelectItem key={size} value={String(size)}>
+                  {size}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-        <div className="flex w-[100px] items-center justify-center text-sm font-medium">
-          Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount() || 1}
-        </div>
+        <div className="flex w-[100px] items-center justify-center text-sm font-medium">{pageOfLabel}</div>
         <div className="flex items-center space-x-2">
           <Button
             variant="outline"
@@ -202,7 +244,7 @@ export function DataTablePagination<TData>({ table }: { table: TanstackTable<TDa
             onClick={() => table.previousPage()}
             disabled={!table.getCanPreviousPage()}
           >
-            Previous
+            {labels.previous}
           </Button>
           <Button
             variant="outline"
@@ -210,7 +252,7 @@ export function DataTablePagination<TData>({ table }: { table: TanstackTable<TDa
             onClick={() => table.nextPage()}
             disabled={!table.getCanNextPage()}
           >
-            Next
+            {labels.next}
           </Button>
         </div>
       </div>

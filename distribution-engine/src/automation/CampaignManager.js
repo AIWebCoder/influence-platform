@@ -13,11 +13,11 @@ class CampaignManager {
   start() {
     console.log('[CampaignManager] Starting background orchestrator...');
     // Initial run
-    this.runCycle();
-    
+    this.runCycle().catch((err) => console.error('[CampaignManager] Initial cycle failed:', err));
+
     // Interval run every 6 hours
     this.intervalId = setInterval(() => {
-      this.runCycle();
+      this.runCycle().catch((err) => console.error('[CampaignManager] Interval cycle failed:', err));
     }, 6 * 60 * 60 * 1000);
   }
 

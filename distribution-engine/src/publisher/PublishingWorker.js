@@ -102,9 +102,9 @@ class PublishingWorker {
     if (existing.rows.length) {
       await pool.query(
         `UPDATE publications SET
-           status = $2,
-           instagram_post_id = CASE WHEN $2 = 'published' THEN COALESCE($3, instagram_post_id) ELSE instagram_post_id END,
-           published_at = CASE WHEN $2 = 'published' THEN COALESCE($4::timestamptz, published_at, NOW()) ELSE published_at END,
+           status = $2::varchar(30),
+           instagram_post_id = CASE WHEN $2::text = 'published' THEN COALESCE($3::varchar(200), instagram_post_id) ELSE instagram_post_id END,
+           published_at = CASE WHEN $2::text = 'published' THEN COALESCE($4::timestamptz, published_at, NOW()) ELSE published_at END,
            error_message = $5,
            retry_count = $6,
            max_retries = COALESCE($7, max_retries),
@@ -130,8 +130,8 @@ class PublishingWorker {
            published_at, error_message, retry_count, max_retries, failure_type, next_retry_at, last_retry_at,
            created_at, updated_at
          ) VALUES (
-           gen_random_uuid(), $1, NULL, $2::uuid, $3, $4,
-           CASE WHEN $3 = 'published' THEN COALESCE($5::timestamptz, NOW()) ELSE NULL END,
+           gen_random_uuid(), $1, NULL, $2::uuid, $3::varchar(30), $4::varchar(200),
+           CASE WHEN $3::text = 'published' THEN COALESCE($5::timestamptz, NOW()) ELSE NULL END,
            $6, $7, COALESCE($8, 3), $9, NULL, NULL,
            NOW(), NOW()
          )`,
@@ -797,9 +797,9 @@ class PublishingWorker {
 
       await pool.query(
         `UPDATE publication_targets
-         SET status = $3,
-             publish_stage = COALESCE($4, publish_stage),
-             provider_container_id = COALESCE($5, provider_container_id),
+         SET status = $3::varchar(20),
+             publish_stage = COALESCE($4::varchar(50), publish_stage),
+             provider_container_id = COALESCE($5::text, provider_container_id),
              last_error = $2,
              updated_at = NOW()
          WHERE id = $1::uuid AND status = 'publishing'`,

@@ -20,6 +20,7 @@ export const translations = {
       templates: "Modèles",
       calendar: "Calendrier éditorial",
       readyQueue: "File prête",
+      engagement: "Engagement",
       publications: "Publications",
       personas: "Personas",
       proxies: "Proxies",
@@ -65,6 +66,14 @@ export const translations = {
       generationQueueSubtitle: "Contenus en attente",
       fleetHealth: "Santé de la flotte",
       fleetHealthSubtitle: "Moyenne sur tous les comptes",
+    },
+    dataTable: {
+      rowsPerPage: "Lignes par page",
+      rowsPerPageAria: "Nombre de lignes par page",
+      previous: "Précédent",
+      next: "Suivant",
+      pageOf: "Page {page} sur {total}",
+      rowCount: "{count} ligne(s)",
     },
     accounts: {
       title: "Comptes Instagram",
@@ -294,8 +303,7 @@ export const translations = {
     },
     personas: {
       title: "Personas",
-      subtitle:
-        "Identités numériques : un proxy, un appareil, plusieurs comptes sociaux. L'egress API et mobile passe par le proxy du persona.",
+      subtitle: "Identités numériques : un proxy, un appareil, plusieurs comptes sociaux. L'egress API et mobile passe par le proxy du persona.",
       refresh: "Actualiser",
       create: "Créer un persona",
       createTitle: "Nouveau persona",
@@ -417,6 +425,7 @@ export const translations = {
       templates: "Templates",
       calendar: "Editorial calendar",
       readyQueue: "Ready queue",
+      engagement: "Engagement",
       publications: "Publications",
       personas: "Personas",
       proxies: "Proxies",
@@ -462,6 +471,14 @@ export const translations = {
       generationQueueSubtitle: "Pending content packets",
       fleetHealth: "Fleet Health",
       fleetHealthSubtitle: "Average across accounts",
+    },
+    dataTable: {
+      rowsPerPage: "Rows per page",
+      rowsPerPageAria: "Rows per page",
+      previous: "Previous",
+      next: "Next",
+      pageOf: "Page {page} of {total}",
+      rowCount: "{count} row(s)",
     },
     accounts: {
       title: "Instagram Accounts",
