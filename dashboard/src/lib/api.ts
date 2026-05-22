@@ -2,21 +2,73 @@ import axios from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
 import { humanizeGenerationMessage } from '@/lib/generation-errors';
 
-// The Distribution Engine API (Node.js) on port 3001 by default
-const distributionClient = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_DISTRIBUTION_API_URL || 'http://localhost:3001',
-  timeout: 5000,
+/** Hostnames only resolvable inside Docker — the browser must never use these. */
+function isDockerInternalApiUrl(url: string): boolean {
+  try {
+    const h = new URL(url).hostname;
+    return (
+      h === 'distribution-engine' ||
+      h === 'content-factory' ||
+      h === 'emulator-controller'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Browser: public URL or same host as the dashboard. Server (SSR / route handlers): internal service URL. */
+function resolveDistributionBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    const fromEnv = (process.env.NEXT_PUBLIC_DISTRIBUTION_API_URL || '').trim();
+    if (fromEnv && !isDockerInternalApiUrl(fromEnv)) return fromEnv;
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:3001`;
+  }
+  const internal = (process.env.DISTRIBUTION_ENGINE_INTERNAL_URL || '').trim();
+  if (internal) return internal;
+  const pub = (process.env.NEXT_PUBLIC_DISTRIBUTION_API_URL || '').trim();
+  if (pub && !isDockerInternalApiUrl(pub)) return pub;
+  return 'http://distribution-engine:3001';
+}
+
+function resolveContentBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    const fromEnv = (process.env.NEXT_PUBLIC_CONTENT_API_URL || '').trim();
+    if (fromEnv && !isDockerInternalApiUrl(fromEnv)) return fromEnv;
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:8000`;
+  }
+  const internal = (process.env.CONTENT_FACTORY_INTERNAL_URL || '').trim();
+  if (internal) return internal;
+  const pub = (process.env.NEXT_PUBLIC_CONTENT_API_URL || '').trim();
+  if (pub && !isDockerInternalApiUrl(pub)) return pub;
+  return 'http://content-factory:8000';
+}
+
+/** Client `fetch()` calls must use the same rules as axios (never Docker-only hostnames in the browser). */
+export function getClientContentApiUrl(): string {
+  if (typeof window === 'undefined') {
+    return (process.env.NEXT_PUBLIC_CONTENT_API_URL || '').trim() || 'http://localhost:8000';
+  }
+  return resolveContentBaseUrl();
+}
+
+const distributionClient = axios.create({ timeout: 5000 });
+distributionClient.interceptors.request.use((config) => {
+  config.baseURL = resolveDistributionBaseUrl();
+  return config;
 });
 
-// The Content Factory API (Python) on port 8000
-const contentClient = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_CONTENT_API_URL || 'http://localhost:8000',
-  timeout: 5000,
+const contentClient = axios.create({ timeout: 5000 });
+contentClient.interceptors.request.use((config) => {
+  config.baseURL = resolveContentBaseUrl();
+  return config;
 });
 
-const contentClientLongTimeout = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_CONTENT_API_URL || 'http://localhost:8000',
-  timeout: 300000,
+const contentClientLongTimeout = axios.create({ timeout: 300000 });
+contentClientLongTimeout.interceptors.request.use((config) => {
+  config.baseURL = resolveContentBaseUrl();
+  return config;
 });
 
 /** Same JWT_SECRET as distribution-engine + Content Factory — attach session token for Bearer APIs */
@@ -829,11 +881,12 @@ export const api = {
       return response.data as { message: string };
     },
     list: async () => {
-      const response = await contentClient.get('/users');
+      // Trailing slash avoids Starlette 307 → wrong public URL behind /api/content nginx strip.
+      const response = await contentClient.get('/users/');
       return response.data as UserRecord[];
     },
     create: async (payload: { email: string; password: string; role?: AppUserRole }) => {
-      const response = await contentClient.post('/users', payload);
+      const response = await contentClient.post('/users/', payload);
       return response.data as UserRecord;
     },
     update: async (
