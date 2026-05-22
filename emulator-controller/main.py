@@ -538,6 +538,47 @@ class EmulatorOrchestrator:
                 started=started,
             )
 
+        async def input_key(request: web.Request) -> web.Response:
+            serial = request.match_info.get("serial", "")
+            started = monotonic()
+            try:
+                payload = await request.json()
+                key = payload.get("key")
+                if self.device_manager.is_app_drawer_key(key):
+                    width = payload.get("width")
+                    height = payload.get("height")
+                    w = int(width) if width is not None else None
+                    h = int(height) if height is not None else None
+                    return await self._execute_input_action(
+                        serial=serial,
+                        action_type="app_drawer",
+                        data={"key": str(key), "width": w, "height": h},
+                        runner=lambda: self.device_manager.input_app_drawer(serial, w, h),
+                        started=started,
+                    )
+                code = self.device_manager.resolve_keyevent_code(
+                    key,
+                    payload.get("keycode"),
+                )
+            except (TypeError, ValueError) as exc:
+                return web.json_response(
+                    {
+                        "status": "error",
+                        "execution_time_ms": int((monotonic() - started) * 1000),
+                        "error": str(exc)
+                        or 'Invalid JSON body; expected {"key":"app_drawer"} or {"keycode":4}',
+                    },
+                    status=400,
+                )
+
+            return await self._execute_input_action(
+                serial=serial,
+                action_type="key",
+                data={"keycode": code},
+                runner=lambda: self.device_manager.input_keyevent(serial, code),
+                started=started,
+            )
+
         async def list_avds(_request: web.Request) -> web.Response:
             try:
                 names = await self.device_manager.list_avds()
@@ -740,6 +781,7 @@ class EmulatorOrchestrator:
         app.router.add_get("/emulators/{serial}/frame.png", emulator_frame)
         app.router.add_post("/emulators/{serial}/input/tap", input_tap)
         app.router.add_post("/emulators/{serial}/input/swipe", input_swipe)
+        app.router.add_post("/emulators/{serial}/input/key", input_key)
         app.router.add_post("/emulators/{serial}/apps/instagram", launch_instagram_app)
         app.router.add_post("/emulators/{serial}/actions/restart", restart_emulator)
         app.router.add_static("/screenshots/file/", self.settings.screenshot_dir, show_index=False)

@@ -48,6 +48,13 @@ AVD_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 logger = logging.getLogger("emulator-host-agent")
 
 
+def _sdk_emulator_candidates(root: str) -> list[str]:
+    emu_dir = os.path.join(root, "emulator")
+    if sys.platform == "win32":
+        return [os.path.join(emu_dir, "emulator.exe"), os.path.join(emu_dir, "emulator")]
+    return [os.path.join(emu_dir, "emulator")]
+
+
 def _resolve_emulator_binary() -> str | None:
     explicit = os.getenv("EMULATOR_PATH", "").strip()
     if explicit:
@@ -56,16 +63,18 @@ def _resolve_emulator_binary() -> str | None:
         which = shutil.which(explicit)
         if which:
             return which
-    discovered = shutil.which("emulator")
+    discovered = shutil.which("emulator") or (
+        shutil.which("emulator.exe") if sys.platform == "win32" else None
+    )
     if discovered:
         return discovered
     for root_env in ("ANDROID_SDK_ROOT", "ANDROID_HOME"):
         root = os.getenv(root_env, "").strip()
         if not root:
             continue
-        candidate = os.path.join(root, "emulator", "emulator")
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
+        for candidate in _sdk_emulator_candidates(root):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
     return None
 
 
@@ -89,7 +98,7 @@ async def healthz(_request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "emulator": _resolve_emulator_binary()})
 
 
-def _detect_kvm() -> dict[str, Any]:
+def _detect_linux_kvm() -> dict[str, Any]:
     cpu_flags: list[str] = []
     try:
         with open("/proc/cpuinfo") as fh:
@@ -128,11 +137,96 @@ def _detect_kvm() -> dict[str, Any]:
 
     return {
         "ready": ready,
+        "backend": "kvm",
+        "host_platform": "linux",
         "has_virt_flag": has_virt_flag,
         "dev_kvm_exists": dev_kvm_exists,
         "dev_kvm_readable": dev_kvm_rw,
         "message": message,
     }
+
+
+async def _detect_acceleration(binary: str | None) -> dict[str, Any]:
+    """Platform-aware virtualization check (KVM on Linux, emulator -accel-check elsewhere)."""
+    if sys.platform == "win32":
+        backend = "whpx"
+        if not binary:
+            return {
+                "ready": False,
+                "backend": backend,
+                "host_platform": "windows",
+                "message": "emulator binary not found on Windows host",
+            }
+        proc = await asyncio.create_subprocess_exec(
+            binary,
+            "-accel-check",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=_emulator_env(),
+        )
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return {
+                "ready": False,
+                "backend": backend,
+                "host_platform": "windows",
+                "message": "emulator -accel-check timed out",
+            }
+        text = out.decode(errors="ignore").strip()
+        ready = proc.returncode == 0 and "usable" in text.lower()
+        return {
+            "ready": ready,
+            "backend": backend,
+            "host_platform": "windows",
+            "message": text or "emulator -accel-check returned no output",
+            "accel_check_exit_code": proc.returncode,
+        }
+
+    if sys.platform == "darwin":
+        backend = "hvf"
+        if not binary:
+            return {
+                "ready": False,
+                "backend": backend,
+                "host_platform": "darwin",
+                "message": "emulator binary not found on macOS host",
+            }
+        proc = await asyncio.create_subprocess_exec(
+            binary,
+            "-accel-check",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=_emulator_env(),
+        )
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return {
+                "ready": False,
+                "backend": backend,
+                "host_platform": "darwin",
+                "message": "emulator -accel-check timed out",
+            }
+        text = out.decode(errors="ignore").strip()
+        ready = proc.returncode == 0 and (
+            "usable" in text.lower() or "hvf" in text.lower() or "enabled" in text.lower()
+        )
+        return {
+            "ready": ready,
+            "backend": backend,
+            "host_platform": "darwin",
+            "message": text or "emulator -accel-check returned no output",
+            "accel_check_exit_code": proc.returncode,
+        }
+
+    linux = _detect_linux_kvm()
+    linux["host_platform"] = "linux"
+    return linux
 
 
 def make_app(expected_token: str | None) -> web.Application:
@@ -307,7 +401,8 @@ def make_app(expected_token: str | None) -> web.Application:
             return unauthorized
 
         binary = _resolve_emulator_binary()
-        kvm = _detect_kvm()
+        accel = await _detect_acceleration(binary)
+        kvm = accel
         avds: list[str] = []
         avds_error: str | None = None
         if binary:
@@ -332,13 +427,13 @@ def make_app(expected_token: str | None) -> web.Application:
                 await proc.communicate()
                 avds_error = "list-avds timed out"
 
-        ready = bool(binary) and kvm["ready"] and bool(avds)
+        ready = bool(binary) and accel["ready"] and bool(avds)
         if ready:
             verdict = "ready"
         elif not binary:
             verdict = "no_emulator_binary"
-        elif not kvm["ready"]:
-            verdict = "no_kvm"
+        elif not accel["ready"]:
+            verdict = "no_accel" if sys.platform in ("win32", "darwin") else "no_kvm"
         elif not avds:
             verdict = "no_avd"
         else:
@@ -348,8 +443,10 @@ def make_app(expected_token: str | None) -> web.Application:
             {
                 "ready": ready,
                 "verdict": verdict,
+                "host_platform": accel.get("host_platform"),
                 "emulator_binary": binary,
                 "kvm": kvm,
+                "acceleration": accel,
                 "avds": avds,
                 "avds_error": avds_error,
             }

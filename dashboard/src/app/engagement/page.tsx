@@ -132,7 +132,10 @@ export default function EngagementPage() {
     setSelectedCommentId("");
     setCommentsHint(null);
     setCommentsCountReported(null);
-    const captionHint = posts.find((p) => p.media_id === mediaId)?.caption || undefined;
+    const rawCaption = posts.find((p) => p.media_id === mediaId)?.caption || "";
+    // Keep query string short — full captions in the URL break nginx/proxies (ERR_CONNECTION_CLOSED).
+    const captionHint =
+      rawCaption.length > 120 ? `${rawCaption.slice(0, 120)}…` : rawCaption || undefined;
     try {
       const data = await api.content.listPostComments(mediaId, {
         account_id: accountId,

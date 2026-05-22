@@ -5,27 +5,17 @@ const controllerBase =
   process.env.NEXT_PUBLIC_EMULATOR_CONTROLLER_URL ||
   "http://emulator-controller:9102";
 
-export async function POST(
-  _request: Request,
-  context: { params: { serial: string } }
-) {
-  const serial = context.params.serial;
+export async function GET() {
   try {
-    const res = await fetch(
-      `${controllerBase}/emulators/${encodeURIComponent(serial)}/apps/instagram`,
-      {
-        method: "POST",
-        cache: "no-store",
-      }
-    );
+    const res = await fetch(`${controllerBase}/avds`, { cache: "no-store" });
     const raw = await res.text();
     let data: Record<string, unknown>;
     try {
       data = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     } catch {
       data = {
-        status: res.ok ? "success" : "error",
-        execution_time_ms: 0,
+        count: 0,
+        items: [],
         error: raw || `Upstream returned HTTP ${res.status}`,
       };
     }
@@ -33,11 +23,11 @@ export async function POST(
   } catch (error) {
     return NextResponse.json(
       {
-        status: "error",
-        execution_time_ms: 0,
-        error: error instanceof Error ? error.message : "Instagram launch proxy failed",
+        count: 0,
+        items: [],
+        error: error instanceof Error ? error.message : "Failed to fetch AVD list",
       },
-      { status: 500 }
+      { status: 502 }
     );
   }
 }

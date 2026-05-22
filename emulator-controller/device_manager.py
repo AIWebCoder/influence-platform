@@ -15,6 +15,8 @@ import aiohttp
 # avoid surprises before we hand the value to adb.
 ADB_CONNECT_TARGET_RE = re.compile(r"^(?P<host>[A-Za-z0-9._-]+):(?P<port>\d{1,5})$")
 AVD_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+# ADB states we surface in the dashboard and treat as "emulator appeared" during launch.
+ADB_VISIBLE_STATUSES = frozenset({"device", "unauthorized", "offline", "authorizing"})
 
 
 logger = logging.getLogger(__name__)
@@ -130,7 +132,7 @@ class DeviceManager:
         logger.info("Detected %s emulator(s)", len(devices))
         if include_non_device:
             return devices
-        return [d for d in devices if d.status == "device"]
+        return [d for d in devices if d.status in ADB_VISIBLE_STATUSES]
 
     async def wait_for_device(self, serial: str, timeout_seconds: int = 60) -> bool:
         proc = await asyncio.create_subprocess_exec(
@@ -377,8 +379,15 @@ class DeviceManager:
         avd_name: str,
         *,
         headless: bool = True,
-        wait_for_device_seconds: int = 60,
+        wait_for_device_seconds: int | None = None,
+        boot_wait_seconds: int | None = None,
     ) -> dict[str, Any]:
+        if wait_for_device_seconds is None:
+            wait_for_device_seconds = int(os.getenv("EMULATOR_LAUNCH_WAIT_SECONDS", "25"))
+        if boot_wait_seconds is None:
+            boot_wait_seconds = int(os.getenv("EMULATOR_BOOT_WAIT_SECONDS", "12"))
+        wait_for_device_seconds = max(5, min(120, wait_for_device_seconds))
+        boot_wait_seconds = max(0, min(90, boot_wait_seconds))
         started = time.monotonic()
         if not AVD_NAME_RE.match(avd_name):
             raise ValueError(f"invalid_avd_name:{avd_name}")
@@ -471,17 +480,37 @@ class DeviceManager:
                     "elapsed_ms": int((time.monotonic() - started) * 1000),
                 }
 
-        deadline = time.monotonic() + max(1, wait_for_device_seconds)
+        deadline = time.monotonic() + wait_for_device_seconds
         new_serial: str | None = None
+        new_status: str | None = None
+        poll_interval = 1.0
         while time.monotonic() < deadline:
             current = await self.list_connected_emulators(include_non_device=True)
             for d in current:
-                if d.serial not in existing_serials:
+                if d.serial not in existing_serials and d.status in ADB_VISIBLE_STATUSES:
                     new_serial = d.serial
+                    new_status = d.status
                     break
             if new_serial is not None:
                 break
-            await asyncio.sleep(2)
+            await asyncio.sleep(poll_interval)
+
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        if new_serial and new_status == "unauthorized":
+            return {
+                "success": True,
+                "avd_name": avd_name,
+                "serial": new_serial,
+                "phase": "unauthorized",
+                "message": (
+                    f"Emulator {new_serial} is running but ADB is unauthorized. "
+                    "Uncheck Headless, relaunch the AVD, and accept the USB debugging "
+                    "prompt on the emulator window (or run: adb -s "
+                    f"{new_serial} emu kill and try again)."
+                ),
+                "elapsed_ms": elapsed_ms,
+            }
 
         if new_serial is None:
             return {
@@ -490,16 +519,29 @@ class DeviceManager:
                 "serial": None,
                 "phase": "pending",
                 "message": (
-                    "Emulator launch started but no new ADB serial appeared yet; "
-                    "the device should come online shortly"
+                    "Emulator launch started; ADB has not listed a new device yet. "
+                    "Refresh the emulator list in 30–60s."
                 ),
-                "elapsed_ms": int((time.monotonic() - started) * 1000),
+                "elapsed_ms": elapsed_ms,
+            }
+
+        if boot_wait_seconds <= 0:
+            return {
+                "success": True,
+                "avd_name": avd_name,
+                "serial": new_serial,
+                "phase": "booting",
+                "message": (
+                    f"Emulator process started ({new_serial}). "
+                    "It may take a minute to finish booting."
+                ),
+                "elapsed_ms": elapsed_ms,
             }
 
         ready = await self.wait_for_status(
             new_serial,
             expected_status="device",
-            timeout_seconds=max(1, int(deadline - time.monotonic())),
+            timeout_seconds=boot_wait_seconds,
         )
         return {
             "success": True,
@@ -507,9 +549,12 @@ class DeviceManager:
             "serial": new_serial,
             "phase": "completed" if ready else "booting",
             "message": (
-                "Emulator launched successfully"
+                "Emulator launched and ready"
                 if ready
-                else "Emulator launched; still booting"
+                else (
+                    f"Emulator {new_serial} is starting; refresh the list if it is not "
+                    "ready yet."
+                )
             ),
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         }
@@ -693,6 +738,68 @@ class DeviceManager:
 
     async def input_tap(self, serial: str, x: int, y: int) -> None:
         await self._adb(serial, "shell", "input", "tap", str(x), str(y))
+
+    async def input_keyevent(self, serial: str, keycode: int) -> None:
+        await self._adb(serial, "shell", "input", "keyevent", str(keycode))
+
+    @staticmethod
+    def is_app_drawer_key(key: str | int | None) -> bool:
+        if key is None:
+            return False
+        return str(key).strip().lower() in ("app_drawer", "menu", "drawer")
+
+    async def input_app_drawer(
+        self,
+        serial: str,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> dict[str, int]:
+        """Open Pixel/Launcher3 app drawer: HOME then a full-height upward swipe."""
+        size = await self.get_screen_size(serial)
+        if size:
+            width, height = size
+        elif width is None or height is None:
+            width, height = 1080, 2400
+
+        x = width // 2
+        # Nexus Launcher allAppsShiftRange ~= full screen height; short swipes only open search.
+        y1 = height - 24
+        y2 = max(80, int(height * 0.05))
+        duration = 600
+
+        await self.input_keyevent(serial, 3)
+        await asyncio.sleep(0.4)
+        await self.input_swipe(serial, x, y1, x, y2, duration)
+        return {
+            "width": width,
+            "height": height,
+            "x1": x,
+            "y1": y1,
+            "x2": x,
+            "y2": y2,
+            "duration": duration,
+        }
+
+    @staticmethod
+    def resolve_keyevent_code(key: str | int | None, keycode: int | None = None) -> int:
+        if keycode is not None:
+            return int(keycode)
+        names: dict[str, int] = {
+            "back": 4,
+            "home": 3,
+            "recent": 187,
+            "app_switch": 187,
+        }
+        if key is None:
+            raise ValueError("key or keycode required")
+        if isinstance(key, int):
+            return key
+        normalized = str(key).strip().lower()
+        if normalized.isdigit():
+            return int(normalized)
+        if normalized not in names:
+            raise ValueError(f"unknown key name: {key}")
+        return names[normalized]
 
     async def input_swipe(
         self,

@@ -6,15 +6,18 @@ const controllerBase =
   "http://emulator-controller:9102";
 
 export async function POST(
-  _request: Request,
+  request: Request,
   context: { params: { serial: string } }
 ) {
   const serial = context.params.serial;
   try {
+    const body = await request.json();
     const res = await fetch(
-      `${controllerBase}/emulators/${encodeURIComponent(serial)}/apps/instagram`,
+      `${controllerBase}/emulators/${encodeURIComponent(serial)}/input/key`,
       {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
         cache: "no-store",
       }
     );
@@ -35,7 +38,7 @@ export async function POST(
       {
         status: "error",
         execution_time_ms: 0,
-        error: error instanceof Error ? error.message : "Instagram launch proxy failed",
+        error: error instanceof Error ? error.message : "Key proxy failed",
       },
       { status: 500 }
     );
