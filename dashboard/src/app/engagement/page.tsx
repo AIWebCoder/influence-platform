@@ -54,8 +54,8 @@ type IgComment = {
 };
 
 export default function EngagementPage() {
-  const { locale } = useLocale();
-  const isFr = locale === "fr";
+  const { text, t } = useLocale();
+  const eng = text.engagement;
   const [intents, setIntents] = useState<IntentRow[]>([]);
   const [accounts, setAccounts] = useState<{ id: string; username: string }[]>([]);
   const [posts, setPosts] = useState<IgPost[]>([]);
@@ -119,12 +119,12 @@ export default function EngagementPage() {
         setMediaId("");
       }
     } catch {
-      toast.error(isFr ? "Impossible de charger les posts" : "Failed to load posts");
+      toast.error(eng.loadPostsError);
       setPosts([]);
     } finally {
       setLoadingPosts(false);
     }
-  }, [accountId, isFr]);
+  }, [accountId, eng.loadPostsError]);
 
   const loadComments = useCallback(async () => {
     if (!accountId || !mediaId) return;
@@ -133,7 +133,6 @@ export default function EngagementPage() {
     setCommentsHint(null);
     setCommentsCountReported(null);
     const rawCaption = posts.find((p) => p.media_id === mediaId)?.caption || "";
-    // Keep query string short — full captions in the URL break nginx/proxies (ERR_CONNECTION_CLOSED).
     const captionHint =
       rawCaption.length > 120 ? `${rawCaption.slice(0, 120)}…` : rawCaption || undefined;
     try {
@@ -150,9 +149,7 @@ export default function EngagementPage() {
       setCommentsCountReported(data.comments_count_reported ?? null);
       if (data.hint) setCommentsHint(data.hint);
       if (data.dry_run) {
-        toast(isFr ? "Mode dry-run: commentaires simules" : "Dry-run: simulated comments", {
-          icon: "ℹ️",
-        });
+        toast(eng.dryRunComments, { icon: "ℹ️" });
       } else if ((data.comments?.length ?? 0) === 0 && data.hint) {
         toast(data.hint, { icon: "ℹ️", duration: 8000 });
       }
@@ -161,7 +158,7 @@ export default function EngagementPage() {
       const msg =
         ax.response?.data?.hint ||
         ax.response?.data?.error ||
-        (isFr ? "Impossible de charger les commentaires" : "Failed to load comments");
+        eng.loadCommentsError;
       toast.error(msg);
       setComments([]);
       setCommentsLoaded(true);
@@ -169,7 +166,7 @@ export default function EngagementPage() {
     } finally {
       setLoadingComments(false);
     }
-  }, [accountId, mediaId, isFr, posts]);
+  }, [accountId, mediaId, eng.dryRunComments, eng.loadCommentsError, posts]);
 
   useEffect(() => {
     (async () => {
@@ -177,12 +174,12 @@ export default function EngagementPage() {
       try {
         await Promise.all([loadIntents(), loadAccounts()]);
       } catch {
-        toast.error(isFr ? "Erreur chargement" : "Load failed");
+        toast.error(eng.loadFailed);
       } finally {
         setLoading(false);
       }
     })();
-  }, [loadIntents, loadAccounts, isFr]);
+  }, [loadIntents, loadAccounts, eng.loadFailed]);
 
   useEffect(() => {
     if (accountId) loadPosts();
@@ -200,12 +197,10 @@ export default function EngagementPage() {
         ? comments.find((c) => c.id === selectedCommentId)?.username || selectedCommentId
         : selectedCommentId;
     if (!accountId || !targetId) {
-      return toast.error(
-        isFr ? "Selectionnez un commentaire (ou un post pour DM)" : "Select a comment first",
-      );
+      return toast.error(eng.selectComment);
     }
     if (needsMsg && !messageText.trim()) {
-      return toast.error(isFr ? "Message requis" : "Message required");
+      return toast.error(eng.messageRequired);
     }
     setSubmitting(true);
     try {
@@ -219,37 +214,29 @@ export default function EngagementPage() {
         idempotency_key: `eng-${actionType}-${targetId}-${Date.now()}`,
       });
       await api.content.dispatchEngagementIntent(c.intent_id);
-      toast.success(isFr ? "Action en file" : "Queued");
+      toast.success(eng.queued);
       setMessageText("");
       await loadIntents();
     } catch {
-      toast.error(isFr ? "Echec" : "Failed");
+      toast.error(eng.failed);
     } finally {
       setSubmitting(false);
     }
   };
 
   const selectedPost = posts.find((p) => p.media_id === mediaId);
+  const commentCount =
+    commentsCountReported ?? selectedPost?.comments_count ?? 0;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {isFr ? "Engagement social" : "Social engagement"}
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          {isFr
-            ? "Chargez les posts publies puis les commentaires Instagram (API Graph)."
-            : "Load published posts, then fetch Instagram comments (Graph API)."}
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">{eng.title}</h1>
+        <p className="text-sm text-muted-foreground">{eng.subtitle}</p>
       </div>
 
       <Alert>
-        <AlertDescription>
-          {isFr
-            ? "Compte avec jeton IG requis. Les commentaires viennent de l API Instagram (pas des metriques simulees de Publications). Selectionnez le post dont la legende correspond a votre publication."
-            : "IG token required. Comments come from the Instagram API (not simulated Publications metrics). Select the post whose caption matches your publication."}
-        </AlertDescription>
+        <AlertDescription>{eng.tokenAlert}</AlertDescription>
       </Alert>
       {postsGraphError ? (
         <Alert variant="destructive">
@@ -259,14 +246,14 @@ export default function EngagementPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{isFr ? "1. Post Instagram" : "1. Instagram post"}</CardTitle>
+          <CardTitle>{eng.stepPost}</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label>{isFr ? "Compte" : "Account"}</Label>
+            <Label>{eng.account}</Label>
             <Select value={accountId} onValueChange={setAccountId}>
               <SelectTrigger>
-                <SelectValue placeholder={isFr ? "Choisir" : "Select"} />
+                <SelectValue placeholder={eng.select} />
               </SelectTrigger>
               <SelectContent>
                 {accounts.map((a) => (
@@ -278,19 +265,21 @@ export default function EngagementPage() {
             </Select>
           </div>
           <div className="space-y-2">
-            <Label>{isFr ? "Publication" : "Post"}</Label>
+            <Label>{eng.post}</Label>
             <Select value={mediaId} onValueChange={setMediaId} disabled={!posts.length}>
               <SelectTrigger>
                 <SelectValue
-                  placeholder={loadingPosts ? (isFr ? "Chargement..." : "Loading...") : isFr ? "Aucun post" : "No posts"}
+                  placeholder={
+                    loadingPosts ? eng.loadingPosts : eng.noPosts
+                  }
                 />
               </SelectTrigger>
               <SelectContent>
                 {posts.map((p) => (
                   <SelectItem key={p.media_id} value={p.media_id}>
                     {(p.caption || p.media_id).slice(0, 60)}
-                    {p.comments_count != null ? ` · ${p.comments_count} com.` : ""}
-                    {p.source.includes("database") ? " (pub)" : ""}
+                    {p.comments_count != null ? ` · ${p.comments_count}${eng.commentsCountSuffix}` : ""}
+                    {p.source.includes("database") ? eng.publishedSuffix : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -306,11 +295,11 @@ export default function EngagementPage() {
           <div className="flex flex-wrap gap-2 sm:col-span-2">
             <Button variant="outline" size="sm" onClick={loadPosts} disabled={loadingPosts || !accountId}>
               {loadingPosts ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-              {isFr ? "Rafraichir posts" : "Refresh posts"}
+              {eng.refreshPosts}
             </Button>
             <Button size="sm" onClick={loadComments} disabled={loadingComments || !mediaId}>
               {loadingComments ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MessageCircle className="mr-2 h-4 w-4" />}
-              {isFr ? "Charger commentaires" : "Load comments"}
+              {eng.loadComments}
             </Button>
           </div>
         </CardContent>
@@ -318,18 +307,14 @@ export default function EngagementPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{isFr ? "2. Commentaires" : "2. Comments"}</CardTitle>
+          <CardTitle>{eng.stepComments}</CardTitle>
         </CardHeader>
         <CardContent>
-          {(commentsCountReported ?? selectedPost?.comments_count ?? 0) > 0 &&
-          comments.length === 0 &&
-          commentsLoaded ? (
+          {commentCount > 0 && comments.length === 0 && commentsLoaded ? (
             <Alert variant="destructive" className="mb-4">
               <AlertDescription className="text-sm">
-                {isFr
-                  ? `Instagram signale ${commentsCountReported ?? selectedPost?.comments_count} commentaire(s), mais le jeton API ne peut pas les lire. Dans Meta (Instagram API), regenerez un token avec instagram_business_manage_comments et instagram_business_basic, puis mettez a jour le jeton dans Comptes.`
-                  : commentsHint ||
-                    `Instagram reports ${commentsCountReported ?? selectedPost?.comments_count} comment(s) but this token cannot list them. Regenerate the token with instagram_business_manage_comments and update it under Accounts.`}
+                {commentsHint ||
+                  t("engagement.tokenScopeAlert", { count: commentCount })}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -338,21 +323,16 @@ export default function EngagementPage() {
           ) : comments.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
               {commentsLoaded
-                ? commentsHint ||
-                  (isFr
-                    ? "Aucun commentaire Instagram pour ce post. Verifiez la legende dans la liste ou les droits API du compte."
-                    : "No Instagram comments for this post. Match the caption in the list or check API token scopes.")
-                : isFr
-                  ? "Chargement des commentaires..."
-                  : "Loading comments..."}
+                ? commentsHint || eng.noComments
+                : eng.loadingComments}
             </p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{isFr ? "Auteur" : "Author"}</TableHead>
-                  <TableHead>{isFr ? "Commentaire" : "Comment"}</TableHead>
-                  <TableHead>{isFr ? "Likes" : "Likes"}</TableHead>
+                  <TableHead>{eng.author}</TableHead>
+                  <TableHead>{eng.comment}</TableHead>
+                  <TableHead>{eng.likes}</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
@@ -376,7 +356,7 @@ export default function EngagementPage() {
                           setActionType("comment_reply");
                         }}
                       >
-                        {isFr ? "Repondre" : "Reply"}
+                        {eng.reply}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -389,37 +369,37 @@ export default function EngagementPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{isFr ? "3. Action" : "3. Action"}</CardTitle>
+          <CardTitle>{eng.stepAction}</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <Label>{isFr ? "Type" : "Action type"}</Label>
+            <Label>{eng.actionType}</Label>
             <Select value={actionType} onValueChange={(v) => setActionType(v as typeof actionType)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="comment_like">{isFr ? "Like commentaire" : "Like comment"}</SelectItem>
-                <SelectItem value="comment_reply">{isFr ? "Reponse" : "Reply"}</SelectItem>
+                <SelectItem value="comment_like">{eng.likeComment}</SelectItem>
+                <SelectItem value="comment_reply">{eng.replyAction}</SelectItem>
                 <SelectItem value="dm_send" disabled>
-                  DM ({isFr ? "bientot via IGSID" : "IGSID soon"})
+                  DM ({eng.dmSoon})
                 </SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-2 sm:col-span-2">
             <Label className="text-muted-foreground">
-              {isFr ? "Commentaire cible" : "Target comment"}:{" "}
+              {eng.targetComment}:{" "}
               <span className="font-mono text-xs">{selectedCommentId || "—"}</span>
             </Label>
           </div>
           {needsMsg && (
             <div className="space-y-2 sm:col-span-2">
-              <Label>{isFr ? "Message de reponse" : "Reply message"}</Label>
+              <Label>{eng.replyMessage}</Label>
               <Input
                 value={messageText}
                 onChange={(e) => setMessageText(e.target.value)}
-                placeholder={isFr ? "Merci pour votre message..." : "Thanks for your comment..."}
+                placeholder={eng.replyPlaceholder}
               />
             </div>
           )}
@@ -429,14 +409,14 @@ export default function EngagementPage() {
             className="sm:col-span-2"
           >
             {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-            {isFr ? "Envoyer l action" : "Send action"}
+            {eng.sendAction}
           </Button>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>{isFr ? "Historique" : "History"}</CardTitle>
+          <CardTitle>{eng.history}</CardTitle>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -445,10 +425,10 @@ export default function EngagementPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Target</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Result</TableHead>
+                  <TableHead>{eng.historyType}</TableHead>
+                  <TableHead>{eng.historyTarget}</TableHead>
+                  <TableHead>{eng.historyStatus}</TableHead>
+                  <TableHead>{eng.historyResult}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

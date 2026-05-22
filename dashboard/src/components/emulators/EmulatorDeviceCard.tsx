@@ -20,6 +20,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useLocale } from "@/components/i18n/LocaleProvider";
 import { cn } from "@/lib/utils";
 
 export type EmulatorInfo = {
@@ -57,10 +58,13 @@ function statusBadgeVariant(status: string): "default" | "destructive" | "second
   return "secondary";
 }
 
-function statusLabel(status: string): string {
-  if (status === "device") return "Ready";
-  if (status === "unauthorized") return "ADB unauthorized";
-  if (status === "offline") return "Booting";
+function statusLabel(
+  status: string,
+  labels: { ready: string; unauthorized: string; booting: string }
+): string {
+  if (status === "device") return labels.ready;
+  if (status === "unauthorized") return labels.unauthorized;
+  if (status === "offline") return labels.booting;
   return status;
 }
 
@@ -84,6 +88,8 @@ export function EmulatorDeviceCard({
   onOpenInstagram,
   onPressMenu,
 }: EmulatorDeviceCardProps) {
+  const { text, t } = useLocale();
+  const e = text.emulators;
   const sw = emulator.screen_size?.width ?? 1080;
   const sh = emulator.screen_size?.height ?? 2400;
   const resolution = `${sw}x${sh}`;
@@ -99,11 +105,15 @@ export function EmulatorDeviceCard({
               <p className="truncate font-mono text-sm font-medium">{emulator.serial}</p>
             </div>
             <p className="truncate text-xs text-muted-foreground">
-              {emulator.model || "Unknown model"} | {resolution}
+              {emulator.model || e.unknownModel} | {resolution}
             </p>
           </div>
           <Badge variant={statusBadgeVariant(emulator.status)} className="shrink-0">
-            {statusLabel(emulator.status)}
+            {statusLabel(emulator.status, {
+              ready: e.statusReady,
+              unauthorized: e.statusUnauthorized,
+              booting: e.statusBooting,
+            })}
           </Badge>
         </div>
 
@@ -122,7 +132,7 @@ export function EmulatorDeviceCard({
                     emulator.status !== "device"
                   }
                   onClick={onOpenInstagram}
-                  aria-label="Open Instagram"
+                  aria-label={e.openInstagram}
                 >
                   <Instagram
                     className={cn(
@@ -132,7 +142,7 @@ export function EmulatorDeviceCard({
                   />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Open Instagram</TooltipContent>
+              <TooltipContent>{e.openInstagram}</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -143,12 +153,12 @@ export function EmulatorDeviceCard({
                   className="h-8 w-8"
                   disabled={actionsDisabled || pressingMenu}
                   onClick={onPressMenu}
-                  aria-label="Open app drawer"
+                  aria-label={e.openAppDrawer}
                 >
                   <Menu className={cn("h-4 w-4", pressingMenu && "animate-pulse")} />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Open app drawer (All apps)</TooltipContent>
+              <TooltipContent>{e.openAppDrawer}</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -159,14 +169,14 @@ export function EmulatorDeviceCard({
                   className="h-8 w-8"
                   disabled={refreshing}
                   onClick={onRefresh}
-                  aria-label="Refresh preview"
+                  aria-label={e.refreshPreview}
                 >
                   <RefreshCw
                     className={cn("h-4 w-4", refreshing && "animate-spin")}
                   />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Refresh preview</TooltipContent>
+              <TooltipContent>{e.refreshPreview}</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -177,14 +187,14 @@ export function EmulatorDeviceCard({
                   className="h-8 w-8"
                   disabled={restarting}
                   onClick={onRestart}
-                  aria-label="Restart emulator"
+                  aria-label={e.restartEmulator}
                 >
                   <RotateCcw
                     className={cn("h-4 w-4", restarting && "animate-spin")}
                   />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Restart emulator</TooltipContent>
+              <TooltipContent>{e.restartEmulator}</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -195,12 +205,12 @@ export function EmulatorDeviceCard({
                   className="h-8 w-8 text-destructive hover:text-destructive"
                   disabled={stopping || actionsDisabled}
                   onClick={onEndSession}
-                  aria-label="End emulator session"
+                  aria-label={e.endSession}
                 >
                   <Power className={cn("h-4 w-4", stopping && "animate-pulse")} />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>End session (stop emulator)</TooltipContent>
+              <TooltipContent>{e.endSession}</TooltipContent>
             </Tooltip>
           </div>
         </TooltipProvider>
@@ -211,7 +221,7 @@ export function EmulatorDeviceCard({
           <Alert variant="destructive" className="w-full max-w-sm py-2">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="text-xs">
-              Accept USB debugging on the emulator window, then refresh.
+              {e.unauthorizedHint}
             </AlertDescription>
           </Alert>
         ) : null}
@@ -230,13 +240,13 @@ export function EmulatorDeviceCard({
           >
             <img
               src={frameUrl}
-              alt={`Live preview ${emulator.serial}`}
+              alt={t("emulators.livePreviewAlt", { serial: emulator.serial })}
               className="h-full w-full select-none object-contain"
               draggable={false}
             />
             {(busy || emulator.busy) && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-xs font-medium text-white backdrop-blur-[1px]">
-                Sending input...
+                {e.sendingInput}
               </div>
             )}
             {ripple && (
@@ -250,9 +260,7 @@ export function EmulatorDeviceCard({
         </div>
 
         <p className="text-center text-[11px] text-muted-foreground">
-          {controlEnabled
-            ? "Tap or drag on the screen; use All apps for the app drawer"
-            : "Enable Control in the toolbar to send taps and swipes"}
+          {controlEnabled ? e.controlHintOn : e.controlHintOff}
         </p>
       </CardContent>
 

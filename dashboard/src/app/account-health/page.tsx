@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   ShieldCheck,
   Activity,
@@ -76,19 +76,50 @@ const STATUS_ICONS: Record<string, React.ElementType> = {
   flagged: ShieldAlert,
 };
 
-const RISK_LEVELS = [
-  { range: [90, 100], label: "Minimal", color: "text-emerald-500", bg: "bg-emerald-500", desc: "Account is in excellent health." },
-  { range: [70, 89], label: "Low", color: "text-blue-500", bg: "bg-blue-500", desc: "Minor warnings, generally safe." },
-  { range: [40, 69], label: "Moderate", color: "text-amber-500", bg: "bg-amber-500", desc: "Detection risk detected. Take care." },
-  { range: [0, 39], label: "Critical", color: "text-red-500", bg: "bg-red-500", desc: "High risk of suspension. Stop actions." },
-];
-
-function getRisk(score: number) {
-  return RISK_LEVELS.find(r => score >= r.range[0] && score <= r.range[1]) || RISK_LEVELS[3];
+function getRisk(
+  score: number,
+  levels: { range: [number, number]; label: string; color: string; bg: string; desc: string }[],
+) {
+  return levels.find((r) => score >= r.range[0] && score <= r.range[1]) || levels[3];
 }
 
 export default function AccountHealthPage() {
-  const { text } = useLocale();
+  const { text, t } = useLocale();
+  const ah = text.accountHealth;
+
+  const riskLevels = useMemo(
+    () => [
+      {
+        range: [90, 100] as [number, number],
+        label: ah.minimal,
+        color: "text-emerald-500",
+        bg: "bg-emerald-500",
+        desc: ah.minimalDesc,
+      },
+      {
+        range: [70, 89] as [number, number],
+        label: ah.low,
+        color: "text-blue-500",
+        bg: "bg-blue-500",
+        desc: ah.lowDesc,
+      },
+      {
+        range: [40, 69] as [number, number],
+        label: ah.moderate,
+        color: "text-amber-500",
+        bg: "bg-amber-500",
+        desc: ah.moderateDesc,
+      },
+      {
+        range: [0, 39] as [number, number],
+        label: ah.critical,
+        color: "text-red-500",
+        bg: "bg-red-500",
+        desc: ah.criticalDesc,
+      },
+    ],
+    [ah],
+  );
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [details, setDetails] = useState<HealthDetails | null>(null);
@@ -137,18 +168,16 @@ export default function AccountHealthPage() {
     a.username.toLowerCase().includes(search.toLowerCase())
   );
 
-  const risk = details ? getRisk(details.account.health_score) : null;
+  const risk = details ? getRisk(details.account.health_score, riskLevels) : null;
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">
       <div className="p-10 pb-6 shrink-0">
         <h2 className="page-title flex items-center gap-4 text-zinc-900 dark:text-zinc-50">
           <ShieldCheck className="w-10 h-10 text-emerald-500" />
-          {text.accountHealth.title}
+          {ah.title}
         </h2>
-        <p className="page-subtitle">
-          {text.accountHealth.subtitle}
-        </p>
+        <p className="page-subtitle">{ah.subtitle}</p>
       </div>
 
       <div className="flex flex-1 overflow-hidden p-8 pt-2 gap-6">
@@ -158,7 +187,7 @@ export default function AccountHealthPage() {
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
             <input
               type="text"
-              placeholder={text.accountHealth.search}
+              placeholder={ah.search}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-11 pr-4 py-4 text-sm font-bold rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/10 placeholder:text-zinc-400 transition-all"
@@ -172,7 +201,7 @@ export default function AccountHealthPage() {
               </div>
             ) : filteredAccounts.length === 0 ? (
               <div className="text-center p-8 text-zinc-400 text-sm font-medium">
-                {text.accountHealth.noAccounts}
+                {ah.noAccounts}
               </div>
             ) : (
               <div className="divide-y border-zinc-100 dark:border-zinc-900">
@@ -215,7 +244,9 @@ export default function AccountHealthPage() {
           {!selectedId ? (
             <div className="h-full flex flex-col items-center justify-center text-zinc-400 space-y-6 border-2 border-dashed border-zinc-200 dark:border-zinc-800 rounded-premium bg-zinc-50/50 dark:bg-zinc-900/20">
               <Shield className="w-20 h-20 opacity-10" />
-              <p className="text-xl font-bold font-display uppercase tracking-widest text-zinc-300 dark:text-zinc-700">{text.accountHealth.selectAccount}</p>
+              <p className="text-xl font-bold font-display uppercase tracking-widest text-zinc-300 dark:text-zinc-700">
+                {ah.selectAccount}
+              </p>
             </div>
           ) : detailsLoading || !details ? (
             <div className="h-full flex items-center justify-center">
@@ -254,7 +285,9 @@ export default function AccountHealthPage() {
                     </svg>
                     <div className="absolute inset-0 flex flex-col items-center justify-center">
                       <span className="text-5xl font-black font-display text-zinc-900 dark:text-zinc-50">{details.account.health_score}</span>
-                      <span className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mt-1">{text.accountHealth.score}</span>
+                      <span className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mt-1">
+                        {ah.score}
+                      </span>
                     </div>
                   </div>
 
@@ -267,21 +300,29 @@ export default function AccountHealthPage() {
                         risk?.color,
                         risk?.bg.replace("bg-", "bg-opacity-10 border-")
                       )}>
-                        {risk?.label} Risk
+                        {risk?.label} {ah.riskSuffix}
                       </div>
                     </div>
                     <p className="text-zinc-500 dark:text-zinc-400 font-medium leading-relaxed max-w-lg">{risk?.desc}</p>
                     <div className="grid grid-cols-3 gap-6">
                       <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
-                        <p className="text-[10px] uppercase font-black text-zinc-400 dark:text-zinc-500 mb-1 tracking-widest">Status</p>
+                        <p className="text-[10px] uppercase font-black text-zinc-400 dark:text-zinc-500 mb-1 tracking-widest">
+                          {ah.statusLabel}
+                        </p>
                         <p className="text-sm font-bold text-zinc-900 dark:text-zinc-50 capitalize">{details.account.status}</p>
                       </div>
                       <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
-                        <p className="text-[10px] uppercase font-black text-zinc-400 dark:text-zinc-500 mb-1 tracking-widest">Safe Mode</p>
-                        <p className="text-sm font-bold text-zinc-900 dark:text-zinc-50">{details.account.safe_mode ? "Active" : "Disabled"}</p>
+                        <p className="text-[10px] uppercase font-black text-zinc-400 dark:text-zinc-500 mb-1 tracking-widest">
+                          {ah.safeMode}
+                        </p>
+                        <p className="text-sm font-bold text-zinc-900 dark:text-zinc-50">
+                          {details.account.safe_mode ? ah.safeModeActive : ah.safeModeDisabled}
+                        </p>
                       </div>
                       <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
-                        <p className="text-[10px] uppercase font-black text-zinc-400 dark:text-zinc-500 mb-1 tracking-widest">Multiplier</p>
+                        <p className="text-[10px] uppercase font-black text-zinc-400 dark:text-zinc-500 mb-1 tracking-widest">
+                          {ah.multiplier}
+                        </p>
                         <p className="text-sm font-bold text-zinc-900 dark:text-zinc-50">{details.safety.limits.multiplier.toFixed(2)}x</p>
                       </div>
                     </div>
@@ -295,9 +336,11 @@ export default function AccountHealthPage() {
                   <div className="flex items-center justify-between mb-8">
                     <h4 className="font-black font-display text-lg flex items-center gap-3 text-zinc-900 dark:text-zinc-50">
                       <Activity className="w-6 h-6 text-indigo-500" />
-                      Action Limits
+                      {ah.actionLimits}
                     </h4>
-                    <span className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">Updated Today</span>
+                    <span className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest">
+                      {ah.updatedToday}
+                    </span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                     {Object.entries(details.safety.limits.actions).map(([action, stat]) => (
@@ -308,8 +351,8 @@ export default function AccountHealthPage() {
                         </div>
                         <ProgressBar value={stat.percentage} className="h-2.5" />
                         <div className="flex justify-between items-center text-[10px] text-zinc-400 dark:text-zinc-500 font-bold uppercase tracking-widest">
-                          <span>{stat.remaining} left</span>
-                          <span>{stat.percentage}% used</span>
+                          <span>{t("accountHealth.remainingLeft", { count: stat.remaining })}</span>
+                          <span>{t("accountHealth.usedPercent", { percent: stat.percentage })}</span>
                         </div>
                       </div>
                     ))}
@@ -321,15 +364,17 @@ export default function AccountHealthPage() {
                   <div className="flex items-center justify-between mb-8">
                     <h4 className="font-black font-display text-lg flex items-center gap-3 text-zinc-900 dark:text-zinc-50">
                       <AlertTriangle className="w-6 h-6 text-amber-500" />
-                      Safety Logs
+                      {ah.safetyLogs}
                     </h4>
-                    <button className="text-[10px] font-black uppercase tracking-widest text-indigo-500 hover:text-indigo-600 transition-colors">View All</button>
+                    <button className="text-[10px] font-black uppercase tracking-widest text-indigo-500 hover:text-indigo-600 transition-colors">
+                      {ah.viewAll}
+                    </button>
                   </div>
                   <div className="flex-1 space-y-4">
                     {details.alerts.length === 0 ? (
                       <EmptyState 
                         icon={Inbox}
-                        title="No recent alerts"
+                        title={ah.noRecentAlerts}
                       />
                     ) : (
                       details.alerts.map((alert) => (

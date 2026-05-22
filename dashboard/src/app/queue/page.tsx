@@ -32,8 +32,8 @@ type QueueItem = {
 };
 
 export default function ReadyQueuePage() {
-  const { locale } = useLocale();
-  const isFr = locale === "fr";
+  const { text, t } = useLocale();
+  const q = text.readyQueue;
   const [items, setItems] = useState<QueueItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -46,32 +46,26 @@ export default function ReadyQueuePage() {
       const data = await api.content.getReadyQueue({ status: "ready,draft", limit: 100 });
       setItems(data);
     } catch {
-      setError(isFr ? "Impossible de charger la file." : "Failed to load ready queue.");
+      setError(q.loadError);
     } finally {
       setLoading(false);
     }
-  }, [isFr]);
+  }, [q.loadError]);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
   const handleDispatch = async (item: QueueItem) => {
     if (item.status !== "ready") {
-      toast(
-        isFr ? "Intent en brouillon - ouvrez le Studio pour publier." : "Draft intent - open Studio to publish.",
-      );
+      toast(q.draftIntentToast);
       return;
     }
     setDispatchingId(item.intent_id);
     setError(null);
     try {
       const out = await api.generationJobs.dispatchPublishIntent(item.intent_id);
-      toast.success(
-        isFr
-          ? `Dispatch lance (${out.dispatched_targets} cible(s))`
-          : `Dispatched (${out.dispatched_targets} target(s))`,
-      );
+      toast.success(t("readyQueue.dispatched", { count: out.dispatched_targets }));
       await load();
     } catch (e: unknown) {
       const msg =
@@ -79,11 +73,9 @@ export default function ReadyQueuePage() {
           ? String((e as { response?: { data?: { detail?: string } } }).response?.data?.detail || "")
           : e instanceof Error
             ? e.message
-            : isFr
-              ? "Echec du dispatch"
-              : "Dispatch failed";
-      setError(msg || (isFr ? "Echec du dispatch" : "Dispatch failed"));
-      toast.error(msg || "Dispatch failed");
+            : q.dispatchFailed;
+      setError(msg || q.dispatchFailed);
+      toast.error(msg || q.dispatchFailed);
     } finally {
       setDispatchingId(null);
     }
@@ -93,16 +85,10 @@ export default function ReadyQueuePage() {
     <div className="mx-auto max-w-6xl space-y-6 p-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {isFr ? "File prete a publier" : "Ready to publish"}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {isFr
-              ? "Intentions de publication en attente de dispatch."
-              : "Publication intents waiting for dispatch."}
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">{q.title}</h1>
+          <p className="text-sm text-muted-foreground">{q.subtitle}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
           <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
         </Button>
       </div>
@@ -117,7 +103,7 @@ export default function ReadyQueuePage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <ListOrdered className="size-5" />
-            {isFr ? "Contenus" : "Items"} ({items.length})
+            {q.itemsTitle} ({items.length})
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -129,19 +115,19 @@ export default function ReadyQueuePage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{isFr ? "Statut" : "Status"}</TableHead>
-                  <TableHead>{isFr ? "Type" : "Type"}</TableHead>
-                  <TableHead>{isFr ? "Caption" : "Caption"}</TableHead>
-                  <TableHead>{isFr ? "Cibles" : "Targets"}</TableHead>
-                  <TableHead>{isFr ? "Job" : "Job"}</TableHead>
-                  <TableHead className="text-right">{isFr ? "Actions" : "Actions"}</TableHead>
+                  <TableHead>{q.status}</TableHead>
+                  <TableHead>{q.type}</TableHead>
+                  <TableHead>{q.caption}</TableHead>
+                  <TableHead>{q.targets}</TableHead>
+                  <TableHead>{q.job}</TableHead>
+                  <TableHead className="text-right">{q.actions}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {items.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center text-muted-foreground">
-                      {isFr ? "File vide." : "Queue is empty."}
+                      {q.empty}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -166,14 +152,14 @@ export default function ReadyQueuePage() {
                           size="sm"
                           variant="default"
                           disabled={dispatchingId === item.intent_id}
-                          onClick={() => handleDispatch(item)}
+                          onClick={() => void handleDispatch(item)}
                         >
                           {dispatchingId === item.intent_id ? (
                             <Loader2 className="size-4 animate-spin" />
                           ) : (
                             <>
                               <Send className="mr-1 size-3" />
-                              {isFr ? "Publier" : "Dispatch"}
+                              {q.dispatch}
                             </>
                           )}
                         </Button>

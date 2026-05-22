@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Activity, AlertTriangle, BarChart3, RefreshCw, TrendingUp } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { useLocale } from "@/components/i18n/LocaleProvider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -49,6 +50,8 @@ type OpsSummary = {
 };
 
 export default function AnalyticsPage() {
+  const { text, t } = useLocale();
+  const a = text.analyticsOps;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +68,7 @@ export default function AnalyticsPage() {
       setStats(publicationStats);
       setOps(opsSummary);
     } catch {
-      setError("Unable to load analytics from Distribution Engine APIs.");
+      setError(a.loadError);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -94,11 +97,9 @@ export default function AnalyticsPage() {
         <div>
           <h2 className="page-title flex items-center gap-3 text-zinc-900 dark:text-zinc-50">
             <BarChart3 className="h-9 w-9 text-indigo-500" />
-            Analytics
+            {a.title}
           </h2>
-          <p className="page-subtitle">
-            Seven-day publish summary and live ops windows (V1 light).
-          </p>
+          <p className="page-subtitle">{a.subtitle}</p>
         </div>
         <Button
           variant="outline"
@@ -110,7 +111,7 @@ export default function AnalyticsPage() {
           }}
         >
           <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-          Refresh
+          {a.refresh}
         </Button>
       </div>
 
@@ -126,44 +127,54 @@ export default function AnalyticsPage() {
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Published (7 days)</CardDescription>
+            <CardDescription>{a.published7d}</CardDescription>
             <CardTitle className="text-3xl">{loading ? "—" : published7d}</CardTitle>
           </CardHeader>
           <CardContent className="text-xs text-muted-foreground">
             <TrendingUp className="mr-1 inline h-3.5 w-3.5" />
-            {loading ? "Loading…" : `${success7d}% success vs failures in window`}
+            {loading ? a.loading : t("analyticsOps.successVsFailures", { rate: success7d })}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Failed (7 days)</CardDescription>
+            <CardDescription>{a.failed7d}</CardDescription>
             <CardTitle className="text-3xl">{loading ? "—" : failed7d}</CardTitle>
           </CardHeader>
           <CardContent className="text-xs text-muted-foreground">
-            Today: {loading ? "—" : `${stats?.failed_today ?? 0} failed / ${stats?.published_today ?? 0} published`}
+            {loading
+              ? "—"
+              : t("analyticsOps.todayFailedPublished", {
+                  failed: stats?.failed_today ?? 0,
+                  published: stats?.published_today ?? 0,
+                })}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Last hour</CardDescription>
+            <CardDescription>{a.lastHour}</CardDescription>
             <CardTitle className="text-3xl">{loading ? "—" : (last1h?.published ?? 0)}</CardTitle>
           </CardHeader>
           <CardContent className="text-xs text-muted-foreground">
             {loading
-              ? "Loading…"
-              : `${last1h?.failed ?? 0} failed · ${last1h?.permanently_failed ?? 0} permanent`}
+              ? a.loading
+              : t("analyticsOps.lastHourDetail", {
+                  failed: last1h?.failed ?? 0,
+                  permanent: last1h?.permanently_failed ?? 0,
+                })}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Retrying now</CardDescription>
+            <CardDescription>{a.retryingNow}</CardDescription>
             <CardTitle className="text-3xl">{loading ? "—" : (stats?.retrying ?? 0)}</CardTitle>
           </CardHeader>
           <CardContent className="text-xs text-muted-foreground">
-            Total published (all time): {loading ? "—" : (stats?.published ?? 0)}
+            {loading
+              ? "—"
+              : t("analyticsOps.totalPublishedAllTime", { count: stats?.published ?? 0 })}
           </CardContent>
         </Card>
       </div>
@@ -171,20 +182,20 @@ export default function AnalyticsPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Queues</CardTitle>
-            <CardDescription>Redis-backed publish pipeline</CardDescription>
+            <CardTitle className="text-base">{a.queuesTitle}</CardTitle>
+            <CardDescription>{a.queuesDesc}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Publish commands pending</span>
+              <span className="text-muted-foreground">{a.publishPending}</span>
               <span className="font-medium">{ops?.queue?.publish_commands_pending ?? "—"}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Content ready (legacy)</span>
+              <span className="text-muted-foreground">{a.contentReadyLegacy}</span>
               <span className="font-medium">{ops?.queue?.content_ready ?? "—"}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Delayed / DLQ</span>
+              <span className="text-muted-foreground">{a.delayedDlq}</span>
               <span className="font-medium">
                 {ops?.queue?.publish_delayed ?? "—"} / {ops?.queue?.publish_failed_dlq ?? "—"}
               </span>
@@ -194,22 +205,22 @@ export default function AnalyticsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Accounts & proxies</CardTitle>
-            <CardDescription>Capacity for scale-out</CardDescription>
+            <CardTitle className="text-base">{a.accountsProxiesTitle}</CardTitle>
+            <CardDescription>{a.accountsProxiesDesc}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Active / warming</span>
+              <span className="text-muted-foreground">{a.activeWarming}</span>
               <span className="font-medium">
                 {ops?.accounts?.active ?? "—"} / {ops?.accounts?.warming ?? "—"}
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Low health</span>
+              <span className="text-muted-foreground">{a.lowHealth}</span>
               <span className="font-medium">{ops?.accounts?.low_health ?? "—"}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Proxy slots available</span>
+              <span className="text-muted-foreground">{a.proxySlots}</span>
               <span className="font-medium">
                 {ops?.proxy_capacity?.slots_available ?? "—"}
                 {ops?.proxy_capacity?.strict_one_to_one ? (
@@ -225,20 +236,22 @@ export default function AnalyticsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Failure breakdown</CardTitle>
-          <CardDescription>Top failure types in retry/failed backlog · updated {refreshedAt}</CardDescription>
+          <CardTitle className="text-base">{a.failureBreakdown}</CardTitle>
+          <CardDescription>
+            {t("analyticsOps.failureBreakdownDesc", { time: refreshedAt })}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {loading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <p className="text-sm text-muted-foreground">{a.loading}</p>
           ) : (ops?.failure_breakdown?.length ?? 0) === 0 ? (
-            <p className="text-sm text-muted-foreground">No failures in the current backlog window.</p>
+            <p className="text-sm text-muted-foreground">{a.noFailures}</p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Type</TableHead>
-                  <TableHead className="text-right">Count</TableHead>
+                  <TableHead>{a.type}</TableHead>
+                  <TableHead className="text-right">{a.count}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -256,13 +269,13 @@ export default function AnalyticsPage() {
 
       <p className="text-sm text-muted-foreground">
         <Activity className="mr-1 inline h-4 w-4" />
-        Drill down in{" "}
+        {a.drillDown}{" "}
         <Link href="/publications" className="text-primary underline-offset-4 hover:underline">
-          Publications
+          {a.publicationsLink}
         </Link>{" "}
-        or the{" "}
+        {a.or}{" "}
         <Link href="/" className="text-primary underline-offset-4 hover:underline">
-          Operations dashboard
+          {a.operationsLink}
         </Link>
         .
       </p>

@@ -42,8 +42,8 @@ function getPlatformIcon(platform: string | undefined | null) {
   return platformIcons[key] || platformIcons.default;
 }
 
-export function formatAccountProxy(url: string | null) {
-  if (!url) return "Unassigned";
+export function formatAccountProxy(url: string | null, unassigned = "Unassigned") {
+  if (!url) return unassigned;
   try {
     return new URL(url.startsWith("http") ? url : `http://${url}`).hostname;
   } catch {
@@ -72,6 +72,7 @@ export type AccountsColumnLabels = {
   igReady: string;
   igSetup: string;
   na: string;
+  unassigned: string;
 };
 
 export function createAccountsColumns(
@@ -102,10 +103,12 @@ export function createAccountsColumns(
     },
     {
       id: "proxy",
-      accessorFn: (row) => formatAccountProxy(row.proxy_url),
+      accessorFn: (row) => formatAccountProxy(row.proxy_url, labels.unassigned),
       header: ({ column }) => <DataTableColumnHeader column={column} title={labels.proxy} />,
       cell: ({ row }) => (
-        <span className="text-muted-foreground">{formatAccountProxy(row.original.proxy_url)}</span>
+        <span className="text-muted-foreground">
+          {formatAccountProxy(row.original.proxy_url, labels.unassigned)}
+        </span>
       ),
     },
     {

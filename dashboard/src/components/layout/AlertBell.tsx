@@ -159,7 +159,7 @@ export function AlertBell() {
                 type="button"
                 onClick={() => setIsOpen(false)}
                 className="rounded p-1 text-muted-foreground hover:text-foreground"
-                aria-label="Close"
+                aria-label={t("alerts.close")}
               >
                 <X className="h-4 w-4" />
               </button>

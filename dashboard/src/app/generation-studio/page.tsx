@@ -55,6 +55,12 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { addTrackedGenerationJobId } from "@/lib/generation-job-tracking";
+import { useLocale } from "@/components/i18n/LocaleProvider";
+import {
+  generationStudioI18n,
+  type GenerationStudioI18n,
+  type GenerationStudioPipelineLabels,
+} from "@/lib/i18n-generation-studio";
 
 type ContentType = "post" | "reel" | "story";
 type Mode = "persona" | "faceless";
@@ -155,13 +161,15 @@ type PublishIntentResponse = {
 
 const NICHE_OPTIONS = ["fitness", "food", "travel", "business", "lifestyle"] as const;
 
-const TOPIC_PLACEHOLDER_BY_NICHE: Record<(typeof NICHE_OPTIONS)[number], string> = {
-  fitness: "e.g. morning mobility routine for desk workers",
-  food: "e.g. high-protein meal prep under 30 minutes",
-  travel: "e.g. long weekend in Lisbon on a budget",
-  business: "e.g. first marketing hires for a B2B startup",
-  lifestyle: "e.g. simple habits for a calmer morning",
-};
+function topicPlaceholderForNiche(
+  niche: string,
+  tp: Record<(typeof NICHE_OPTIONS)[number], string> & { egPrefix: string }
+): string {
+  const key = NICHE_OPTIONS.includes(niche as (typeof NICHE_OPTIONS)[number])
+    ? (niche as (typeof NICHE_OPTIONS)[number])
+    : "lifestyle";
+  return tp[key];
+}
 
 function statusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
   if (status === "completed" || status === "queued") return "default";
@@ -183,32 +191,27 @@ function stepMergedIntoVideoGeneration(metadata: Record<string, unknown> | undef
 }
 
 /** Short label shown under the step name in place of "Skipped". */
-function pipelineStepInlineLabel(metadata: Record<string, unknown> | undefined): string {
-  if (stepMergedIntoVideoGeneration(metadata)) return "Done inside video_generation";
+function pipelineStepInlineLabel(
+  metadata: Record<string, unknown> | undefined,
+  pipe: GenerationStudioPipelineLabels
+): string {
+  if (stepMergedIntoVideoGeneration(metadata)) return pipe.doneInsideVideoGen;
   const reason = metadata?.reason;
-  if (reason === "single_video_no_assembly_required") return "Not needed (single clip)";
-  return "Skipped";
+  if (reason === "single_video_no_assembly_required") return pipe.notNeededSingleClip;
+  return pipe.skipped;
 }
 
-function pipelineStepSkipHint(metadata: Record<string, unknown> | undefined): string | null {
+function pipelineStepSkipHint(
+  metadata: Record<string, unknown> | undefined,
+  pipe: GenerationStudioPipelineLabels
+): string | null {
   if (!stepMetadataSkipped(metadata)) return null;
   const reason = metadata?.reason;
-  if (reason === "ailiveai_single_video_path") {
-    return (
-      "AliveAI creates the blocking portrait and runs /prompts/image-to-video inside the " +
-      "video_generation step — no separate KIE keyframe pass is needed here."
-    );
-  }
-  if (reason === "single_seedance_video_path") {
-    return "Seedance single-video mode generates the full clip in video_generation — no per-scene keyframes here.";
-  }
-  if (reason === "single_video_no_assembly_required") {
-    return "Final output is a single clip; no ffmpeg concat is needed.";
-  }
-  if (typeof reason === "string" && reason.length > 0) {
-    return reason;
-  }
-  return "Skipped for this execution mode.";
+  if (reason === "ailiveai_single_video_path") return pipe.skipHintAiliveai;
+  if (reason === "single_seedance_video_path") return pipe.skipHintSeedance;
+  if (reason === "single_video_no_assembly_required") return pipe.skipHintNoAssembly;
+  if (typeof reason === "string" && reason.length > 0) return reason;
+  return pipe.skipHintDefault;
 }
 
 /** Local wall-clock time (24h) from step metadata ISO timestamp set when video_generation begins. */
@@ -229,15 +232,15 @@ function StepIcon({
   status,
   skipped,
   mergedIntoVideo,
+  pipe,
 }: {
   status: string;
   skipped?: boolean;
   mergedIntoVideo?: boolean;
+  pipe: GenerationStudioPipelineLabels;
 }) {
   if (status === "completed" && skipped) {
-    const tooltip = mergedIntoVideo
-      ? "Done inside video_generation"
-      : "Skipped for this execution mode";
+    const tooltip = mergedIntoVideo ? pipe.doneInsideVideoGen : pipe.skippedForMode;
     return (
       <span title={tooltip} className="inline-flex">
         <SkipForward className="h-4 w-4 text-muted-foreground" aria-hidden />
@@ -272,6 +275,10 @@ function PublishPanel({
   publishNiche: string;
   publishTopic: string;
 }) {
+  const { text, t } = useLocale();
+  const gs = text.generationStudio;
+  const p = gs.publish;
+  const acc = gs.accounts;
   const reelEnabledRaw =
     process.env.NEXT_PUBLIC_FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED ??
     "true";
@@ -302,13 +309,13 @@ function PublishPanel({
   }, [defaultAssetId]);
 
   const accountSummary = useMemo(() => {
-    if (selectedAccounts.length === 0) return "Select target accounts";
+    if (selectedAccounts.length === 0) return acc.selectTargets;
     const labels = selectedAccounts
       .map((id) => accounts.find((a) => a.id === id)?.username || id)
       .filter(Boolean);
     if (labels.length <= 2) return labels.join(", ");
-    return `${selectedAccounts.length} accounts selected`;
-  }, [selectedAccounts, accounts]);
+    return t("generationStudio.accounts.nSelected", { count: selectedAccounts.length });
+  }, [selectedAccounts, accounts, acc.selectTargets, t]);
 
   const selectedAssetExists = useMemo(
     () => Boolean(selectedAssetId) && assets.some((asset) => asset.id === selectedAssetId),
@@ -346,9 +353,9 @@ function PublishPanel({
       });
       setCaption(generated);
       setHashtagsInput(hashtags.map((h) => h.replace(/^#/, "").trim()).filter(Boolean).join(", "));
-      toast.success("Caption and hashtags generated");
+      toast.success(p.captionGenerated);
     } catch (e: unknown) {
-      const message = parseApiError(e, "Could not generate caption.");
+      const message = parseApiError(e, p.captionError);
       setError(message);
       toast.error(message);
     } finally {
@@ -396,7 +403,7 @@ function PublishPanel({
   const onCreateIntent = async () => {
     if (!canSubmit) return;
     if (hasScheduleError) {
-      const message = "Scheduled publish requires a future date/time.";
+      const message = p.scheduleError;
       setError(message);
       toast.error(message);
       return;
@@ -408,9 +415,9 @@ function PublishPanel({
       const payloadMode: PublishMode = mode === "scheduled" && !scheduledFor ? "publish_now" : mode;
       const response = await api.generationJobs.createPublishIntent(jobId, buildIntentPayload(payloadMode));
       setSuccessResponse(response);
-      toast.success("Publish intent created");
+      toast.success(p.intentSuccess);
     } catch (e: unknown) {
-      const message = parseApiError(e, "Could not create publish intent.");
+      const message = parseApiError(e, p.intentError);
       setError(message);
       toast.error(message);
     } finally {
@@ -421,7 +428,7 @@ function PublishPanel({
   const onPostNow = async () => {
     if (!canSubmit || postNowInFlightRef.current) return;
     if (hasScheduleError) {
-      const message = "Scheduled publish requires a future date/time.";
+      const message = p.scheduleError;
       setError(message);
       toast.error(message);
       return;
@@ -434,9 +441,9 @@ function PublishPanel({
       const intent = await api.generationJobs.createPublishIntent(jobId, buildIntentPayload("publish_now"));
       setSuccessResponse(intent);
       const dispatched = await api.generationJobs.dispatchPublishIntent(intent.intent_id);
-      toast.success(`Posting started: ${dispatched.dispatched_targets} target(s) dispatched.`);
+      toast.success(t("generationStudio.publish.postStarted", { count: dispatched.dispatched_targets }));
     } catch (e: unknown) {
-      const message = parseApiError(e, "Could not post now.");
+      const message = parseApiError(e, p.postNowError);
       setError(message);
       toast.error(message);
     } finally {
@@ -448,17 +455,14 @@ function PublishPanel({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Publish</CardTitle>
-        <CardDescription>
-          One intent per unique asset + caption + accounts (double-clicks won’t create duplicates).
-          Use either create intent or post now — they share the same idempotency for “publish now”.
-        </CardDescription>
+        <CardTitle className="text-base">{p.title}</CardTitle>
+        <CardDescription>{p.description}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="space-y-2">
-          <Label>Asset</Label>
+          <Label>{p.asset}</Label>
           {assets.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No generated assets found for this job.</p>
+            <p className="text-sm text-muted-foreground">{p.noAssets}</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {assets.map((asset) => {
@@ -495,22 +499,22 @@ function PublishPanel({
 
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">
-            <Label>Content type</Label>
+            <Label>{p.contentType}</Label>
             <Select value={contentType} onValueChange={(v) => setContentType(v as ContentType)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="post">Post</SelectItem>
-                <SelectItem value="story">Story</SelectItem>
+                <SelectItem value="post">{p.post}</SelectItem>
+                <SelectItem value="story">{p.story}</SelectItem>
                 <SelectItem value="reel" disabled={!reelEnabled}>
-                  Reel {!reelEnabled ? "(disabled)" : ""}
+                  {p.reel} {!reelEnabled ? p.reelDisabled : ""}
                 </SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-2">
-            <Label>Target accounts</Label>
+            <Label>{p.targetAccounts}</Label>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button type="button" variant="outline" className="w-full justify-between font-normal">
@@ -519,10 +523,10 @@ function PublishPanel({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)]">
-                <DropdownMenuLabel>Select one or more accounts</DropdownMenuLabel>
+                <DropdownMenuLabel>{acc.selectOneOrMore}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 {accounts.length === 0 ? (
-                  <div className="px-2 py-1.5 text-sm text-muted-foreground">No accounts found</div>
+                  <div className="px-2 py-1.5 text-sm text-muted-foreground">{acc.none}</div>
                 ) : (
                   accounts.map((account) => (
                     <DropdownMenuCheckboxItem
@@ -532,7 +536,7 @@ function PublishPanel({
                         setSelectedAccounts((prev) =>
                           checked
                             ? Array.from(new Set([...prev, account.id]))
-                            : prev.filter((acc) => acc !== account.id)
+                            : prev.filter((a) => a !== account.id)
                         );
                       }}
                       onSelect={(event) => event.preventDefault()}
@@ -548,7 +552,7 @@ function PublishPanel({
 
         <div className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Label className="mb-0">Caption</Label>
+            <Label className="mb-0">{p.caption}</Label>
             <Button
               type="button"
               variant="secondary"
@@ -558,45 +562,45 @@ function PublishPanel({
               onClick={() => void onGenerateCaption()}
             >
               {captionGenLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-              Generate caption & hashtags
+              {p.generateCaption}
             </Button>
           </div>
           <textarea
             className="min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
             value={caption}
             onChange={(e) => setCaption(e.target.value)}
-            placeholder="Write your caption or use Generate…"
+            placeholder={p.captionPlaceholder}
           />
         </div>
 
         <div className="space-y-2">
-          <Label>Hashtags (comma-separated)</Label>
+          <Label>{p.hashtags}</Label>
           <Input
             value={hashtagsInput}
             onChange={(e) => setHashtagsInput(e.target.value)}
-            placeholder="fitness, motivation, routine"
+            placeholder={p.hashtagsPlaceholder}
           />
         </div>
 
         <div className="space-y-3">
-          <Label>Mode</Label>
+          <Label>{p.mode}</Label>
           <div className="flex flex-wrap gap-4">
             <label className="inline-flex items-center gap-2 text-sm">
               <input type="radio" checked={mode === "publish_now"} onChange={() => setMode("publish_now")} />
-              Publish now
+              {p.publishNow}
             </label>
             <label className="inline-flex items-center gap-2 text-sm">
               <input type="radio" checked={mode === "save_for_later"} onChange={() => setMode("save_for_later")} />
-              Save for later
+              {p.saveForLater}
             </label>
             <label className="inline-flex items-center gap-2 text-sm">
               <input type="radio" checked={mode === "scheduled"} onChange={() => setMode("scheduled")} />
-              Schedule
+              {p.schedule}
             </label>
           </div>
           {mode === "scheduled" ? (
             <div className="max-w-sm">
-              <DateTimePicker value={scheduledFor} onChange={setScheduledFor} placeholder="Pick date & time" />
+              <DateTimePicker value={scheduledFor} onChange={setScheduledFor} placeholder={p.pickDateTime} />
             </div>
           ) : null}
         </div>
@@ -604,11 +608,11 @@ function PublishPanel({
         <div className="flex items-center gap-2">
           <Button type="button" disabled={!canSubmit} onClick={onCreateIntent}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Create Publish Intent
+            {p.createIntent}
           </Button>
           <Button type="button" disabled={!canSubmit} onClick={onPostNow}>
             {immediateLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Post to Instagram Now
+            {p.postInstagramNow}
           </Button>
         </div>
 
@@ -616,12 +620,13 @@ function PublishPanel({
 
         {successResponse ? (
           <div className="rounded-md border border-emerald-300/50 bg-emerald-50/40 p-3 text-sm dark:border-emerald-700/60 dark:bg-emerald-900/10">
-            <p className="font-medium text-emerald-700 dark:text-emerald-300">Publish intent created</p>
+            <p className="font-medium text-emerald-700 dark:text-emerald-300">{p.intentCreated}</p>
             <p className="mt-1">
-              <span className="font-semibold">intent_id:</span> <span className="font-mono">{successResponse.intent_id}</span>
+              <span className="font-semibold">{p.intentId}</span>{" "}
+              <span className="font-mono">{successResponse.intent_id}</span>
             </p>
             <p>
-              <span className="font-semibold">status:</span> {successResponse.status}
+              <span className="font-semibold">{p.status}</span> {successResponse.status}
             </p>
             <div className="mt-2 space-y-1">
               {successResponse.targets.map((t) => (
@@ -638,6 +643,15 @@ function PublishPanel({
 }
 
 function GenerationStudioPageInner() {
+  const { text, t } = useLocale();
+  const gs = text.generationStudio;
+  const ctrl = gs.controls;
+  const tl = gs.timeline;
+  const live = gs.liveJob;
+  const editLabels = gs.edit;
+  const toastMsg = gs.toasts;
+  const pipe = gs.pipeline;
+  const acc = gs.accounts;
   const router = useRouter();
   const searchParams = useSearchParams();
   const [contentType, setContentType] = useState<ContentType>("reel");
@@ -758,10 +772,7 @@ function GenerationStudioPageInner() {
       return { url: v?.public_url ?? null, note: "" };
     }
     if (job.output_url) {
-      return {
-        url: job.output_url,
-        note: "Output URL present while job is not completed — may be partial or stale.",
-      };
+      return { url: job.output_url, note: live.outputStaleNote };
     }
     const scenes = [...(job.scenes || [])].sort((a, b) => a.scene_index - b.scene_index);
     const first = scenes[0] as JobScene | undefined;
@@ -769,19 +780,13 @@ function GenerationStudioPageInner() {
     const pv = m && typeof m.preview_video_url === "string" && m.preview_video_url.trim() ? m.preview_video_url.trim() : "";
     if (!pv) return { url: null, note: "" };
     if (m?.preview_video_source === "kie_quick_preview") {
-      return {
-        url: pv,
-        note: "This is a Kie.ai “Vid preview” sample from the dashboard — not the AliveAI clip from video_generation.",
-      };
+      return { url: pv, note: live.kiePreviewNote };
     }
     if (m?.preview_video_source === "scene_pipeline") {
-      return {
-        url: pv,
-        note: "Stored scene video URL — may pre-date the latest pipeline failure.",
-      };
+      return { url: pv, note: live.scenePipelineNote };
     }
-    return { url: pv, note: "Scene preview URL — source not tagged; see Timeline / logs." };
-  }, [job, generatedAssets]);
+    return { url: pv, note: live.scenePreviewUntagged };
+  }, [job, generatedAssets, live]);
 
   useEffect(() => {
     setOpenSceneVideoId(null);
@@ -807,13 +812,13 @@ function GenerationStudioPageInner() {
     [sortedScenes]
   );
   const accountSummary = useMemo(() => {
-    if (selectedAccounts.length === 0) return "Select target accounts";
+    if (selectedAccounts.length === 0) return acc.selectTargets;
     const labels = selectedAccounts
       .map((id) => accountChoices.find((a) => a.id === id)?.username || id)
       .filter(Boolean);
     if (labels.length <= 2) return labels.join(", ");
-    return `${selectedAccounts.length} accounts selected`;
-  }, [selectedAccounts, accountChoices]);
+    return t("generationStudio.accounts.nSelected", { count: selectedAccounts.length });
+  }, [selectedAccounts, accountChoices, acc.selectTargets, t]);
 
   const canLaunch = job && (job.status === "draft" || job.status === "ready");
   const jobIsCancelling = job?.status === "cancelling";
@@ -831,7 +836,7 @@ function GenerationStudioPageInner() {
 
   const handlePreview = async () => {
     if (!topic.trim()) {
-      toast.error("Add a topic for the run.");
+      toast.error(toastMsg.topicRequired);
       return;
     }
     setPreviewLoading(true);
@@ -846,9 +851,9 @@ function GenerationStudioPageInner() {
       setDraftScenes(plan);
       setJobId(null);
       router.replace("/generation-studio", { scroll: false });
-      toast.success("Scene preview ready (not saved as a job).");
+      toast.success(toastMsg.previewReady);
     } catch (e: unknown) {
-      toast.error(parseApiError(e, "Preview failed. Check text provider API keys on Content Factory."));
+      toast.error(parseApiError(e, toastMsg.previewError));
     } finally {
       setPreviewLoading(false);
     }
@@ -856,7 +861,7 @@ function GenerationStudioPageInner() {
 
   const handleCreateDraft = async () => {
     if (!topic.trim() || selectedAccounts.length === 0) {
-      toast.error("Topic and at least one account are required.");
+      toast.error(toastMsg.topicAccountsRequired);
       return;
     }
     setCreateLoading(true);
@@ -879,9 +884,9 @@ function GenerationStudioPageInner() {
       setJobId(res.job_id);
       addTrackedGenerationJobId(res.job_id);
       router.replace(`/generation-studio?job=${encodeURIComponent(res.job_id)}`, { scroll: false });
-      toast.success("Draft job created with scenes. Edit, preview, then launch.");
+      toast.success(toastMsg.draftCreated);
     } catch (e: unknown) {
-      toast.error(parseApiError(e, "Could not create draft job."));
+      toast.error(parseApiError(e, toastMsg.draftError));
     } finally {
       setCreateLoading(false);
     }
@@ -894,9 +899,9 @@ function GenerationStudioPageInner() {
       await api.generationJobs.launch(jobId);
       addTrackedGenerationJobId(jobId);
       await mutate();
-      toast.success("Pipeline started.");
+      toast.success(toastMsg.pipelineStarted);
     } catch (e: unknown) {
-      toast.error(parseApiError(e, "Launch failed."));
+      toast.error(parseApiError(e, toastMsg.launchError));
     } finally {
       setLaunchLoading(false);
     }
@@ -908,9 +913,9 @@ function GenerationStudioPageInner() {
     try {
       await api.generationJobs.cancel(jobId);
       await mutate();
-      toast.success("Stopping… partial results are kept.");
+      toast.success(toastMsg.stoppingKept);
     } catch (e: unknown) {
-      toast.error(parseApiError(e, "Could not request stop."));
+      toast.error(parseApiError(e, toastMsg.stopError));
     } finally {
       setCancelLoading(false);
     }
@@ -922,9 +927,9 @@ function GenerationStudioPageInner() {
     try {
       await api.generationJobs.markReady(jobId);
       await mutate();
-      toast.success("Marked ready.");
+      toast.success(toastMsg.markedReady);
     } catch (e: unknown) {
-      toast.error(parseApiError(e, "Could not mark ready."));
+      toast.error(parseApiError(e, toastMsg.markReadyError));
     } finally {
       setReadyLoading(false);
     }
@@ -936,12 +941,12 @@ function GenerationStudioPageInner() {
     try {
       await api.generationJobs.previewScene(jobId, sceneId, kind);
       await mutate();
-      toast.success(kind === "video" ? "Video preview generated." : "Image preview generated.");
+      toast.success(kind === "video" ? toastMsg.videoPreviewDone : toastMsg.imagePreviewDone);
       if (kind === "video") {
         setOpenSceneVideoId(sceneId);
       }
     } catch (e: unknown) {
-      toast.error(parseApiError(e, "Preview generation failed. Check Kie/AliveAI keys and credits."));
+      toast.error(parseApiError(e, toastMsg.previewGenError));
     } finally {
       setPreviewingTarget(null);
     }
@@ -974,7 +979,7 @@ function GenerationStudioPageInner() {
       await api.generationJobs.reorderScenes(jobId, next);
       await mutate();
     } catch (e: unknown) {
-      toast.error(parseApiError(e, "Reorder failed."));
+      toast.error(parseApiError(e, toastMsg.reorderError));
     }
   };
 
@@ -1014,9 +1019,9 @@ function GenerationStudioPageInner() {
           scene_role: editRole,
         });
         await mutate();
-        toast.success("Scene updated.");
+        toast.success(toastMsg.sceneUpdated);
       } catch (e: unknown) {
-        toast.error(parseApiError(e, "Update failed."));
+        toast.error(parseApiError(e, toastMsg.updateError));
         return;
       }
     } else {
@@ -1027,7 +1032,7 @@ function GenerationStudioPageInner() {
             : s
         )
       );
-      toast.success("Draft scene updated.");
+      toast.success(toastMsg.draftSceneUpdated);
     }
     setEditOpen(false);
   };
@@ -1036,15 +1041,15 @@ function GenerationStudioPageInner() {
     const isServer = "id" in scene && !!(scene as JobScene).id;
     if (isServer && jobId) {
       if (job?.status === "draft" || job?.status === "ready") {
-        toast.error("Launch the job before full scene media retry.");
+        toast.error(toastMsg.launchBeforeRetry);
         return;
       }
       try {
         await api.generationJobs.retryScene(jobId, (scene as JobScene).id);
         await mutate();
-        toast.success("Scene regeneration scheduled.");
+        toast.success(toastMsg.sceneRegenScheduled);
       } catch (e: unknown) {
-        toast.error(parseApiError(e, "Retry failed."));
+        toast.error(parseApiError(e, toastMsg.retryError));
       }
       return;
     }
@@ -1056,9 +1061,9 @@ function GenerationStudioPageInner() {
     try {
       await api.generationJobs.retryStep(jobId, stepName);
       await mutate();
-      toast.success(`Retry scheduled for ${stepName}.`);
+      toast.success(t("generationStudio.toasts.stepRetryScheduled", { step: stepName }));
     } catch (e: unknown) {
-      toast.error(parseApiError(e, "Retry step failed."));
+      toast.error(parseApiError(e, toastMsg.retryStepError));
     }
   };
 
@@ -1068,9 +1073,9 @@ function GenerationStudioPageInner() {
     try {
       await api.generationJobs.cancelStep(jobId, stepName);
       await mutate();
-      toast.success(`Stopping ${stepName}…`);
+      toast.success(t("generationStudio.toasts.stepStopping", { step: stepName }));
     } catch (e: unknown) {
-      toast.error(parseApiError(e, "Cancel step failed."));
+      toast.error(parseApiError(e, toastMsg.cancelStepError));
     } finally {
       setCancelStepLoading(null);
     }
@@ -1087,16 +1092,14 @@ function GenerationStudioPageInner() {
   const logs = job?.logs ?? [];
   const maxDur = Math.max(1, ...sortedScenes.map((s) => s.duration || 1));
 
-  const topicPlaceholder = useMemo(() => {
-    const key = NICHE_OPTIONS.includes(niche as (typeof NICHE_OPTIONS)[number])
-      ? (niche as (typeof NICHE_OPTIONS)[number])
-      : "lifestyle";
-    return TOPIC_PLACEHOLDER_BY_NICHE[key];
-  }, [niche]);
+  const topicPlaceholder = useMemo(
+    () => topicPlaceholderForNiche(niche, gs.topicPlaceholders),
+    [niche, gs.topicPlaceholders]
+  );
 
   const topicSuggestion = useMemo(
-    () => topicPlaceholder.replace(/^e\.g\.\s*/i, "").trim(),
-    [topicPlaceholder]
+    () => topicPlaceholder.replace(new RegExp(`^${gs.topicPlaceholders.egPrefix}`, "i"), "").trim(),
+    [topicPlaceholder, gs.topicPlaceholders.egPrefix]
   );
 
   return (
@@ -1104,60 +1107,58 @@ function GenerationStudioPageInner() {
       <div className="mx-auto max-w-[1600px] space-y-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-neutral-100">
-            Generation Studio
+            {gs.pageTitle}
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Draft-first workflow: scenes and copy are created up front; launch only when you are ready to spend compute.
-          </p>
+          <p className="text-sm text-muted-foreground">{gs.pageSubtitle}</p>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-12">
           <Card className="lg:col-span-3">
             <CardHeader>
-              <CardTitle className="text-base">Controls</CardTitle>
-              <CardDescription>Create a persisted draft job, edit scenes, then launch.</CardDescription>
+              <CardTitle className="text-base">{ctrl.title}</CardTitle>
+              <CardDescription>{ctrl.description}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>Content type</Label>
+                <Label>{ctrl.contentType}</Label>
                 <Select value={contentType} onValueChange={(v) => setContentType(v as ContentType)}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="post">Post</SelectItem>
-                    <SelectItem value="reel">Reel</SelectItem>
-                    <SelectItem value="story">Story</SelectItem>
+                    <SelectItem value="post">{gs.publish.post}</SelectItem>
+                    <SelectItem value="reel">{gs.publish.reel}</SelectItem>
+                    <SelectItem value="story">{gs.publish.story}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Mode</Label>
+                <Label>{ctrl.mode}</Label>
                 <Select value={mode} onValueChange={(v) => setMode(v as Mode)}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="persona">Persona</SelectItem>
-                    <SelectItem value="faceless">Faceless</SelectItem>
+                    <SelectItem value="persona">{ctrl.persona}</SelectItem>
+                    <SelectItem value="faceless">{ctrl.faceless}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
                 <div className="space-y-2">
-                  <Label>Execution Mode</Label>
+                  <Label>{ctrl.executionMode}</Label>
                   <Select value={executionMode} onValueChange={(v) => setExecutionMode(v as ExecutionMode)}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="multi_scene_single_video">Multi-scene single video (Seedance)</SelectItem>
-                      <SelectItem value="ailiveai_single_video">Single video (AILIVEAI)</SelectItem>
-                      <SelectItem value="scene_based">Scene-based (Kie)</SelectItem>
+                      <SelectItem value="multi_scene_single_video">{ctrl.execMultiSeedance}</SelectItem>
+                      <SelectItem value="ailiveai_single_video">{ctrl.execAiliveai}</SelectItem>
+                      <SelectItem value="scene_based">{ctrl.execSceneKie}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
               <div className="space-y-2">
-                <Label>Niche</Label>
+                <Label>{ctrl.niche}</Label>
                 <Select value={niche} onValueChange={setNiche}>
                   <SelectTrigger>
                     <SelectValue />
@@ -1172,16 +1173,16 @@ function GenerationStudioPageInner() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Template (optional)</Label>
+                <Label>{ctrl.templateOptional}</Label>
                 <Select
                   value={templateId || "__none__"}
                   onValueChange={(v) => setTemplateId(v === "__none__" ? "" : v)}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="No template" />
+                    <SelectValue placeholder={ctrl.noTemplate} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__none__">No template</SelectItem>
+                    <SelectItem value="__none__">{ctrl.noTemplate}</SelectItem>
                     {nicheTemplates.map((tpl) => (
                       <SelectItem key={tpl.id} value={tpl.id}>
                         {tpl.name}
@@ -1192,7 +1193,7 @@ function GenerationStudioPageInner() {
               </div>
               {executionMode === "multi_scene_single_video" || executionMode === "ailiveai_single_video" ? (
                 <div className="space-y-2">
-                  <Label>Video duration (single clip)</Label>
+                  <Label>{ctrl.videoDuration}</Label>
                   <Select
                     value={String(videoDuration)}
                     onValueChange={(v) => setVideoDuration(Number(v))}
@@ -1203,36 +1204,29 @@ function GenerationStudioPageInner() {
                     <SelectContent>
                       {executionMode === "ailiveai_single_video" ? (
                         <>
-                          <SelectItem value="5">~5s (AliveAI SHORT)</SelectItem>
-                          <SelectItem value="10">~10s (AliveAI MEDIUM)</SelectItem>
+                          <SelectItem value="5">{ctrl.durAliveai5}</SelectItem>
+                          <SelectItem value="10">{ctrl.durAliveai10}</SelectItem>
                         </>
                       ) : (
                         <>
-                          <SelectItem value="4">4s</SelectItem>
-                          <SelectItem value="5">5s</SelectItem>
-                          <SelectItem value="6">6s</SelectItem>
-                          <SelectItem value="7">7s</SelectItem>
-                          <SelectItem value="8">8s</SelectItem>
-                          <SelectItem value="9">9s</SelectItem>
-                          <SelectItem value="10">10s</SelectItem>
-                          <SelectItem value="11">11s</SelectItem>
-                          <SelectItem value="12">12s</SelectItem>
-                          <SelectItem value="13">13s</SelectItem>
-                          <SelectItem value="14">14s</SelectItem>
-                          <SelectItem value="15">15s</SelectItem>
+                          {[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((n) => (
+                            <SelectItem key={n} value={String(n)}>
+                              {t("generationStudio.controls.durSeconds", { n })}
+                            </SelectItem>
+                          ))}
                         </>
                       )}
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
                     {executionMode === "ailiveai_single_video"
-                      ? "AliveAI: a blocking persona image is generated first, then image-to-video (always persona mode)."
-                      : "Seedance supports 4 to 15 seconds."}
+                      ? ctrl.aliveaiDurationHint
+                      : ctrl.seedanceDurationHint}
                   </p>
                 </div>
               ) : null}
               <div className="space-y-2">
-                <Label>Persona gender (AliveAI)</Label>
+                <Label>{ctrl.personaGender}</Label>
                 <Select
                   value={ailiveaiGender}
                   onValueChange={(v) => setAiliveaiGender(v as AiliveaiGender)}
@@ -1242,27 +1236,21 @@ function GenerationStudioPageInner() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="FEMALE">Female</SelectItem>
-                    <SelectItem value="MALE">Male</SelectItem>
-                    <SelectItem value="TRANS">Trans</SelectItem>
+                    <SelectItem value="FEMALE">{ctrl.genderFemale}</SelectItem>
+                    <SelectItem value="MALE">{ctrl.genderMale}</SelectItem>
+                    <SelectItem value="TRANS">{ctrl.genderTrans}</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
                   {executionMode === "ailiveai_single_video" ? (
-                    <>
-                      Sent as AliveAI <span className="font-mono text-[11px]">gender</span> for the blocking portrait and
-                      used to steer the generated persona text.
-                    </>
+                    <>{ctrl.aliveaiGenderHint}</>
                   ) : (
-                    <>
-                      Choose <strong>Single video (AILIVEAI)</strong> in Execution mode above to enable this. It is not
-                      used for Seedance or scene-based Kie jobs.
-                    </>
+                    <>{ctrl.aliveaiGenderDisabled}</>
                   )}
                 </p>
               </div>
               <div className="space-y-2">
-                <Label>Topic</Label>
+                <Label>{ctrl.topic}</Label>
                 <div className="relative flex items-center">
                   <Input
                     value={topic}
@@ -1276,19 +1264,19 @@ function GenerationStudioPageInner() {
                     variant="ghost"
                     size="icon"
                     className="absolute right-0.5 top-1/2 h-8 w-8 shrink-0 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    title={`Use suggestion: ${topicSuggestion}`}
-                    aria-label="Fill topic with placeholder suggestion"
+                    title={t("generationStudio.controls.useSuggestion", { suggestion: topicSuggestion })}
+                    aria-label={ctrl.fillTopicSuggestion}
                     onClick={() => setTopic(topicSuggestion)}
                   >
                     <Sparkles className="h-4 w-4" />
                   </Button>
                 </div>
                 <p id="topic-suggestion-hint" className="sr-only">
-                  Sparkles button inserts the example topic for the selected niche.
+                  {ctrl.topicHintSr}
                 </p>
               </div>
               <div className="space-y-2">
-                <Label>Accounts</Label>
+                <Label>{ctrl.accounts}</Label>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button type="button" variant="outline" className="w-full justify-between font-normal">
@@ -1297,12 +1285,12 @@ function GenerationStudioPageInner() {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)]">
-                    <DropdownMenuLabel>Select one or more accounts</DropdownMenuLabel>
+                    <DropdownMenuLabel>{acc.selectOneOrMore}</DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     {accountsLoading ? (
-                      <div className="px-2 py-1.5 text-sm text-muted-foreground">Loading accounts...</div>
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">{acc.loading}</div>
                     ) : accountChoices.length === 0 ? (
-                      <div className="px-2 py-1.5 text-sm text-muted-foreground">No accounts found</div>
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">{acc.none}</div>
                     ) : (
                       accountChoices.map((account) => (
                         <DropdownMenuCheckboxItem
@@ -1325,31 +1313,31 @@ function GenerationStudioPageInner() {
                 </DropdownMenu>
               </div>
               <div className="space-y-2">
-                <Label>Schedule</Label>
+                <Label>{ctrl.schedule}</Label>
                 <DateTimePicker
                   value={schedule}
                   onChange={setSchedule}
-                  placeholder="Pick date & time"
+                  placeholder={gs.publish.pickDateTime}
                 />
               </div>
               <div className="flex flex-col gap-2 pt-2">
                 <Button type="button" variant="secondary" disabled={previewLoading} onClick={handlePreview}>
                   {previewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                  Preview scenes (no job)
+                  {ctrl.previewScenes}
                 </Button>
                 <Button type="button" disabled={createLoading} onClick={handleCreateDraft}>
                   {createLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Video className="h-4 w-4" />}
-                  Create draft job
+                  {ctrl.createDraft}
                 </Button>
                 {jobId && canLaunch ? (
                   <>
                     <Button type="button" variant="secondary" disabled={readyLoading} onClick={handleMarkReady}>
                       {readyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                      Mark ready
+                      {ctrl.markReady}
                     </Button>
                     <Button type="button" disabled={launchLoading} onClick={handleLaunchPipeline}>
                       {launchLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
-                      Launch pipeline
+                      {ctrl.launchPipeline}
                     </Button>
                   </>
                 ) : null}
@@ -1357,8 +1345,10 @@ function GenerationStudioPageInner() {
               {jobId && (
                 <div className="space-y-2">
                   <p className="text-xs text-muted-foreground">
-                    Job <span className="font-mono">{jobId.slice(0, 8)}…</span>
-                    {job ? ` · ${job.status}` : ""}
+                    {t("generationStudio.controls.jobLine", {
+                      id: `${jobId.slice(0, 8)}…`,
+                      status: job ? job.status : "",
+                    })}
                   </p>
                   {canStopPipeline ? (
                     <Button
@@ -1370,11 +1360,11 @@ function GenerationStudioPageInner() {
                       onClick={handleStopPipeline}
                     >
                       {cancelLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
-                      Cancel job
+                      {ctrl.cancelJob}
                     </Button>
                   ) : null}
                   {jobIsCancelling ? (
-                    <p className="text-xs text-muted-foreground">Stopping… the pipeline will exit after the current step.</p>
+                    <p className="text-xs text-muted-foreground">{ctrl.stoppingPipeline}</p>
                   ) : null}
                 </div>
               )}
@@ -1385,7 +1375,7 @@ function GenerationStudioPageInner() {
                     if (!ce) return null;
                     return (
                       <>
-                        <p className="font-semibold text-foreground">Cost estimate (credits)</p>
+                        <p className="font-semibold text-foreground">{ctrl.costEstimate}</p>
                         {ce.model ? (
                           <p className="mt-1 text-muted-foreground">
                             {ce.model}
@@ -1397,8 +1387,18 @@ function GenerationStudioPageInner() {
                           {ce.breakdown.map((b) => (
                             <li key={b.line}>
                               {ce.model
-                                ? `${b.line}: ${b.units}s × ${b.unit_credits} credits/s = ${b.subtotal}`
-                                : `${b.line}: ${b.units} × ${b.unit_credits} = ${b.subtotal}`}
+                                ? t("generationStudio.controls.costLineModel", {
+                                    line: b.line,
+                                    units: b.units,
+                                    credits: b.unit_credits,
+                                    subtotal: b.subtotal,
+                                  })
+                                : t("generationStudio.controls.costLineGeneric", {
+                                    line: b.line,
+                                    units: b.units,
+                                    unitCredits: b.unit_credits,
+                                    subtotal: b.subtotal,
+                                  })}
                             </li>
                           ))}
                         </ul>
@@ -1417,20 +1417,19 @@ function GenerationStudioPageInner() {
 
           <Card className="lg:col-span-5">
             <CardHeader>
-              <CardTitle className="text-base">Timeline</CardTitle>
+              <CardTitle className="text-base">{tl.title}</CardTitle>
               <CardDescription>
-                Total storyboard length: <strong>{totalDurationSec}s</strong>. Drag blocks to reorder (draft preview uses
-                local order; saved jobs call the API).
+                {t("generationStudio.timeline.description", { seconds: totalDurationSec })}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {jobId && jobLoading ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-                  Loading job scenes…
+                  {tl.loadingScenes}
                 </div>
               ) : sortedScenes.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Create a draft job or run a stateless preview.</p>
+                <p className="text-sm text-muted-foreground">{tl.empty}</p>
               ) : (
                 <>
                   <div className="flex h-24 w-full gap-1 rounded-lg border border-border bg-muted/20 p-2">
@@ -1453,7 +1452,7 @@ function GenerationStudioPageInner() {
                           </div>
                           <div
                             className="flex min-h-[2.5rem] flex-1 items-center justify-center bg-muted/25 px-1"
-                            title="Preview appears under the scene text below"
+                            title={tl.previewUnderScene}
                           >
                             <span className="text-center text-[9px] leading-tight text-muted-foreground">
                               {scene.duration}s
@@ -1487,7 +1486,9 @@ function GenerationStudioPageInner() {
                         <div key={key} className="rounded-lg border border-border bg-card/60 p-3 shadow-sm">
                           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                             <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-xs font-medium text-muted-foreground">Scene {scene.scene_index}</span>
+                              <span className="text-xs font-medium text-muted-foreground">
+                                {t("generationStudio.timeline.scene", { index: scene.scene_index })}
+                              </span>
                               {"scene_role" in scene && scene.scene_role ? (
                                 <Badge variant="outline">{scene.scene_role}</Badge>
                               ) : "role" in scene && scene.role ? (
@@ -1505,7 +1506,7 @@ function GenerationStudioPageInner() {
                                     onClick={() => handleSceneMediaPreview(sid, "image")}
                                   >
                                     {imgPreviewBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                                    Img preview
+                                    {tl.imgPreview}
                                   </Button>
                                   <Button
                                     size="sm"
@@ -1520,12 +1521,12 @@ function GenerationStudioPageInner() {
                                     }}
                                   >
                                     {vidPreviewBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                                    {videoPanelOpen ? "Hide video" : "Vid preview"}
+                                    {videoPanelOpen ? tl.hideVideo : tl.vidPreview}
                                   </Button>
                                 </>
                               ) : null}
                               <Button size="sm" variant="outline" disabled={sceneActionsLocked} onClick={() => openEdit(scene)}>
-                                Edit
+                                {tl.edit}
                               </Button>
                               <Button
                                 size="sm"
@@ -1533,7 +1534,7 @@ function GenerationStudioPageInner() {
                                 disabled={sceneActionsLocked || sceneRegenDisabled}
                                 onClick={() => regenerateScene(scene)}
                               >
-                                Retry media
+                                {tl.retryMedia}
                               </Button>
                             </div>
                           </div>
@@ -1552,7 +1553,7 @@ function GenerationStudioPageInner() {
                                     size="icon"
                                     variant="ghost"
                                     className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground"
-                                    aria-label="View image fullscreen"
+                                    aria-label={tl.viewFullscreen}
                                     onClick={() => setImageLightboxSrc(imagePreviewSrc)}
                                   >
                                     <Maximize2 className="h-4 w-4" />
@@ -1563,7 +1564,7 @@ function GenerationStudioPageInner() {
                                     variant="ghost"
                                     className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground"
                                     aria-expanded={!imageFolded}
-                                    aria-label={imageFolded ? "Show image preview" : "Hide image preview"}
+                                    aria-label={imageFolded ? tl.showImagePreview : tl.hideImagePreview}
                                     onClick={() =>
                                       setSceneImagePreviewFolded((prev) => ({
                                         ...prev,
@@ -1583,7 +1584,7 @@ function GenerationStudioPageInner() {
                                     type="button"
                                     className="flex w-full justify-center bg-black/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                                     onClick={() => setImageLightboxSrc(imagePreviewSrc)}
-                                    aria-label="Open image preview fullscreen"
+                                    aria-label={tl.openFullscreen}
                                   >
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
@@ -1597,18 +1598,17 @@ function GenerationStudioPageInner() {
                                   </button>
                                 ) : (
                                   <div className="flex min-h-[3.5rem] items-center bg-muted/30 pl-3 pr-[4.5rem]">
-                                    <span className="text-xs text-muted-foreground">Image preview hidden</span>
+                                    <span className="text-xs text-muted-foreground">{tl.imageHidden}</span>
                                   </div>
                                 )}
                                 {meta?.preview_image_source === "kie_quick_preview" && !imageFolded ? (
                                   <p className="border-t border-border/40 bg-muted/20 px-2 py-1 text-center text-[10px] text-muted-foreground">
-                                    Kie.ai still frame — used for scene_based / multi_scene previews only.
+                                    {tl.kieFrameNote}
                                   </p>
                                 ) : null}
                                 {meta?.preview_image_source === "ailiveai_blocking_preview" && !imageFolded ? (
                                   <p className="border-t border-border/40 bg-muted/20 px-2 py-1 text-center text-[10px] text-muted-foreground">
-                                    AliveAI blocking portrait (POST /prompts). Final reel uses the same path inside
-                                    video_generation (image-to-video).
+                                    {tl.aliveaiPortraitNote}
                                   </p>
                                 ) : null}
                               </div>
@@ -1629,7 +1629,7 @@ function GenerationStudioPageInner() {
                                 >
                                   {meta?.preview_video_source === "kie_quick_preview" ? (
                                     <p className="mb-1 text-center text-[10px] leading-tight text-amber-700 dark:text-amber-300/90">
-                                      Kie.ai quick preview — other execution modes only.
+                                      {tl.kieVideoNote}
                                     </p>
                                   ) : null}
                                   <video
@@ -1662,40 +1662,37 @@ function GenerationStudioPageInner() {
 
           <Card className="lg:col-span-4">
             <CardHeader>
-              <CardTitle className="text-base">Live job</CardTitle>
+              <CardTitle className="text-base">{live.title}</CardTitle>
               <CardDescription>
                 {livePollActive || (job && job.status === "completed")
                   ? jobIsCancelling
-                    ? "Stopping… polling every 2s."
-                    : "Polling every 2–3s while the job is active."
-                  : "Polling while a job id is set."}
+                    ? live.pollingStopping
+                    : live.pollingActive
+                  : live.pollingIdle}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {!jobId ? (
-                <p className="text-sm text-muted-foreground">Create a draft job to inspect status, cost, and steps.</p>
+                <p className="text-sm text-muted-foreground">{live.noJobHint}</p>
               ) : jobLoading ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-                  Loading job status…
+                  {live.loadingStatus}
                 </div>
               ) : jobError ? (
-                <p className="text-sm text-destructive">Could not load this job. Check the ID or try again.</p>
+                <p className="text-sm text-destructive">{live.loadError}</p>
               ) : !job ? (
-                <p className="text-sm text-muted-foreground">No job data returned.</p>
+                <p className="text-sm text-muted-foreground">{live.noData}</p>
               ) : job.status === "draft" || job.status === "ready" ? (
                 <div className="space-y-3 text-sm text-muted-foreground">
-                  <span>
-                    This job is in <Badge variant="outline">{job.status}</Badge> — no media pipeline is running. Use{" "}
-                    <strong>Launch pipeline</strong> when edits are final.
-                  </span>
+                  <span>{t("generationStudio.liveJob.draftReadyHint", { status: job.status })}</span>
                   <Progress value={job.progress} className="h-2" />
                 </div>
               ) : (
                 <>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-sm">
-                      <span>Progress</span>
+                      <span>{live.progress}</span>
                       <span className="font-mono">{job.progress}%</span>
                     </div>
                     <Progress value={job.progress} className="h-2" />
@@ -1703,7 +1700,7 @@ function GenerationStudioPageInner() {
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <Badge variant={statusBadgeVariant(job.status)}>{job.status}</Badge>
                         {jobIsCancelling ? (
-                          <span className="text-xs text-muted-foreground">Stopping…</span>
+                          <span className="text-xs text-muted-foreground">{live.stopping}</span>
                         ) : null}
                       </div>
                       {canStopPipeline ? (
@@ -1716,7 +1713,7 @@ function GenerationStudioPageInner() {
                           className="shrink-0 border-destructive/50 text-destructive hover:bg-destructive/10 dark:border-destructive/60"
                         >
                           {cancelLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
-                          Cancel job
+                          {live.cancelJob}
                         </Button>
                       ) : null}
                     </div>
@@ -1724,7 +1721,7 @@ function GenerationStudioPageInner() {
 
                   {job.status === "failed" && pipelineFailureSummary ? (
                     <Alert variant="destructive">
-                      <AlertTitle>Pipeline failed</AlertTitle>
+                      <AlertTitle>{live.pipelineFailed}</AlertTitle>
                       <AlertDescription className="text-sm">{pipelineFailureSummary}</AlertDescription>
                     </Alert>
                   ) : null}
@@ -1747,27 +1744,27 @@ function GenerationStudioPageInner() {
                   ) : job.status === "completed" && assetsLoading ? (
                     <div className="flex aspect-video items-center justify-center gap-2 rounded-md border border-dashed px-3 text-sm text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Loading final output…
+                      {live.loadingOutput}
                     </div>
                   ) : (
                     <div className="flex aspect-video items-center justify-center rounded-md border border-dashed px-3 text-center text-xs text-muted-foreground">
                       {jobIsCancelled
-                        ? "Job was cancelled. Partial scene media is preserved; no final assembly was run."
+                        ? live.cancelledPartial
                         : job.status === "completed"
-                          ? "No final video URL yet. If assets exist below, use Publish or scene previews."
+                          ? live.completedNoUrl
                           : job.status === "failed"
-                            ? "No output or scene preview URL on this job. Use Timeline “Vid preview” or Retry after fixing provider limits."
-                            : "Final video appears when the pipeline completes successfully."}
+                            ? live.failedNoUrl
+                            : live.pendingOutput}
                     </div>
                   )}
 
                   <Tabs defaultValue="steps">
                     <TabsList className="w-full">
                       <TabsTrigger className="flex-1" value="steps">
-                        Steps
+                        {live.steps}
                       </TabsTrigger>
                       <TabsTrigger className="flex-1" value="logs">
-                        Logs
+                        {live.logs}
                       </TabsTrigger>
                     </TabsList>
                     <TabsContent value="steps" className="mt-3 space-y-2">
@@ -1775,7 +1772,7 @@ function GenerationStudioPageInner() {
                         const ctrl = pipelineStepControl(s.step_name, s.status);
                         const stepSkipped = stepMetadataSkipped(s.metadata);
                         const stepMergedIntoVideo = stepMergedIntoVideoGeneration(s.metadata);
-                        const skipHint = pipelineStepSkipHint(s.metadata);
+                        const skipHint = pipelineStepSkipHint(s.metadata, pipe);
                         const videoGenStartedAt =
                           s.step_name === "video_generation"
                             ? formatVideoGenExecutionStart(s.metadata)
@@ -1800,26 +1797,31 @@ function GenerationStudioPageInner() {
                                 status={s.status}
                                 skipped={stepSkipped}
                                 mergedIntoVideo={stepMergedIntoVideo}
+                                pipe={pipe}
                               />
                               <div className="min-w-0">
                                 <p className="font-medium leading-none">{s.step_name}</p>
                                 {stepSkipped && s.status === "completed" ? (
                                   <p className="text-xs text-muted-foreground">
-                                    {pipelineStepInlineLabel(s.metadata)}
+                                    {pipelineStepInlineLabel(s.metadata, pipe)}
                                   </p>
                                 ) : (
                                   <>
                                     <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
                                       <span>{s.progress}%</span>
                                       {videoGenStartedAt ? (
-                                        <span>Generation started {videoGenStartedAt}</span>
+                                        <span>
+                                          {t("generationStudio.liveJob.generationStarted", { at: videoGenStartedAt })}
+                                        </span>
                                       ) : null}
                                     </p>
                                     {typeof s.metadata?.video_scenes_completed === "number" &&
                                     typeof s.metadata?.video_scenes_total === "number" ? (
                                       <p className="text-xs text-muted-foreground">
-                                        Scenes {s.metadata.video_scenes_completed}/
-                                        {s.metadata.video_scenes_total}
+                                        {t("generationStudio.liveJob.scenesProgress", {
+                                          done: s.metadata.video_scenes_completed,
+                                          total: s.metadata.video_scenes_total,
+                                        })}
                                       </p>
                                     ) : null}
                                     {s.status === "running" &&
@@ -1835,7 +1837,7 @@ function GenerationStudioPageInner() {
                                   <p className="mt-1 text-xs text-muted-foreground">{skipHint}</p>
                                 ) : null}
                                 {ctrl === "cancelling" ? (
-                                  <p className="mt-1 text-xs text-amber-700">Cancelling…</p>
+                                  <p className="mt-1 text-xs text-amber-700">{live.cancelling}</p>
                                 ) : null}
                                 {s.status === "failed" && s.error_message ? (
                                   <p className="mt-1 text-xs text-red-600">{s.error_message}</p>
@@ -1855,10 +1857,10 @@ function GenerationStudioPageInner() {
                                   {cancelStepLoading === s.step_name ? (
                                     <span className="inline-flex items-center gap-1">
                                       <Loader2 className="h-3 w-3 animate-spin" />
-                                      Cancel
+                                      {live.cancel}
                                     </span>
                                   ) : (
-                                    "Cancel"
+                                    live.cancel
                                   )}
                                 </Button>
                               ) : null}
@@ -1877,7 +1879,7 @@ function GenerationStudioPageInner() {
                                 }
                                 onClick={() => retryStep(s.step_name)}
                               >
-                                Retry
+                                {live.retry}
                               </Button>
                             </div>
                           </div>
@@ -1886,7 +1888,7 @@ function GenerationStudioPageInner() {
                     </TabsContent>
                     <TabsContent value="logs" className="mt-3 max-h-56 overflow-y-auto rounded-md border bg-muted/30 p-2 font-mono text-[11px] leading-relaxed">
                       {logs.length === 0 ? (
-                        <span className="text-muted-foreground">No log lines yet.</span>
+                        <span className="text-muted-foreground">{live.noLogs}</span>
                       ) : (
                         logs.map((line, i) => (
                           <div key={`${line.ts}-${i}`} className="whitespace-pre-wrap">
@@ -1915,7 +1917,7 @@ function GenerationStudioPageInner() {
               <CardContent className="py-8">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading generated assets...
+                  {live.loadingAssets}
                 </div>
               </CardContent>
             </Card>
@@ -1939,7 +1941,7 @@ function GenerationStudioPageInner() {
       >
         <DialogContent className="flex max-h-[95vh] max-w-[min(96vw,1200px)] flex-col gap-0 border-border/40 bg-black p-2 sm:p-4">
           <DialogHeader className="sr-only">
-            <DialogTitle>Scene image preview</DialogTitle>
+            <DialogTitle>{editLabels.imageLightbox}</DialogTitle>
           </DialogHeader>
           {imageLightboxSrc ? (
             <div className="flex min-h-[min(88vh,900px)] w-full flex-1 items-center justify-center overflow-auto">
@@ -1957,11 +1959,11 @@ function GenerationStudioPageInner() {
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit scene</DialogTitle>
+            <DialogTitle>{editLabels.title}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="space-y-2">
-              <Label>Prompt</Label>
+              <Label>{editLabels.prompt}</Label>
               <textarea
                 className="min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
                 value={editPrompt}
@@ -1969,7 +1971,7 @@ function GenerationStudioPageInner() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Duration (seconds)</Label>
+              <Label>{editLabels.duration}</Label>
               <Select value={String(editDuration)} onValueChange={(v) => setEditDuration(Number(v))}>
                 <SelectTrigger>
                   <SelectValue />
@@ -1982,7 +1984,7 @@ function GenerationStudioPageInner() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Role</Label>
+              <Label>{editLabels.role}</Label>
               <Select value={editRole} onValueChange={setEditRole}>
                 <SelectTrigger>
                   <SelectValue />
@@ -1997,9 +1999,9 @@ function GenerationStudioPageInner() {
           </div>
           <DialogFooter>
             <Button variant="secondary" onClick={() => setEditOpen(false)}>
-              Cancel
+              {editLabels.cancel}
             </Button>
-            <Button onClick={saveEdit}>Save</Button>
+            <Button onClick={saveEdit}>{editLabels.save}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2007,16 +2009,19 @@ function GenerationStudioPageInner() {
   );
 }
 
+function StudioLoadingFallback() {
+  const { text } = useLocale();
+  return (
+    <div className="flex min-h-[40vh] items-center justify-center gap-2 text-sm text-muted-foreground">
+      <Loader2 className="h-5 w-5 animate-spin" />
+      {text.generationStudio.loadingStudio}
+    </div>
+  );
+}
+
 export default function GenerationStudioPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-[40vh] items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          Loading studio…
-        </div>
-      }
-    >
+    <Suspense fallback={<StudioLoadingFallback />}>
       <GenerationStudioPageInner />
     </Suspense>
   );

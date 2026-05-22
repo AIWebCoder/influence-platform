@@ -35,6 +35,8 @@ import {
 } from "@/components/ui/table";
 import { api, formatContentApiError, type AppUserRole, type UserRecord } from "@/lib/api";
 import { useCurrentUser } from "@/lib/auth";
+import { useLocale } from "@/components/i18n/LocaleProvider";
+import type { TranslationTree } from "@/lib/i18n";
 
 function roleBadgeVariant(role: AppUserRole): "default" | "secondary" | "outline" {
   if (role === "admin") return "default";
@@ -50,6 +52,8 @@ function formatDate(value: string): string {
 }
 
 export default function UsersPage() {
+  const { text, t } = useLocale();
+  const u = text.users;
   const { isAuthenticated, isAdmin, email: currentEmail, status } = useCurrentUser();
 
   const swrKey = isAuthenticated && isAdmin ? "users-list" : null;
@@ -63,7 +67,7 @@ export default function UsersPage() {
   const [resetTarget, setResetTarget] = useState<UserRecord | null>(null);
 
   if (status === "loading") {
-    return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
+    return <div className="p-6 text-sm text-muted-foreground">{u.loading}</div>;
   }
 
   if (!isAuthenticated) {
@@ -74,10 +78,8 @@ export default function UsersPage() {
     return (
       <div className="p-6">
         <Alert variant="destructive">
-          <AlertTitle>Access denied</AlertTitle>
-          <AlertDescription>
-            You need administrator privileges to view this page. Ask an admin to grant you access or change your role.
-          </AlertDescription>
+          <AlertTitle>{u.accessDeniedTitle}</AlertTitle>
+          <AlertDescription>{u.accessDeniedDesc}</AlertDescription>
         </Alert>
       </div>
     );
@@ -86,10 +88,10 @@ export default function UsersPage() {
   async function handleToggleActive(user: UserRecord) {
     try {
       await api.users.update(user.id, { is_active: !user.is_active });
-      toast.success(user.is_active ? "User deactivated." : "User activated.");
+      toast.success(user.is_active ? u.deactivated : u.activated);
       mutate();
     } catch (err) {
-      toast.error(formatContentApiError(err, "Could not update user."));
+      toast.error(formatContentApiError(err, u.updateUserError));
     }
   }
 
@@ -97,21 +99,21 @@ export default function UsersPage() {
     if (role === user.role) return;
     try {
       await api.users.update(user.id, { role });
-      toast.success("Role updated.");
+      toast.success(u.roleUpdated);
       mutate();
     } catch (err) {
-      toast.error(formatContentApiError(err, "Could not update role."));
+      toast.error(formatContentApiError(err, u.updateRoleError));
     }
   }
 
   async function handleDelete(user: UserRecord) {
-    if (!confirm(`Delete ${user.email}? This cannot be undone.`)) return;
+    if (!confirm(t("users.deleteConfirm", { email: user.email }))) return;
     try {
       await api.users.remove(user.id);
-      toast.success("User deleted.");
+      toast.success(u.deleted);
       mutate();
     } catch (err) {
-      toast.error(formatContentApiError(err, "Could not delete user."));
+      toast.error(formatContentApiError(err, u.deleteError));
     }
   }
 
@@ -119,20 +121,18 @@ export default function UsersPage() {
     <div className="space-y-6 p-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Users &amp; access</h1>
-          <p className="text-sm text-muted-foreground">
-            Create operator accounts, manage roles, and disable access when needed.
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">{u.title}</h1>
+          <p className="text-sm text-muted-foreground">{u.subtitle}</p>
         </div>
         <Button onClick={() => setCreateOpen(true)} className="gap-2">
-          <Plus className="size-4" /> New operator
+          <Plus className="size-4" /> {u.newOperator}
         </Button>
       </div>
 
       {error ? (
         <Alert variant="destructive">
-          <AlertTitle>Failed to load users</AlertTitle>
-          <AlertDescription>{formatContentApiError(error, "Try again later.")}</AlertDescription>
+          <AlertTitle>{u.loadErrorTitle}</AlertTitle>
+          <AlertDescription>{formatContentApiError(error, u.loadErrorDesc)}</AlertDescription>
         </Alert>
       ) : null}
 
@@ -140,24 +140,24 @@ export default function UsersPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Email</TableHead>
-              <TableHead>Role</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Created</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead>{u.email}</TableHead>
+              <TableHead>{u.role}</TableHead>
+              <TableHead>{u.status}</TableHead>
+              <TableHead>{u.createdAt}</TableHead>
+              <TableHead className="text-right">{u.actions}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
                 <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
-                  Loading users…
+                  {u.loadingUsers}
                 </TableCell>
               </TableRow>
             ) : !users || users.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
-                  No users yet — create the first operator.
+                  {u.empty}
                 </TableCell>
               </TableRow>
             ) : (
@@ -170,7 +170,7 @@ export default function UsersPage() {
                         {user.email}
                         {isSelf ? (
                           <Badge variant="outline" className="text-xs">
-                            you
+                            {u.youBadge}
                           </Badge>
                         ) : null}
                       </div>
@@ -185,15 +185,15 @@ export default function UsersPage() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="admin">Admin</SelectItem>
-                          <SelectItem value="operator">Operator</SelectItem>
-                          <SelectItem value="viewer">Viewer</SelectItem>
+                          <SelectItem value="admin">{u.roleAdmin}</SelectItem>
+                          <SelectItem value="operator">{u.roleOperator}</SelectItem>
+                          <SelectItem value="viewer">{u.roleViewer}</SelectItem>
                         </SelectContent>
                       </Select>
                     </TableCell>
                     <TableCell>
                       <Badge variant={user.is_active ? roleBadgeVariant(user.role) : "outline"}>
-                        {user.is_active ? "Active" : "Disabled"}
+                        {user.is_active ? u.active : u.disabled}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
@@ -208,7 +208,7 @@ export default function UsersPage() {
                           onClick={() => setResetTarget(user)}
                         >
                           <KeyRound className="size-4" />
-                          Reset
+                          {u.reset}
                         </Button>
                         <Button
                           size="sm"
@@ -216,15 +216,15 @@ export default function UsersPage() {
                           className="gap-1"
                           disabled={isSelf}
                           onClick={() => handleToggleActive(user)}
-                          title={isSelf ? "Admins cannot deactivate themselves" : ""}
+                          title={isSelf ? u.cannotDeactivateSelf : ""}
                         >
                           {user.is_active ? (
                             <>
-                              <ShieldX className="size-4" /> Disable
+                              <ShieldX className="size-4" /> {u.disable}
                             </>
                           ) : (
                             <>
-                              <ShieldCheck className="size-4" /> Enable
+                              <ShieldCheck className="size-4" /> {u.enable}
                             </>
                           )}
                         </Button>
@@ -234,9 +234,9 @@ export default function UsersPage() {
                           className="gap-1"
                           disabled={isSelf}
                           onClick={() => handleDelete(user)}
-                          title={isSelf ? "Admins cannot delete themselves" : ""}
+                          title={isSelf ? u.cannotDeleteSelf : ""}
                         >
-                          <Trash2 className="size-4" /> Delete
+                          <Trash2 className="size-4" /> {u.delete}
                         </Button>
                       </div>
                     </TableCell>
@@ -252,9 +252,11 @@ export default function UsersPage() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={() => mutate()}
+        labels={u}
       />
       <ResetPasswordDialog
         target={resetTarget}
+        labels={u}
         onOpenChange={(open) => {
           if (!open) setResetTarget(null);
         }}
@@ -267,10 +269,12 @@ function CreateUserDialog({
   open,
   onOpenChange,
   onCreated,
+  labels: u,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: () => void;
+  labels: TranslationTree["users"];
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -290,11 +294,11 @@ function CreateUserDialog({
     setSubmitting(true);
     try {
       await api.users.create({ email: email.trim().toLowerCase(), password, role });
-      toast.success("User created.");
+      toast.success(u.createSuccess);
       onCreated();
       onOpenChange(false);
     } catch (err) {
-      toast.error(formatContentApiError(err, "Could not create user."));
+      toast.error(formatContentApiError(err, u.createError));
     } finally {
       setSubmitting(false);
     }
@@ -304,15 +308,12 @@ function CreateUserDialog({
     <Dialog open={open} onOpenChange={(value) => !submitting && onOpenChange(value)}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Create new user</DialogTitle>
-          <DialogDescription>
-            New accounts can be Operators (full operations) or Viewers (read-only). Promote to Admin only after the
-            account is set up.
-          </DialogDescription>
+          <DialogTitle>{u.createTitle}</DialogTitle>
+          <DialogDescription>{u.createDesc}</DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={onSubmit}>
           <div className="space-y-2">
-            <Label htmlFor="new-user-email">Email</Label>
+            <Label htmlFor="new-user-email">{u.email}</Label>
             <Input
               id="new-user-email"
               type="email"
@@ -323,7 +324,7 @@ function CreateUserDialog({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="new-user-password">Initial password</Label>
+            <Label htmlFor="new-user-password">{u.initialPassword}</Label>
             <Input
               id="new-user-password"
               type="password"
@@ -333,29 +334,27 @@ function CreateUserDialog({
               required
               minLength={8}
             />
-            <p className="text-xs text-muted-foreground">
-              Min 8 chars, with upper, lower, digit and special character. Ask the user to change it on first login.
-            </p>
+            <p className="text-xs text-muted-foreground">{u.passwordRules}</p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="new-user-role">Role</Label>
+            <Label htmlFor="new-user-role">{u.role}</Label>
             <Select value={role} onValueChange={(v) => setRole(v as AppUserRole)}>
               <SelectTrigger id="new-user-role">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="operator">Operator</SelectItem>
-                <SelectItem value="viewer">Viewer</SelectItem>
-                <SelectItem value="admin">Admin</SelectItem>
+                <SelectItem value="operator">{u.roleOperator}</SelectItem>
+                <SelectItem value="viewer">{u.roleViewer}</SelectItem>
+                <SelectItem value="admin">{u.roleAdmin}</SelectItem>
               </SelectContent>
             </Select>
           </div>
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
-              Cancel
+              {u.cancel}
             </Button>
             <Button type="submit" disabled={submitting || !email || !password}>
-              {submitting ? "Creating…" : "Create user"}
+              {submitting ? u.creating : u.createUser}
             </Button>
           </DialogFooter>
         </form>
@@ -367,10 +366,13 @@ function CreateUserDialog({
 function ResetPasswordDialog({
   target,
   onOpenChange,
+  labels: u,
 }: {
   target: UserRecord | null;
   onOpenChange: (open: boolean) => void;
+  labels: TranslationTree["users"];
 }) {
+  const { t } = useLocale();
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const open = target !== null;
@@ -385,10 +387,10 @@ function ResetPasswordDialog({
     setSubmitting(true);
     try {
       await api.users.update(target.id, { password });
-      toast.success(`Password reset for ${target.email}.`);
+      toast.success(t("users.resetSuccess", { email: target.email }));
       onOpenChange(false);
     } catch (err) {
-      toast.error(formatContentApiError(err, "Could not reset password."));
+      toast.error(formatContentApiError(err, u.resetError));
     } finally {
       setSubmitting(false);
     }
@@ -398,15 +400,14 @@ function ResetPasswordDialog({
     <Dialog open={open} onOpenChange={(value) => !submitting && onOpenChange(value)}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Reset password</DialogTitle>
+          <DialogTitle>{u.resetTitle}</DialogTitle>
           <DialogDescription>
-            Issue a new password for <span className="font-medium">{target?.email}</span>. Share it securely; they
-            should change it on first sign-in.
+            {t("users.resetDesc", { email: target?.email ?? "" })}
           </DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={onSubmit}>
           <div className="space-y-2">
-            <Label htmlFor="reset-password">New password</Label>
+            <Label htmlFor="reset-password">{u.newPassword}</Label>
             <Input
               id="reset-password"
               type="password"
@@ -419,10 +420,10 @@ function ResetPasswordDialog({
           </div>
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
-              Cancel
+              {u.cancel}
             </Button>
             <Button type="submit" disabled={submitting || !password}>
-              {submitting ? "Saving…" : "Reset password"}
+              {submitting ? u.saving : u.resetPassword}
             </Button>
           </DialogFooter>
         </form>

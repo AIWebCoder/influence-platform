@@ -34,9 +34,9 @@ type CalendarItem = {
 };
 
 export default function CalendarPage() {
-  const { locale } = useLocale();
-  const isFr = locale === "fr";
-  const dateLocale = isFr ? frLocale : enUS;
+  const { locale, text } = useLocale();
+  const cal = text.editorialCalendar;
+  const dateLocale = locale === "fr" ? frLocale : enUS;
 
   const [weekAnchor, setWeekAnchor] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const [items, setItems] = useState<CalendarItem[]>([]);
@@ -61,16 +61,11 @@ export default function CalendarPage() {
       const data = await api.content.getEditorialCalendar({ start_date: start, end_date: end });
       setItems(data);
     } catch (e: unknown) {
-      setError(
-        formatContentApiError(
-          e,
-          isFr ? "Calendrier indisponible (vérifiez la base de données)." : "Calendar unavailable (check database).",
-        ),
-      );
+      setError(formatContentApiError(e, cal.unavailable));
     } finally {
       setLoading(false);
     }
-  }, [weekAnchor, isFr]);
+  }, [weekAnchor, cal.unavailable]);
 
   useEffect(() => {
     load();
@@ -105,13 +100,11 @@ export default function CalendarPage() {
     setSaving(true);
     try {
       await api.content.patchPacketSchedule(editItem.id, editWhen.toISOString());
-      toast.success(isFr ? "Horaire enregistré." : "Schedule saved.");
+      toast.success(cal.scheduleSaved);
       setEditItem(null);
       await load();
     } catch (e: unknown) {
-      toast.error(
-        formatContentApiError(e, isFr ? "Impossible de mettre à jour l'horaire." : "Could not update schedule."),
-      );
+      toast.error(formatContentApiError(e, cal.scheduleError));
     } finally {
       setSaving(false);
     }
@@ -123,7 +116,7 @@ export default function CalendarPage() {
         <div>
           <h2 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
             <CalendarDays className="h-6 w-6 text-primary" />
-            {isFr ? "Calendrier éditorial" : "Editorial calendar"}
+            {cal.title}
           </h2>
           <p className="text-sm text-muted-foreground">
             {format(weekAnchor, "d MMM", { locale: dateLocale })} –{" "}
@@ -135,7 +128,7 @@ export default function CalendarPage() {
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <Button variant="outline" size="sm" onClick={() => setWeekAnchor(startOfWeek(new Date(), { weekStartsOn: 1 }))}>
-            {isFr ? "Cette semaine" : "This week"}
+            {cal.thisWeek}
           </Button>
           <Button variant="outline" size="icon" onClick={() => setWeekAnchor((w) => addWeeks(w, 1))}>
             <ChevronRight className="h-4 w-4" />
@@ -202,7 +195,7 @@ export default function CalendarPage() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">
-                  {isFr ? "Sans horaire" : "Unscheduled"} ({unscheduled.length})
+                  {cal.unscheduled} ({unscheduled.length})
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex flex-wrap gap-2">
@@ -220,33 +213,33 @@ export default function CalendarPage() {
       <Dialog open={Boolean(editItem)} onOpenChange={(open) => !open && setEditItem(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{isFr ? "Planifier la publication" : "Schedule content"}</DialogTitle>
+            <DialogTitle>{cal.scheduleDialogTitle}</DialogTitle>
             <DialogDescription>
               {editItem?.caption?.slice(0, 120) || editItem?.niche || editItem?.id}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label>{isFr ? "Date et heure" : "Date & time"}</Label>
+              <Label>{cal.dateTime}</Label>
               <DateTimePicker
                 value={editWhen}
                 onChange={setEditWhen}
-                placeholder={isFr ? "Choisir un créneau" : "Pick a slot"}
+                placeholder={cal.pickSlot}
               />
             </div>
             {editItem ? (
               <p className="text-xs text-muted-foreground">
-                {isFr ? "Statut" : "Status"}: <Badge variant="outline">{editItem.status}</Badge>
+                {cal.status}: <Badge variant="outline">{editItem.status}</Badge>
               </p>
             ) : null}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setEditItem(null)}>
-              {isFr ? "Annuler" : "Cancel"}
+              {cal.cancel}
             </Button>
             <Button type="button" onClick={handleSaveSchedule} disabled={saving || !editWhen}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              {isFr ? "Enregistrer" : "Save"}
+              {cal.save}
             </Button>
           </DialogFooter>
         </DialogContent>

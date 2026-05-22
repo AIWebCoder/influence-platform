@@ -92,7 +92,7 @@ function formatProxy(row: PersonaRow) {
 }
 
 export default function PersonasPage() {
-  const { text } = useLocale();
+  const { text, t } = useLocale();
   const p = text.personas;
 
   const [personas, setPersonas] = useState<PersonaRow[]>([]);
@@ -428,7 +428,7 @@ export default function PersonasPage() {
                 id="persona-name"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="persona-paris-1"
+                placeholder={p.namePlaceholder}
               />
             </div>
             <div className="grid gap-2">
@@ -486,7 +486,9 @@ export default function PersonasPage() {
                     {proxies.map((px) => (
                       <SelectItem key={px.id} value={px.id}>
                         {px.host}:{px.port}
-                        {!px.is_active ? " (inactive)" : ""}
+                        {!px.is_active
+                          ? t("personas.inactiveSuffix", { status: p.inactive })
+                          : ""}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -503,7 +505,7 @@ export default function PersonasPage() {
                   id="device-serial"
                   value={deviceSerial}
                   onChange={(e) => setDeviceSerial(e.target.value)}
-                  placeholder="emulator-5554"
+                  placeholder={p.emulatorSerialPlaceholder}
                 />
                 <Button
                   size="sm"
