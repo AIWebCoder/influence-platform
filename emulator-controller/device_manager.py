@@ -933,8 +933,8 @@ class DeviceManager:
     ) -> dict[str, Any]:
         """Open the launcher app drawer (All apps grid).
 
-        Tries, in order: resolved ALL_APPS activity, ALL_APPS intent, KEYCODE_ALL_APPS (284),
-        KEYCODE_MENU (82), then upward swipes (gesture nav).
+        Runs a combo of inputs. ``am start`` alone often returns success on Pixel AVDs
+        without showing the grid, so we always follow with KEYCODE_ALL_APPS and swipes.
         """
         size = await self.get_screen_size(serial)
         if size:
@@ -943,34 +943,41 @@ class DeviceManager:
             width, height = 1080, 2400
 
         x = width // 2
-        y1 = height - 1
-        y2 = max(80, int(height * 0.10))
-        duration = 1200
+        steps: list[str] = []
 
         await self.input_keyevent(serial, 3)
-        await asyncio.sleep(0.45)
+        steps.append("home")
+        await asyncio.sleep(0.55)
 
-        method = "swipe"
-        errors: list[str] = []
+        for keycode, label in ((284, "keyevent_all_apps"), (82, "keyevent_menu")):
+            try:
+                await self.input_keyevent(serial, keycode)
+                steps.append(label)
+                await asyncio.sleep(0.4)
+            except RuntimeError as exc:
+                logger.debug("app_drawer %s failed for %s: %s", label, serial, exc)
 
-        component = await self._resolve_all_apps_component(serial)
-        if component:
+        activity_candidates: list[str] = []
+        resolved = await self._resolve_all_apps_component(serial)
+        if resolved:
+            activity_candidates.append(resolved)
+        activity_candidates.extend(
+            [
+                "com.google.android.apps.nexuslauncher/com.google.android.apps.nexuslauncher.allapps.AllAppsActivity",
+                "com.google.android.apps.nexuslauncher/.allapps.AllAppsActivity",
+            ]
+        )
+        seen_activities: set[str] = set()
+        for component in activity_candidates:
+            if component in seen_activities:
+                continue
+            seen_activities.add(component)
             try:
                 await self._start_component(serial, component)
-                method = "resolve_activity"
-                return {
-                    "method": method,
-                    "component": component,
-                    "width": width,
-                    "height": height,
-                    "x1": x,
-                    "y1": y1,
-                    "x2": x,
-                    "y2": y2,
-                    "duration": duration,
-                }
+                steps.append(f"activity:{component}")
+                await asyncio.sleep(0.35)
             except RuntimeError as exc:
-                errors.append(f"resolve_activity: {exc}")
+                logger.debug("app_drawer activity %s failed: %s", component, exc)
 
         try:
             await self._adb(
@@ -984,59 +991,40 @@ class DeviceManager:
                 "android.intent.category.DEFAULT",
                 timeout_seconds=8.0,
             )
-            method = "intent"
-            return {
-                "method": method,
-                "width": width,
-                "height": height,
-                "x1": x,
-                "y1": y1,
-                "x2": x,
-                "y2": y2,
-                "duration": duration,
-            }
+            steps.append("intent")
+            await asyncio.sleep(0.3)
         except RuntimeError as exc:
-            errors.append(f"intent: {exc}")
+            logger.debug("app_drawer intent failed for %s: %s", serial, exc)
 
-        for keycode, label in ((284, "keyevent_all_apps"), (82, "keyevent_menu")):
-            try:
-                await self.input_keyevent(serial, keycode)
-                await asyncio.sleep(0.35)
-                method = label
-                return {
-                    "method": method,
-                    "keycode": keycode,
-                    "width": width,
-                    "height": height,
-                    "x1": x,
-                    "y1": y1,
-                    "x2": x,
-                    "y2": y2,
-                    "duration": duration,
-                }
-            except RuntimeError as exc:
-                errors.append(f"{label}: {exc}")
+        try:
+            await self._adb(
+                serial,
+                "shell",
+                "cmd",
+                "launcher",
+                "all-apps",
+                timeout_seconds=5.0,
+            )
+            steps.append("cmd_launcher_all_apps")
+            await asyncio.sleep(0.3)
+        except RuntimeError as exc:
+            logger.debug("app_drawer cmd launcher all-apps failed for %s: %s", serial, exc)
 
-        logger.warning(
-            "app_drawer fallbacks for %s: %s",
-            serial,
-            "; ".join(errors) if errors else "none",
+        swipe_moves = (
+            (x, int(height * 0.94), x, int(height * 0.40), 280),
+            (x, int(height * 0.82), x, int(height * 0.12), 750),
         )
-        await self.input_swipe(serial, x, y1, x, y2, duration)
-        await asyncio.sleep(0.15)
-        mid_y1 = int(height * 0.72)
-        mid_y2 = int(height * 0.18)
-        await self.input_swipe(serial, x, mid_y1, x, mid_y2, 900)
+        for idx, (sx, sy1, sy2, dur) in enumerate(swipe_moves):
+            await self.input_swipe(serial, sx, sy1, sx, sy2, dur)
+            steps.append(f"swipe_{idx}")
+            await asyncio.sleep(0.25)
 
         return {
-            "method": method,
+            "method": "combo",
+            "steps": steps,
             "width": width,
             "height": height,
-            "x1": x,
-            "y1": y1,
-            "x2": x,
-            "y2": y2,
-            "duration": duration,
+            "x": x,
         }
 
     @staticmethod

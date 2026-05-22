@@ -267,14 +267,8 @@ export default function EmulatorsPage() {
         }));
         return;
       }
-      if (body.method === "swipe") {
-        setErrorBySerial((prev) => ({
-          ...prev,
-          [serial]:
-            "App drawer used swipe fallback — launch the AVD with a visible window (not headless) if the grid does not appear.",
-        }));
-      }
       setTick((t) => t + 1);
+      window.setTimeout(() => setTick((t) => t + 1), 700);
     } catch {
       setErrorBySerial((prev) => ({
         ...prev,
