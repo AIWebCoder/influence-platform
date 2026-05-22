@@ -255,13 +255,24 @@ export default function EmulatorsPage() {
           cache: "no-store",
         }
       );
-      const body = (await res.json()) as { status: string; error?: string };
+      const body = (await res.json()) as {
+        status: string;
+        error?: string;
+        method?: string;
+      };
       if (!res.ok || body.status !== "success") {
         setErrorBySerial((prev) => ({
           ...prev,
-          [serial]: body.error || "App drawer swipe failed",
+          [serial]: body.error || "App drawer failed",
         }));
         return;
+      }
+      if (body.method === "swipe") {
+        setErrorBySerial((prev) => ({
+          ...prev,
+          [serial]:
+            "App drawer used swipe fallback — launch the AVD with a visible window (not headless) if the grid does not appear.",
+        }));
       }
       setTick((t) => t + 1);
     } catch {

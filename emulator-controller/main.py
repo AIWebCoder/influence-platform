@@ -937,7 +937,7 @@ class EmulatorOrchestrator:
 
         async with lock:
             try:
-                await runner()
+                result = await runner()
                 duration_ms = int((monotonic() - started) * 1000)
                 logger.info(
                     "emulator_input_action serial=%s action=%s data=%s duration_ms=%s",
@@ -946,12 +946,13 @@ class EmulatorOrchestrator:
                     json.dumps(data, ensure_ascii=True),
                     duration_ms,
                 )
-                return web.json_response(
-                    {
-                        "status": "success",
-                        "execution_time_ms": duration_ms,
-                    }
-                )
+                payload: dict[str, Any] = {
+                    "status": "success",
+                    "execution_time_ms": duration_ms,
+                }
+                if isinstance(result, dict):
+                    payload.update(result)
+                return web.json_response(payload)
             except Exception as exc:
                 duration_ms = int((monotonic() - started) * 1000)
                 logger.error(

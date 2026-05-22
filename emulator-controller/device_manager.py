@@ -902,16 +902,39 @@ class DeviceManager:
             return False
         return str(key).strip().lower() in ("app_drawer", "menu", "drawer")
 
+    async def _resolve_all_apps_component(self, serial: str) -> str | None:
+        try:
+            _, out, _ = await self._adb(
+                serial,
+                "shell",
+                "cmd",
+                "package",
+                "resolve-activity",
+                "--brief",
+                "-a",
+                "android.intent.action.ALL_APPS",
+                "-c",
+                "android.intent.category.DEFAULT",
+                timeout_seconds=6.0,
+            )
+        except RuntimeError:
+            return None
+        for line in out.splitlines():
+            candidate = line.strip()
+            if candidate and "/" in candidate and candidate != "No activity found":
+                return candidate
+        return None
+
     async def input_app_drawer(
         self,
         serial: str,
         width: int | None = None,
         height: int | None = None,
-    ) -> dict[str, int]:
+    ) -> dict[str, Any]:
         """Open the launcher app drawer (All apps grid).
 
-        Primary: ``am start -a android.intent.action.ALL_APPS`` (Nexus/Pixel Launcher).
-        Fallback: HOME + long upward swipe (gesture nav often ignores short ``input swipe``).
+        Tries, in order: resolved ALL_APPS activity, ALL_APPS intent, KEYCODE_ALL_APPS (284),
+        KEYCODE_MENU (82), then upward swipes (gesture nav).
         """
         size = await self.get_screen_size(serial)
         if size:
@@ -925,9 +948,30 @@ class DeviceManager:
         duration = 1200
 
         await self.input_keyevent(serial, 3)
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.45)
 
-        method = "intent"
+        method = "swipe"
+        errors: list[str] = []
+
+        component = await self._resolve_all_apps_component(serial)
+        if component:
+            try:
+                await self._start_component(serial, component)
+                method = "resolve_activity"
+                return {
+                    "method": method,
+                    "component": component,
+                    "width": width,
+                    "height": height,
+                    "x1": x,
+                    "y1": y1,
+                    "x2": x,
+                    "y2": y2,
+                    "duration": duration,
+                }
+            except RuntimeError as exc:
+                errors.append(f"resolve_activity: {exc}")
+
         try:
             await self._adb(
                 serial,
@@ -936,16 +980,53 @@ class DeviceManager:
                 "start",
                 "-a",
                 "android.intent.action.ALL_APPS",
+                "-c",
+                "android.intent.category.DEFAULT",
+                timeout_seconds=8.0,
             )
+            method = "intent"
+            return {
+                "method": method,
+                "width": width,
+                "height": height,
+                "x1": x,
+                "y1": y1,
+                "x2": x,
+                "y2": y2,
+                "duration": duration,
+            }
         except RuntimeError as exc:
-            logger.warning("ALL_APPS intent failed for %s: %s; using swipe fallback", serial, exc)
-            method = "swipe"
-            await self.input_swipe(serial, x, y1, x, y2, duration)
-            await asyncio.sleep(0.15)
-            # Second swipe from workspace (above search bar) for launchers that ignore edge swipes.
-            mid_y1 = int(height * 0.72)
-            mid_y2 = int(height * 0.18)
-            await self.input_swipe(serial, x, mid_y1, x, mid_y2, 900)
+            errors.append(f"intent: {exc}")
+
+        for keycode, label in ((284, "keyevent_all_apps"), (82, "keyevent_menu")):
+            try:
+                await self.input_keyevent(serial, keycode)
+                await asyncio.sleep(0.35)
+                method = label
+                return {
+                    "method": method,
+                    "keycode": keycode,
+                    "width": width,
+                    "height": height,
+                    "x1": x,
+                    "y1": y1,
+                    "x2": x,
+                    "y2": y2,
+                    "duration": duration,
+                }
+            except RuntimeError as exc:
+                errors.append(f"{label}: {exc}")
+
+        logger.warning(
+            "app_drawer fallbacks for %s: %s",
+            serial,
+            "; ".join(errors) if errors else "none",
+        )
+        await self.input_swipe(serial, x, y1, x, y2, duration)
+        await asyncio.sleep(0.15)
+        mid_y1 = int(height * 0.72)
+        mid_y2 = int(height * 0.18)
+        await self.input_swipe(serial, x, mid_y1, x, mid_y2, 900)
 
         return {
             "method": method,
