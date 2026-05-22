@@ -1014,8 +1014,8 @@ class DeviceManager:
             (x, int(height * 0.94), x, int(height * 0.40), 280),
             (x, int(height * 0.82), x, int(height * 0.12), 750),
         )
-        for idx, (sx, sy1, sy2, dur) in enumerate(swipe_moves):
-            await self.input_swipe(serial, sx, sy1, sx, sy2, dur)
+        for idx, (x1, y1, x2, y2, dur) in enumerate(swipe_moves):
+            await self.input_swipe(serial, x1, y1, x2, y2, dur)
             steps.append(f"swipe_{idx}")
             await asyncio.sleep(0.25)
 
