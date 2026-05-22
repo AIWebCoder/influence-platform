@@ -72,6 +72,7 @@ curl -s -H "Authorization: Bearer $EMULATOR_AGENT_TOKEN" http://127.0.0.1:19200/
 | GET | `/avds` | `emulator -list-avds` |
 | GET | `/preflight` | Acceleration check (KVM on Linux, `emulator -accel-check` on Windows/macOS) + AVD list |
 | POST | `/launch` | Start an AVD (`{"avd_name":"...", "headless": true}`) |
+| POST | `/stop` | End session (`{"serial":"emulator-5556"}`) — runs **host-local** `adb emu kill` (required when the controller runs in Docker) |
 
 All endpoints except `/healthz` require `Authorization: Bearer <token>` when `EMULATOR_AGENT_TOKEN` is set.
 

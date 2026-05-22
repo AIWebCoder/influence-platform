@@ -219,7 +219,7 @@ services:
       CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-3-5-sonnet-20241022}
       APPIUM_SERVER_URL: ${APPIUM_SERVER_URL:-http://host.docker.internal:4723}
       ANDROID_APP_PACKAGE: ${ANDROID_APP_PACKAGE:-com.instagram.android}
-      ANDROID_APP_ACTIVITY: ${ANDROID_APP_ACTIVITY:-com.instagram.mainactivity.MainActivity}
+      ANDROID_APP_ACTIVITY: ${ANDROID_APP_ACTIVITY:-com.instagram.mainactivity.LauncherActivity}
       ADB_PATH: ${ADB_PATH:-adb}
       ADB_HOST: ${ADB_HOST:-host.docker.internal}
       ADB_PORT: ${ADB_PORT:-5037}

@@ -11,6 +11,7 @@ export async function GET() {
     const res = await fetch(`${controllerBase}/emulators`, {
       cache: "no-store",
       headers: { "x-trace-id": String(traceId) },
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
       const text = await res.text();

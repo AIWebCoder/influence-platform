@@ -6,6 +6,7 @@ import {
   Instagram,
   Menu,
   Monitor,
+  Power,
   RefreshCw,
   RotateCcw,
 } from "lucide-react";
@@ -35,6 +36,7 @@ type EmulatorDeviceCardProps = {
   controlEnabled: boolean;
   busy: boolean;
   restarting: boolean;
+  stopping: boolean;
   refreshing: boolean;
   launchingIg: boolean;
   pressingMenu: boolean;
@@ -44,6 +46,7 @@ type EmulatorDeviceCardProps = {
   onMouseUp: (event: MouseEvent<HTMLDivElement>) => void;
   onRefresh: () => void;
   onRestart: () => void;
+  onEndSession: () => void;
   onOpenInstagram: () => void;
   onPressMenu: () => void;
 };
@@ -67,6 +70,7 @@ export function EmulatorDeviceCard({
   controlEnabled,
   busy,
   restarting,
+  stopping,
   refreshing,
   launchingIg,
   pressingMenu,
@@ -76,12 +80,13 @@ export function EmulatorDeviceCard({
   onMouseUp,
   onRefresh,
   onRestart,
+  onEndSession,
   onOpenInstagram,
   onPressMenu,
 }: EmulatorDeviceCardProps) {
   const sw = emulator.screen_size?.width ?? 1080;
   const sh = emulator.screen_size?.height ?? 2400;
-  const resolution = `${sw}×${sh}`;
+  const resolution = `${sw}x${sh}`;
   const actionsDisabled = busy || Boolean(emulator.busy);
 
   return (
@@ -94,7 +99,7 @@ export function EmulatorDeviceCard({
               <p className="truncate font-mono text-sm font-medium">{emulator.serial}</p>
             </div>
             <p className="truncate text-xs text-muted-foreground">
-              {emulator.model || "Unknown model"} · {resolution}
+              {emulator.model || "Unknown model"} | {resolution}
             </p>
           </div>
           <Badge variant={statusBadgeVariant(emulator.status)} className="shrink-0">
@@ -111,7 +116,11 @@ export function EmulatorDeviceCard({
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  disabled={actionsDisabled || launchingIg}
+                  disabled={
+                    actionsDisabled ||
+                    launchingIg ||
+                    emulator.status !== "device"
+                  }
                   onClick={onOpenInstagram}
                   aria-label="Open Instagram"
                 >
@@ -139,7 +148,7 @@ export function EmulatorDeviceCard({
                   <Menu className={cn("h-4 w-4", pressingMenu && "animate-pulse")} />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Swipe up — open app drawer</TooltipContent>
+              <TooltipContent>Open app drawer (All apps)</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -177,6 +186,22 @@ export function EmulatorDeviceCard({
               </TooltipTrigger>
               <TooltipContent>Restart emulator</TooltipContent>
             </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-destructive hover:text-destructive"
+                  disabled={stopping || actionsDisabled}
+                  onClick={onEndSession}
+                  aria-label="End emulator session"
+                >
+                  <Power className={cn("h-4 w-4", stopping && "animate-pulse")} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>End session (stop emulator)</TooltipContent>
+            </Tooltip>
           </div>
         </TooltipProvider>
       </CardHeader>
@@ -211,7 +236,7 @@ export function EmulatorDeviceCard({
             />
             {(busy || emulator.busy) && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-xs font-medium text-white backdrop-blur-[1px]">
-                Sending input…
+                Sending input...
               </div>
             )}
             {ripple && (
@@ -226,7 +251,7 @@ export function EmulatorDeviceCard({
 
         <p className="text-center text-[11px] text-muted-foreground">
           {controlEnabled
-            ? "Tap or drag on the screen; use ☰ for a precise app-drawer swipe"
+            ? "Tap or drag on the screen; use All apps for the app drawer"
             : "Enable Control in the toolbar to send taps and swipes"}
         </p>
       </CardContent>

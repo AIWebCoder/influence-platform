@@ -285,6 +285,142 @@ class DeviceManager:
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         }
 
+    async def _stop_emulator_via_host_agent(self, serial: str) -> dict[str, Any] | None:
+        if not self.agent_url:
+            return None
+        try:
+            status, body = await self._agent_post("/stop", {"serial": serial}, timeout=25)
+        except aiohttp.ClientError as exc:
+            return {
+                "success": False,
+                "serial": serial,
+                "phase": "agent_unreachable",
+                "message": f"emulator host agent unreachable: {exc}",
+            }
+        except asyncio.TimeoutError:
+            return {
+                "success": False,
+                "serial": serial,
+                "phase": "agent_timeout",
+                "message": "emulator host agent timed out on stop",
+            }
+        if status >= 400 or not body.get("success"):
+            return {
+                "success": False,
+                "serial": serial,
+                "phase": body.get("phase") or "stop_failed",
+                "message": body.get("message") or body.get("error") or f"agent returned HTTP {status}",
+            }
+        return {
+            "success": True,
+            "serial": serial,
+            "phase": body.get("phase") or "completed",
+            "message": body.get("message") or "Emulator session ended",
+        }
+
+    async def _device_still_listed(self, serial: str) -> bool:
+        remaining = await self.list_connected_emulators(include_non_device=True)
+        return any(d.serial == serial for d in remaining)
+
+    async def stop_emulator(self, serial: str) -> dict[str, Any]:
+        """End the emulator session: kill local AVD or disconnect remote ADB target."""
+        started = time.monotonic()
+        devices = await self.list_connected_emulators(include_non_device=True)
+        known_serials = {d.serial for d in devices}
+        if serial not in known_serials:
+            raise ValueError(f"unknown_emulator_serial:{serial}")
+
+        avd_name = await self.get_emulator_avd_name(serial)
+        stop_errors: list[str] = []
+        stop_ok = False
+
+        # ``emu kill`` must run on the host where the emulator console listens (not via
+        # Docker ``adb -H host.docker.internal``, which fails with "TCP port 5556 refused").
+        if serial.startswith("emulator-") and (self.agent_url or self.adb_host):
+            agent_result = await self._stop_emulator_via_host_agent(serial)
+            if agent_result is not None:
+                if agent_result.get("success"):
+                    stop_ok = True
+                else:
+                    stop_errors.append(str(agent_result.get("message") or "host agent stop failed"))
+
+        try:
+            if not stop_ok and serial.startswith("emulator-"):
+                await self._adb(serial, "emu", "kill", timeout_seconds=12.0)
+                stop_ok = True
+            elif not stop_ok:
+                proc = await asyncio.create_subprocess_exec(
+                    *self._adb_base(),
+                    "disconnect",
+                    serial,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                out, err = await proc.communicate()
+                if proc.returncode != 0:
+                    detail = (err or out).decode(errors="ignore").strip()
+                    raise RuntimeError(detail or f"adb disconnect {serial} failed")
+                stop_ok = True
+        except Exception as exc:
+            msg = str(exc)
+            stop_errors.append(msg)
+            if not await self._device_still_listed(serial):
+                stop_ok = True
+            elif self.adb_host and not self.agent_url and serial.startswith("emulator-"):
+                return {
+                    "success": False,
+                    "serial": serial,
+                    "avd_name": avd_name,
+                    "phase": "stop_failed",
+                    "message": (
+                        "Cannot stop emulator from Docker without the host agent. "
+                        "Start emulator-controller/host_agent on the Windows host and set "
+                        "EMULATOR_AGENT_URL (see host_agent/README.md). "
+                        f"Last error: {msg}"
+                    ),
+                    "elapsed_ms": int((time.monotonic() - started) * 1000),
+                }
+
+        if not stop_ok:
+            return {
+                "success": False,
+                "serial": serial,
+                "avd_name": avd_name,
+                "phase": "stop_failed",
+                "message": "; ".join(stop_errors) or "stop failed",
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            }
+
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            remaining = await self.list_connected_emulators(include_non_device=True)
+            if not any(d.serial == serial for d in remaining):
+                break
+            await asyncio.sleep(1)
+
+        still = await self.list_connected_emulators(include_non_device=True)
+        if any(d.serial == serial for d in still):
+            return {
+                "success": False,
+                "serial": serial,
+                "avd_name": avd_name,
+                "phase": "still_connected",
+                "message": (
+                    f"{serial} is still visible to ADB after stop; "
+                    "close the emulator window on the host if it remains open"
+                ),
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            }
+
+        return {
+            "success": True,
+            "serial": serial,
+            "avd_name": avd_name,
+            "phase": "completed",
+            "message": "Emulator session ended",
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+
     async def preflight(self, timeout_seconds: int = 15) -> dict[str, Any]:
         if self.agent_url:
             try:
@@ -696,7 +832,12 @@ class DeviceManager:
             await proc.communicate()
             return False
 
-    async def _adb(self, serial: str, *args: str) -> tuple[int, str, str]:
+    async def _adb(
+        self,
+        serial: str,
+        *args: str,
+        timeout_seconds: float | None = 15.0,
+    ) -> tuple[int, str, str]:
         proc = await asyncio.create_subprocess_exec(
             *self._adb_base(),
             "-s",
@@ -705,7 +846,20 @@ class DeviceManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        out, err = await proc.communicate()
+        try:
+            if timeout_seconds is None:
+                out, err = await proc.communicate()
+            else:
+                out, err = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=timeout_seconds,
+                )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            raise RuntimeError(
+                f"adb {' '.join(args)} timed out after {timeout_seconds}s on {serial}"
+            )
         out_s = out.decode(errors="ignore").strip()
         err_s = err.decode(errors="ignore").strip()
         if proc.returncode != 0:
@@ -754,7 +908,11 @@ class DeviceManager:
         width: int | None = None,
         height: int | None = None,
     ) -> dict[str, int]:
-        """Open Pixel/Launcher3 app drawer: HOME then a full-height upward swipe."""
+        """Open the launcher app drawer (All apps grid).
+
+        Primary: ``am start -a android.intent.action.ALL_APPS`` (Nexus/Pixel Launcher).
+        Fallback: HOME + long upward swipe (gesture nav often ignores short ``input swipe``).
+        """
         size = await self.get_screen_size(serial)
         if size:
             width, height = size
@@ -762,15 +920,35 @@ class DeviceManager:
             width, height = 1080, 2400
 
         x = width // 2
-        # Nexus Launcher allAppsShiftRange ~= full screen height; short swipes only open search.
-        y1 = height - 24
-        y2 = max(80, int(height * 0.05))
-        duration = 600
+        y1 = height - 1
+        y2 = max(80, int(height * 0.10))
+        duration = 1200
 
         await self.input_keyevent(serial, 3)
-        await asyncio.sleep(0.4)
-        await self.input_swipe(serial, x, y1, x, y2, duration)
+        await asyncio.sleep(0.5)
+
+        method = "intent"
+        try:
+            await self._adb(
+                serial,
+                "shell",
+                "am",
+                "start",
+                "-a",
+                "android.intent.action.ALL_APPS",
+            )
+        except RuntimeError as exc:
+            logger.warning("ALL_APPS intent failed for %s: %s; using swipe fallback", serial, exc)
+            method = "swipe"
+            await self.input_swipe(serial, x, y1, x, y2, duration)
+            await asyncio.sleep(0.15)
+            # Second swipe from workspace (above search bar) for launchers that ignore edge swipes.
+            mid_y1 = int(height * 0.72)
+            mid_y2 = int(height * 0.18)
+            await self.input_swipe(serial, x, mid_y1, x, mid_y2, 900)
+
         return {
+            "method": method,
             "width": width,
             "height": height,
             "x1": x,
@@ -822,6 +1000,63 @@ class DeviceManager:
             str(duration),
         )
 
+    async def _package_installed(self, serial: str, package: str) -> bool:
+        try:
+            _, out, _ = await self._adb(serial, "shell", "pm", "path", package)
+        except RuntimeError:
+            return False
+        return bool(out.strip())
+
+    async def _resolve_launch_component(self, serial: str, package: str) -> str | None:
+        """Return package/activity from the system launcher intent, if resolvable."""
+        _, out, _ = await self._adb(
+            serial,
+            "shell",
+            "cmd",
+            "package",
+            "resolve-activity",
+            "--brief",
+            "-c",
+            "android.intent.category.LAUNCHER",
+            package,
+        )
+        for line in out.splitlines():
+            candidate = line.strip()
+            if not candidate or candidate == "No activity found":
+                continue
+            if "/" in candidate:
+                return candidate
+        return None
+
+    async def _start_launcher_intent(self, serial: str, package: str) -> None:
+        await self._adb(
+            serial,
+            "shell",
+            "am",
+            "start",
+            "-a",
+            "android.intent.action.MAIN",
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "-p",
+            package,
+        )
+
+    async def _start_component(self, serial: str, component: str) -> None:
+        await self._adb(serial, "shell", "am", "start", "-n", component)
+
+    async def _start_monkey_launcher(self, serial: str, package: str) -> None:
+        await self._adb(
+            serial,
+            "shell",
+            "monkey",
+            "-p",
+            package,
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "1",
+        )
+
     async def launch_app(
         self,
         serial: str,
@@ -831,36 +1066,63 @@ class DeviceManager:
         pkg = str(package or "").strip()
         if not pkg:
             raise ValueError("package is required")
-        act = str(activity or "").strip()
-        if act:
-            if "/" in act:
-                component = act
-            else:
-                component = f"{pkg}/{act}"
-            await self._adb(serial, "shell", "am", "start", "-W", "-n", component)
+
+        if not await self._package_installed(serial, pkg):
+            raise RuntimeError(
+                f"{pkg} is not installed on {serial}. "
+                "Install the app APK on the emulator (Play Store or adb install) and retry."
+            )
+
+        errors: list[str] = []
+        configured = str(activity or "").strip()
+        if configured:
+            component = configured if "/" in configured else f"{pkg}/{configured}"
+            try:
+                await self._start_component(serial, component)
+                return
+            except RuntimeError as exc:
+                errors.append(f"configured activity: {exc}")
+
+        resolved = await self._resolve_launch_component(serial, pkg)
+        if resolved and resolved not in {configured, f"{pkg}/{configured}"}:
+            try:
+                await self._start_component(serial, resolved)
+                return
+            except RuntimeError as exc:
+                errors.append(f"resolved launcher: {exc}")
+
+        try:
+            await self._start_launcher_intent(serial, pkg)
             return
-        await self._adb(
-            serial,
-            "shell",
-            "monkey",
-            "-p",
-            pkg,
-            "-c",
-            "android.intent.category.LAUNCHER",
-            "1",
-        )
+        except RuntimeError as exc:
+            errors.append(f"launcher intent: {exc}")
+
+        try:
+            await self._start_monkey_launcher(serial, pkg)
+            return
+        except RuntimeError as exc:
+            errors.append(f"monkey launcher: {exc}")
+
+        detail = "; ".join(errors) if errors else "no launch method succeeded"
+        raise RuntimeError(f"Failed to launch {pkg} on {serial}: {detail}")
 
     async def launch_instagram(self, serial: str) -> None:
         package = os.getenv("ANDROID_APP_PACKAGE", "com.instagram.android").strip()
         activity = os.getenv(
             "ANDROID_APP_ACTIVITY",
-            "com.instagram.mainactivity.MainActivity",
+            "com.instagram.mainactivity.LauncherActivity",
         ).strip()
         await self.launch_app(serial, package, activity)
 
     async def get_screen_size(self, serial: str) -> tuple[int, int] | None:
-        _, out, _ = await self._adb(serial, "shell", "wm", "size")
-        # Example: "Physical size: 1080x2400"
+        try:
+            _, out, _ = await self._adb(
+                serial, "shell", "wm", "size", timeout_seconds=4.0
+            )
+        except RuntimeError as exc:
+            logger.debug("wm size failed for %s: %s", serial, exc)
+            return None
+        # Example: "Physical size: 1080x2400" or "Override size: 1080x2400"
         match = re.search(r"(\d+)x(\d+)", out)
         if not match:
             return None

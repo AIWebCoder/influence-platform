@@ -83,6 +83,7 @@ export default function EmulatorsPage() {
   const [controlEnabled, setControlEnabled] = useState(true);
   const [busyBySerial, setBusyBySerial] = useState<Record<string, boolean>>({});
   const [restartingBySerial, setRestartingBySerial] = useState<Record<string, boolean>>({});
+  const [stoppingBySerial, setStoppingBySerial] = useState<Record<string, boolean>>({});
   const [launchingIgBySerial, setLaunchingIgBySerial] = useState<Record<string, boolean>>({});
   const [pressingMenuBySerial, setPressingMenuBySerial] = useState<Record<string, boolean>>({});
   const [refreshingBySerial, setRefreshingBySerial] = useState<Record<string, boolean>>({});
@@ -96,7 +97,10 @@ export default function EmulatorsPage() {
 
   const loadEmulators = useCallback(async (): Promise<void> => {
     try {
-      const res = await fetch("/api/emulators", { cache: "no-store" });
+      const res = await fetch("/api/emulators", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(12_000),
+      });
       if (!res.ok) {
         throw new Error(`API returned status ${res.status}`);
       }
@@ -207,18 +211,47 @@ export default function EmulatorsPage() {
     }
   };
 
+  const endSession = async (serial: string) => {
+    if (stoppingBySerial[serial] || restartingBySerial[serial]) return;
+    setErrorBySerial((prev) => ({ ...prev, [serial]: undefined }));
+    setStoppingBySerial((prev) => ({ ...prev, [serial]: true }));
+    try {
+      const res = await fetch(
+        `/api/emulators/${encodeURIComponent(serial)}/actions/stop`,
+        { method: "POST", cache: "no-store" }
+      );
+      const payload = (await res.json()) as {
+        success?: boolean;
+        message?: string;
+        phase?: string;
+      };
+      if (!res.ok || !payload.success) {
+        const msg = payload.message || payload.phase || "Failed to end session";
+        setErrorBySerial((prev) => ({ ...prev, [serial]: msg }));
+      }
+    } catch {
+      setErrorBySerial((prev) => ({ ...prev, [serial]: "Network error while ending session" }));
+    } finally {
+      setStoppingBySerial((prev) => ({ ...prev, [serial]: false }));
+      await loadEmulators();
+      setTick((t) => t + 1);
+    }
+  };
+
   const openAppDrawer = async (emulator: EmulatorInfo) => {
     const serial = emulator.serial;
     if (pressingMenuBySerial[serial]) return;
     setErrorBySerial((prev) => ({ ...prev, [serial]: undefined }));
     setPressingMenuBySerial((prev) => ({ ...prev, [serial]: true }));
+    const width = emulator.screen_size?.width ?? 1080;
+    const height = emulator.screen_size?.height ?? 2400;
     try {
       const res = await fetch(
         `/api/emulators/${encodeURIComponent(serial)}/input/key`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key: "app_drawer" }),
+          body: JSON.stringify({ key: "app_drawer", width, height }),
           cache: "no-store",
         }
       );
@@ -243,6 +276,17 @@ export default function EmulatorsPage() {
 
   const openInstagram = async (serial: string) => {
     if (launchingIgBySerial[serial]) return;
+    const emu = data.items.find((item) => item.serial === serial);
+    if (emu && emu.status !== "device") {
+      setErrorBySerial((prev) => ({
+        ...prev,
+        [serial]:
+          emu.status === "unauthorized"
+            ? "Accept USB debugging on the emulator, then refresh"
+            : `Emulator not ready (${emu.status}). Wait until status is Ready`,
+      }));
+      return;
+    }
     setErrorBySerial((prev) => ({ ...prev, [serial]: undefined }));
     setLaunchingIgBySerial((prev) => ({ ...prev, [serial]: true }));
     try {
@@ -362,9 +406,10 @@ export default function EmulatorsPage() {
           item.busy ||
           busyBySerial[item.serial] ||
           restartingBySerial[item.serial] ||
+          stoppingBySerial[item.serial] ||
           launchingIgBySerial[item.serial]
       ).length,
-    [data.items, busyBySerial, restartingBySerial, launchingIgBySerial]
+    [data.items, busyBySerial, restartingBySerial, stoppingBySerial, launchingIgBySerial]
   );
 
   return (
@@ -463,6 +508,7 @@ export default function EmulatorsPage() {
               controlEnabled={controlEnabled}
               busy={Boolean(busyBySerial[emulator.serial])}
               restarting={Boolean(restartingBySerial[emulator.serial])}
+              stopping={Boolean(stoppingBySerial[emulator.serial])}
               refreshing={Boolean(refreshingBySerial[emulator.serial])}
               launchingIg={Boolean(launchingIgBySerial[emulator.serial])}
               pressingMenu={Boolean(pressingMenuBySerial[emulator.serial])}
@@ -472,6 +518,7 @@ export default function EmulatorsPage() {
               onMouseUp={(event) => void onMouseUp(emulator, event)}
               onRefresh={() => void refreshEmulator(emulator.serial)}
               onRestart={() => void restartEmulator(emulator.serial)}
+              onEndSession={() => void endSession(emulator.serial)}
               onOpenInstagram={() => void openInstagram(emulator.serial)}
               onPressMenu={() => void openAppDrawer(emulator)}
             />
