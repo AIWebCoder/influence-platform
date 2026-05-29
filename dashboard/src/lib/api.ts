@@ -473,25 +473,44 @@ export const api = {
     },
     getNiches: async () => {
       const response = await contentClient.get('/niches');
-      return response.data as Array<{
-        id: string;
-        name: string;
-        description?: string | null;
-        hashtags: string[];
-        posting_times: number[];
-      }>;
+      const data = response.data;
+      if (Array.isArray(data)) {
+        return data as Array<{
+          id: string;
+          name: string;
+          description?: string | null;
+          hashtags: string[];
+          posting_times: number[];
+        }>;
+      }
+      return [];
     },
     getTemplates: async (params?: { niche_id?: string; active_only?: boolean }) => {
       const response = await contentClient.get('/templates', { params });
-      return response.data as Array<{
-        id: string;
-        name: string;
-        caption_template: string;
-        visual_prompt?: string | null;
-        hashtag_groups: string[];
-        is_active: boolean;
-        niche_id?: string | null;
-      }>;
+      const data = response.data;
+      if (Array.isArray(data)) {
+        return data as Array<{
+          id: string;
+          name: string;
+          caption_template: string;
+          visual_prompt?: string | null;
+          hashtag_groups: string[];
+          is_active: boolean;
+          niche_id?: string | null;
+        }>;
+      }
+      if (data && typeof data === 'object' && Array.isArray((data as { items?: unknown }).items)) {
+        return (data as { items: Array<{
+          id: string;
+          name: string;
+          caption_template: string;
+          visual_prompt?: string | null;
+          hashtag_groups: string[];
+          is_active: boolean;
+          niche_id?: string | null;
+        }> }).items;
+      }
+      return [];
     },
     createTemplate: async (data: {
       name: string;

@@ -34,7 +34,7 @@ class TemplateResponse(TemplateBase):
     
     model_config = ConfigDict(from_attributes=True)
 
-@router.get("/", response_model=List[TemplateResponse])
+@router.get("", response_model=List[TemplateResponse])
 async def list_templates(
     skip: int = 0,
     limit: int = 100,
@@ -63,7 +63,7 @@ async def get_template(template_id: uuid.UUID, db: AsyncSession = Depends(get_db
         raise HTTPException(status_code=404, detail="Template not found")
     return template
 
-@router.post("/", response_model=TemplateResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=TemplateResponse, status_code=status.HTTP_201_CREATED)
 async def create_template(request: TemplateCreate, db: AsyncSession = Depends(get_db)):
     svc = TemplateService(db)
     return await svc.create(**request.model_dump())
