@@ -35,7 +35,7 @@ export const generationStudioI18n = {
     publish: {
       title: "Publication",
       description:
-        "Une intention par combinaison unique actif + légende + comptes (double-clic sans doublon). Créez une intention ou publiez maintenant — même idempotence pour « publier maintenant ».",
+        "Choisissez les comptes Instagram ici (la génération ne les utilise pas). Une intention par combinaison actif + légende + comptes.",
       asset: "Média",
       noAssets: "Aucun média généré pour ce job.",
       contentType: "Type de contenu",
@@ -81,6 +81,10 @@ export const generationStudioI18n = {
       niche: "Niche",
       templateOptional: "Modèle (optionnel)",
       noTemplate: "Aucun modèle",
+      targetAccount: "Compte cible",
+      targetAccountNone: "Choisir un compte…",
+      targetAccountHint:
+        "Utilisé pour nommer les vidéos dans la file d'attente (ex. pclocal video 1).",
       videoDuration: "Durée vidéo (clip unique)",
       durAliveai5: "~5 s (AliveAI SHORT)",
       durAliveai10: "~10 s (AliveAI MEDIUM)",
@@ -208,6 +212,7 @@ export const generationStudioI18n = {
       sceneRegenScheduled: "Régénération de scène planifiée.",
       retryError: "Échec de la relance.",
       stepRetryScheduled: "Relance planifiée pour {step}.",
+      retryStepAlreadyRunning: "Une relance est déjà en cours. Patientez avant de réessayer.",
       retryStepError: "Échec de la relance d'étape.",
       stepStopping: "Arrêt de {step}…",
       cancelStepError: "Échec d'annulation d'étape.",
@@ -248,7 +253,7 @@ export const generationStudioI18n = {
     publish: {
       title: "Publish",
       description:
-        "One intent per unique asset + caption + accounts (double-clicks won't create duplicates). Use either create intent or post now — they share the same idempotency for \"publish now\".",
+        "Pick Instagram accounts here (generation does not use them). One intent per asset + caption + account set.",
       asset: "Asset",
       noAssets: "No generated assets found for this job.",
       contentType: "Content type",
@@ -294,6 +299,10 @@ export const generationStudioI18n = {
       niche: "Niche",
       templateOptional: "Template (optional)",
       noTemplate: "No template",
+      targetAccount: "Target account",
+      targetAccountNone: "Select an account…",
+      targetAccountHint:
+        "Labels videos in the waiting queue (e.g. pclocal video 1).",
       videoDuration: "Video duration (single clip)",
       durAliveai5: "~5s (AliveAI SHORT)",
       durAliveai10: "~10s (AliveAI MEDIUM)",
@@ -421,6 +430,7 @@ export const generationStudioI18n = {
       sceneRegenScheduled: "Scene regeneration scheduled.",
       retryError: "Retry failed.",
       stepRetryScheduled: "Retry scheduled for {step}.",
+      retryStepAlreadyRunning: "A retry is already in progress. Wait before trying again.",
       retryStepError: "Retry step failed.",
       stepStopping: "Stopping {step}…",
       cancelStepError: "Cancel step failed.",

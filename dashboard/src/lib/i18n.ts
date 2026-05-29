@@ -22,7 +22,7 @@ export const translations = {
       generationStudio: "Studio de génération",
       templates: "Modèles",
       calendar: "Calendrier éditorial",
-      readyQueue: "File prête",
+      readyQueue: "File d'attente",
       engagement: "Engagement",
       emulators: "Émulateurs",
       publications: "Publications",
@@ -381,6 +381,13 @@ export const translations = {
       unassigned: "Non assigné",
       listTitle: "Comptes",
       emptyList: "Aucun compte synchronisé.",
+      delete: "Supprimer",
+      deleteTitle: "Supprimer le compte",
+      deleteDescription:
+        "Le compte {username} sera supprimé définitivement (cibles de publication et intentions d'engagement liées incluses).",
+      deleteConfirm: "Supprimer",
+      deleteError: "Impossible de supprimer le compte.",
+      deleted: "Compte supprimé.",
     },
     changePassword: {
       title: "Changer le mot de passe",
@@ -688,6 +695,13 @@ export const translations = {
       namePlaceholder: "persona-paris-1",
       emulatorSerialPlaceholder: "emulator-5554",
       inactiveSuffix: " ({status})",
+      delete: "Supprimer",
+      deleteTitle: "Supprimer le persona",
+      deleteDescription:
+        "Le persona sera supprimé. Les comptes liés restent dans le système mais ne seront plus rattachés à ce persona.",
+      deleteConfirm: "Supprimer",
+      deleteError: "Impossible de supprimer le persona.",
+      deleted: "Persona supprimé.",
     },
     publications: {
       title: "Publications",
@@ -784,7 +798,7 @@ export const translations = {
       generationStudio: "Generation Studio",
       templates: "Templates",
       calendar: "Editorial calendar",
-      readyQueue: "Ready queue",
+      readyQueue: "Waiting list",
       engagement: "Engagement",
       emulators: "Emulators",
       publications: "Publications",
@@ -1142,6 +1156,13 @@ export const translations = {
       unassigned: "Unassigned",
       listTitle: "Accounts",
       emptyList: "No accounts synchronized.",
+      delete: "Delete",
+      deleteTitle: "Delete account",
+      deleteDescription:
+        "Account {username} will be permanently removed (including linked publish targets and engagement intents).",
+      deleteConfirm: "Delete",
+      deleteError: "Failed to delete account.",
+      deleted: "Account deleted.",
     },
     changePassword: {
       title: "Change password",
@@ -1450,6 +1471,13 @@ export const translations = {
       namePlaceholder: "persona-paris-1",
       emulatorSerialPlaceholder: "emulator-5554",
       inactiveSuffix: " ({status})",
+      delete: "Delete",
+      deleteTitle: "Delete persona",
+      deleteDescription:
+        "The persona will be removed. Linked accounts stay in the system but are no longer attached to this persona.",
+      deleteConfirm: "Delete",
+      deleteError: "Failed to delete persona.",
+      deleted: "Persona deleted.",
     },
     publications: {
       title: "Publications",

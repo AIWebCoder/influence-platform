@@ -651,7 +651,6 @@ function GenerationStudioPageInner() {
   const editLabels = gs.edit;
   const toastMsg = gs.toasts;
   const pipe = gs.pipeline;
-  const acc = gs.accounts;
   const router = useRouter();
   const searchParams = useSearchParams();
   const [contentType, setContentType] = useState<ContentType>("reel");
@@ -663,8 +662,8 @@ function GenerationStudioPageInner() {
   const [niche, setNiche] = useState<string>("fitness");
   const [templateId, setTemplateId] = useState<string>("");
   const [topic, setTopic] = useState("");
-  const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
   const [schedule, setSchedule] = useState<Date | undefined>(undefined);
+  const [pipelineTargetAccountId, setPipelineTargetAccountId] = useState("");
   const [draftScenes, setDraftScenes] = useState<DraftScene[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -673,6 +672,8 @@ function GenerationStudioPageInner() {
   const [readyLoading, setReadyLoading] = useState(false);
   const [cancelLoading, setCancelLoading] = useState(false);
   const [cancelStepLoading, setCancelStepLoading] = useState<string | null>(null);
+  const [retryStepLoading, setRetryStepLoading] = useState<string | null>(null);
+  const retryStepInFlightRef = useRef(false);
   const [previewingTarget, setPreviewingTarget] = useState<{ sceneId: string; kind: "image" | "video" } | null>(null);
   /** At most one scene video panel expanded (toggle with "Vid preview" / "Hide video"). */
   const [openSceneVideoId, setOpenSceneVideoId] = useState<string | null>(null);
@@ -746,7 +747,7 @@ function GenerationStudioPageInner() {
     setTemplateId("");
   }, [niche]);
 
-  const { data: accountChoices = [], isLoading: accountsLoading } = useSWR<Array<{ id: string; username: string }>>(
+  const { data: accountChoices = [] } = useSWR<Array<{ id: string; username: string }>>(
     "distribution-accounts",
     async () => {
       const list = (await api.distribution.getAccounts()) as DistributionAccount[];
@@ -758,6 +759,31 @@ function GenerationStudioPageInner() {
         .filter((acc) => Boolean(acc.id) && Boolean(acc.username));
     }
   );
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("generation-studio-pipeline-target-account-id");
+      if (stored) setPipelineTargetAccountId(stored);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!pipelineTargetAccountId) return;
+    try {
+      localStorage.setItem("generation-studio-pipeline-target-account-id", pipelineTargetAccountId);
+    } catch {
+      /* ignore */
+    }
+  }, [pipelineTargetAccountId]);
+
+  useEffect(() => {
+    if (!pipelineTargetAccountId || accountChoices.length === 0) return;
+    if (!accountChoices.some((a) => a.id === pipelineTargetAccountId)) {
+      setPipelineTargetAccountId("");
+    }
+  }, [accountChoices, pipelineTargetAccountId]);
   const { data: generatedAssets = [], isLoading: assetsLoading } = useSWR<GeneratedAsset[]>(
     jobId && job?.status === "completed" ? ["generation-job-assets", jobId] : null,
     () => api.generationJobs.getJobAssets(jobId as string),
@@ -811,15 +837,6 @@ function GenerationStudioPageInner() {
     () => sortedScenes.reduce((acc, s) => acc + (s.duration || 0), 0),
     [sortedScenes]
   );
-  const accountSummary = useMemo(() => {
-    if (selectedAccounts.length === 0) return acc.selectTargets;
-    const labels = selectedAccounts
-      .map((id) => accountChoices.find((a) => a.id === id)?.username || id)
-      .filter(Boolean);
-    if (labels.length <= 2) return labels.join(", ");
-    return t("generationStudio.accounts.nSelected", { count: selectedAccounts.length });
-  }, [selectedAccounts, accountChoices, acc.selectTargets, t]);
-
   const canLaunch = job && (job.status === "draft" || job.status === "ready");
   const jobIsCancelling = job?.status === "cancelling";
   const jobIsCancelled = job?.status === "cancelled";
@@ -860,8 +877,8 @@ function GenerationStudioPageInner() {
   };
 
   const handleCreateDraft = async () => {
-    if (!topic.trim() || selectedAccounts.length === 0) {
-      toast.error(toastMsg.topicAccountsRequired);
+    if (!topic.trim()) {
+      toast.error(toastMsg.topicRequired);
       return;
     }
     setCreateLoading(true);
@@ -872,7 +889,7 @@ function GenerationStudioPageInner() {
         mode,
         niche,
         topic: topic.trim(),
-        target_accounts: selectedAccounts,
+        target_accounts: pipelineTargetAccountId ? [pipelineTargetAccountId] : [],
         scheduled_at: schedule ? schedule.toISOString() : undefined,
         ...(templateId ? { template_id: templateId } : {}),
         video_duration:
@@ -900,6 +917,7 @@ function GenerationStudioPageInner() {
       addTrackedGenerationJobId(jobId);
       await mutate();
       toast.success(toastMsg.pipelineStarted);
+      router.push("/queue");
     } catch (e: unknown) {
       toast.error(parseApiError(e, toastMsg.launchError));
     } finally {
@@ -1044,12 +1062,16 @@ function GenerationStudioPageInner() {
         toast.error(toastMsg.launchBeforeRetry);
         return;
       }
+      if (retryStepInFlightRef.current) return;
+      retryStepInFlightRef.current = true;
       try {
         await api.generationJobs.retryScene(jobId, (scene as JobScene).id);
         await mutate();
         toast.success(toastMsg.sceneRegenScheduled);
       } catch (e: unknown) {
         toast.error(parseApiError(e, toastMsg.retryError));
+      } finally {
+        retryStepInFlightRef.current = false;
       }
       return;
     }
@@ -1057,13 +1079,24 @@ function GenerationStudioPageInner() {
   };
 
   const retryStep = async (stepName: string) => {
-    if (!jobId) return;
+    if (!jobId || retryStepInFlightRef.current) return;
+    retryStepInFlightRef.current = true;
+    setRetryStepLoading(stepName);
     try {
       await api.generationJobs.retryStep(jobId, stepName);
       await mutate();
       toast.success(t("generationStudio.toasts.stepRetryScheduled", { step: stepName }));
     } catch (e: unknown) {
-      toast.error(parseApiError(e, toastMsg.retryStepError));
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      toast.error(
+        parseApiError(
+          e,
+          status === 409 ? toastMsg.retryStepAlreadyRunning : toastMsg.retryStepError
+        )
+      );
+    } finally {
+      retryStepInFlightRef.current = false;
+      setRetryStepLoading(null);
     }
   };
 
@@ -1191,6 +1224,26 @@ function GenerationStudioPageInner() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2">
+                <Label>{ctrl.targetAccount}</Label>
+                <Select
+                  value={pipelineTargetAccountId || "__none__"}
+                  onValueChange={(v) => setPipelineTargetAccountId(v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={ctrl.targetAccountNone} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">{ctrl.targetAccountNone}</SelectItem>
+                    {accountChoices.map((account) => (
+                      <SelectItem key={account.id} value={account.id}>
+                        @{account.username}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">{ctrl.targetAccountHint}</p>
+              </div>
               {executionMode === "multi_scene_single_video" || executionMode === "ailiveai_single_video" ? (
                 <div className="space-y-2">
                   <Label>{ctrl.videoDuration}</Label>
@@ -1274,43 +1327,6 @@ function GenerationStudioPageInner() {
                 <p id="topic-suggestion-hint" className="sr-only">
                   {ctrl.topicHintSr}
                 </p>
-              </div>
-              <div className="space-y-2">
-                <Label>{ctrl.accounts}</Label>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button type="button" variant="outline" className="w-full justify-between font-normal">
-                      <span className="truncate text-left">{accountSummary}</span>
-                      <ChevronDown className="h-4 w-4 shrink-0 opacity-70" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)]">
-                    <DropdownMenuLabel>{acc.selectOneOrMore}</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    {accountsLoading ? (
-                      <div className="px-2 py-1.5 text-sm text-muted-foreground">{acc.loading}</div>
-                    ) : accountChoices.length === 0 ? (
-                      <div className="px-2 py-1.5 text-sm text-muted-foreground">{acc.none}</div>
-                    ) : (
-                      accountChoices.map((account) => (
-                        <DropdownMenuCheckboxItem
-                          key={account.id}
-                          checked={selectedAccounts.includes(account.id)}
-                          onCheckedChange={(checked) => {
-                            setSelectedAccounts((prev) =>
-                              checked
-                                ? Array.from(new Set([...prev, account.id]))
-                                : prev.filter((acc) => acc !== account.id)
-                            );
-                          }}
-                          onSelect={(event) => event.preventDefault()}
-                        >
-                          @{account.username}
-                        </DropdownMenuCheckboxItem>
-                      ))
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
               </div>
               <div className="space-y-2">
                 <Label>{ctrl.schedule}</Label>
@@ -1871,15 +1887,25 @@ function GenerationStudioPageInner() {
                                 disabled={
                                   job.status === "draft" ||
                                   job.status === "ready" ||
+                                  job.status === "running" ||
                                   jobIsCancelling ||
                                   jobIsCancelled ||
                                   ctrl === "cancelling" ||
                                   ctrl === "cancelled" ||
-                                  s.status === "cancelled"
+                                  s.status === "cancelled" ||
+                                  s.status === "running" ||
+                                  retryStepLoading !== null
                                 }
                                 onClick={() => retryStep(s.step_name)}
                               >
-                                {live.retry}
+                                {retryStepLoading === s.step_name ? (
+                                  <span className="inline-flex items-center gap-1">
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    {live.retry}
+                                  </span>
+                                ) : (
+                                  live.retry
+                                )}
                               </Button>
                             </div>
                           </div>
