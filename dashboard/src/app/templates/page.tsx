@@ -69,8 +69,8 @@ export default function TemplatesPage() {
         api.content.getTemplates(),
         api.content.getNiches(),
       ]);
-      setTemplates(tplList);
-      setNiches(nicheList);
+      setTemplates(Array.isArray(tplList) ? tplList : []);
+      setNiches(Array.isArray(nicheList) ? nicheList : []);
     } catch {
       setError(tpl.loadError);
     } finally {
@@ -117,7 +117,7 @@ export default function TemplatesPage() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-6">
+    <div className="flex-1 w-full space-y-6 p-8 pt-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{tpl.title}</h1>

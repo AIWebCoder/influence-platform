@@ -14,8 +14,8 @@ export function LanguageToggle({ collapsed = false }: LanguageToggleProps) {
   return (
     <div
       className={cn(
-        "inline-flex items-center rounded-xl border border-zinc-200 bg-zinc-50 p-1 dark:border-zinc-800 dark:bg-zinc-900",
-        collapsed && "w-full flex-col gap-0.5 p-0.5",
+        "inline-flex items-center rounded-full bg-muted p-1",
+        collapsed && "w-full flex-col gap-0.5",
       )}
       aria-label={text.language.switchLabel}
       title={text.language.switchLabel}
@@ -26,13 +26,13 @@ export function LanguageToggle({ collapsed = false }: LanguageToggleProps) {
           type="button"
           onClick={() => setLocale(value)}
           className={cn(
-            "rounded-lg font-black uppercase tracking-widest transition-all",
+            "rounded-full font-semibold uppercase tracking-wide transition-colors",
             collapsed
               ? "w-full px-0 py-1 text-[9px] leading-none"
-              : "px-2.5 py-1.5 text-[10px]",
+              : "px-2.5 py-1 text-[10px]",
             locale === value
-              ? "bg-[var(--color-primary)] text-white"
-              : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100",
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
           )}
         >
           {text.language[value]}
