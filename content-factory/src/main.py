@@ -36,6 +36,7 @@ from src.api import (
 )
 from src.services.pipeline_trace import configure_pipeline_trace_logging
 from src.services.publish_outbox_worker import publish_outbox_runner
+from src.services.publish_scheduler_worker import publish_scheduler_runner
 from src.services.engagement_outbox_worker import engagement_outbox_runner
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -94,15 +95,21 @@ async def lifespan(app: FastAPI):
     await init_cache(os.getenv("REDIS_URL", "redis://localhost:6379"))
     _outbox_stop = asyncio.Event()
     _outbox_task = asyncio.create_task(publish_outbox_runner(_outbox_stop))
+    _publish_scheduler_task = asyncio.create_task(publish_scheduler_runner(_outbox_stop))
     _engagement_outbox_task = asyncio.create_task(engagement_outbox_runner(_outbox_stop))
     print("✅ Content Factory démarré")
     yield
     # Shutdown
     _outbox_stop.set()
     _outbox_task.cancel()
+    _publish_scheduler_task.cancel()
     _engagement_outbox_task.cancel()
     try:
         await _outbox_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await _publish_scheduler_task
     except asyncio.CancelledError:
         pass
     try:
