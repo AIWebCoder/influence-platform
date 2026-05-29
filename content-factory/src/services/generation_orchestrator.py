@@ -34,6 +34,23 @@ from src.services.pipeline_trace import emit
 
 logger = logging.getLogger(__name__)
 
+_pipeline_active: set[uuid.UUID] = set()
+_pipeline_active_lock = asyncio.Lock()
+
+
+async def try_begin_exclusive_job_pipeline(job_id: uuid.UUID) -> bool:
+    """Return False when this job already has a pipeline/scene-retry task in flight (same process)."""
+    async with _pipeline_active_lock:
+        if job_id in _pipeline_active:
+            return False
+        _pipeline_active.add(job_id)
+        return True
+
+
+async def end_exclusive_job_pipeline(job_id: uuid.UUID) -> None:
+    async with _pipeline_active_lock:
+        _pipeline_active.discard(job_id)
+
 
 class GenerationPipelineCancelled(Exception):
     """Raised when cooperative cancellation completes (DB already finalized)."""
@@ -539,7 +556,7 @@ async def _emit_job_pipeline_summary(
     )
 
 
-async def run_generation_job_pipeline(job_id: uuid.UUID) -> None:
+async def _run_generation_job_pipeline_inner(job_id: uuid.UUID) -> None:
     t0 = time.perf_counter()
     async with AsyncSessionLocal() as db:
         try:
@@ -568,8 +585,33 @@ async def run_generation_job_pipeline(job_id: uuid.UUID) -> None:
                     job.status = "failed"
                     await svc.append_log(job, f"Job error: {e}", "error")
                     svc.touch(job)
+                    topic = None
+                    if isinstance(job.input_payload, dict):
+                        topic = str(job.input_payload.get("topic") or "").strip() or None
                     await db2.commit()
+                    try:
+                        from src.services.alert_service import notify_generation_job_failed
+
+                        await notify_generation_job_failed(db2, str(job_id), str(e), topic)
+                    except Exception as alert_exc:
+                        logger.warning("generation job alert failed: %s", alert_exc)
                 await _emit_job_pipeline_summary(svc, job_id, wall_ms, "failed", error=str(e))
+
+
+async def run_generation_job_pipeline(job_id: uuid.UUID) -> None:
+    if not await try_begin_exclusive_job_pipeline(job_id):
+        emit(
+            "pipeline_skipped",
+            job_id=str(job_id),
+            reason="duplicate_pipeline_run",
+            step="pipeline",
+            level="warning",
+        )
+        return
+    try:
+        await _run_generation_job_pipeline_inner(job_id)
+    finally:
+        await end_exclusive_job_pipeline(job_id)
 
 
 async def _execute_pipeline(db, job_id: uuid.UUID) -> Optional[str]:
@@ -2414,6 +2456,23 @@ async def _step_distribution(db, svc: GenerationJobService, job: GenerationJob, 
 
 
 async def run_retry_scene(job_id: uuid.UUID, scene_id: uuid.UUID) -> None:
+    if not await try_begin_exclusive_job_pipeline(job_id):
+        emit(
+            "scene_retry_aborted",
+            job_id=str(job_id),
+            scene_id=str(scene_id),
+            step="scene_retry",
+            reason="duplicate_pipeline_run",
+            level="warning",
+        )
+        return
+    try:
+        await _run_retry_scene_inner(job_id, scene_id)
+    finally:
+        await end_exclusive_job_pipeline(job_id)
+
+
+async def _run_retry_scene_inner(job_id: uuid.UUID, scene_id: uuid.UUID) -> None:
     async with AsyncSessionLocal() as db:
         svc = GenerationJobService(db)
         job = await svc.get_job(job_id, with_children=True)
@@ -2645,5 +2704,17 @@ async def reset_steps_from(job_id: uuid.UUID, from_step_name: str) -> None:
 
 
 async def run_generation_job_pipeline_from(job_id: uuid.UUID, from_step_name: str) -> None:
-    await reset_steps_from(job_id, from_step_name)
-    await run_generation_job_pipeline(job_id)
+    if not await try_begin_exclusive_job_pipeline(job_id):
+        emit(
+            "pipeline_skipped",
+            job_id=str(job_id),
+            reason="duplicate_pipeline_retry",
+            step=from_step_name,
+            level="warning",
+        )
+        return
+    try:
+        await reset_steps_from(job_id, from_step_name)
+        await _run_generation_job_pipeline_inner(job_id)
+    finally:
+        await end_exclusive_job_pipeline(job_id)
