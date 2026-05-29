@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarDays, ChevronLeft, ChevronRight, Loader2, RefreshCw } from "lucide-react";
+import Link from "next/link";
+import { CalendarDays, ChevronLeft, ChevronRight, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import { addDays, addWeeks, format, startOfWeek, subWeeks } from "date-fns";
 import { enUS, fr as frLocale } from "date-fns/locale";
 import toast from "react-hot-toast";
@@ -26,17 +27,21 @@ import { DateTimePicker } from "@/components/ui/date-time-picker";
 
 type CalendarItem = {
   id: string;
+  generation_job_id?: string | null;
   caption?: string | null;
   visual_url?: string | null;
   scheduled_at?: string | null;
   niche?: string | null;
   status: string;
+  mode?: string;
+  content_type?: string;
+  target_count?: number;
 };
 
 export default function CalendarPage() {
-  const { locale } = useLocale();
-  const isFr = locale === "fr";
-  const dateLocale = isFr ? frLocale : enUS;
+  const { locale, text } = useLocale();
+  const cal = text.editorialCalendar;
+  const dateLocale = locale === "fr" ? frLocale : enUS;
 
   const [weekAnchor, setWeekAnchor] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const [items, setItems] = useState<CalendarItem[]>([]);
@@ -61,16 +66,11 @@ export default function CalendarPage() {
       const data = await api.content.getEditorialCalendar({ start_date: start, end_date: end });
       setItems(data);
     } catch (e: unknown) {
-      setError(
-        formatContentApiError(
-          e,
-          isFr ? "Calendrier indisponible (vérifiez la base de données)." : "Calendar unavailable (check database).",
-        ),
-      );
+      setError(formatContentApiError(e, cal.unavailable));
     } finally {
       setLoading(false);
     }
-  }, [weekAnchor, isFr]);
+  }, [weekAnchor, cal.unavailable]);
 
   useEffect(() => {
     load();
@@ -96,6 +96,10 @@ export default function CalendarPage() {
   );
 
   const openSchedule = (item: CalendarItem) => {
+    if (item.status === "queued" || item.status === "published") {
+      toast.error(cal.cannotReschedule);
+      return;
+    }
     setEditItem(item);
     setEditWhen(item.scheduled_at ? new Date(item.scheduled_at) : new Date());
   };
@@ -104,14 +108,12 @@ export default function CalendarPage() {
     if (!editItem || !editWhen) return;
     setSaving(true);
     try {
-      await api.content.patchPacketSchedule(editItem.id, editWhen.toISOString());
-      toast.success(isFr ? "Horaire enregistré." : "Schedule saved.");
+      await api.content.patchPublishIntentSchedule(editItem.id, editWhen.toISOString());
+      toast.success(cal.scheduleSaved);
       setEditItem(null);
       await load();
     } catch (e: unknown) {
-      toast.error(
-        formatContentApiError(e, isFr ? "Impossible de mettre à jour l'horaire." : "Could not update schedule."),
-      );
+      toast.error(formatContentApiError(e, cal.scheduleError));
     } finally {
       setSaving(false);
     }
@@ -121,21 +123,19 @@ export default function CalendarPage() {
     <div className="flex-1 space-y-6 p-8 pt-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+          <h2 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
             <CalendarDays className="h-6 w-6 text-primary" />
-            {isFr ? "Calendrier éditorial" : "Editorial calendar"}
+            {cal.title}
           </h2>
-          <p className="text-sm text-muted-foreground">
-            {format(weekAnchor, "d MMM", { locale: dateLocale })} –{" "}
-            {format(addDays(weekAnchor, 6), "d MMM yyyy", { locale: dateLocale })}
-          </p>
+          <p className="text-sm text-muted-foreground">{cal.subtitle}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{cal.hint}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="icon" onClick={() => setWeekAnchor((w) => subWeeks(w, 1))}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <Button variant="outline" size="sm" onClick={() => setWeekAnchor(startOfWeek(new Date(), { weekStartsOn: 1 }))}>
-            {isFr ? "Cette semaine" : "This week"}
+            {cal.thisWeek}
           </Button>
           <Button variant="outline" size="icon" onClick={() => setWeekAnchor((w) => addWeeks(w, 1))}>
             <ChevronRight className="h-4 w-4" />
@@ -180,13 +180,25 @@ export default function CalendarPage() {
                           onClick={() => openSchedule(item)}
                           className="w-full rounded-md border p-2 text-left text-xs transition-colors hover:bg-muted/60"
                         >
-                          <Badge variant="outline" className="mb-1">
-                            {item.status}
-                          </Badge>
+                          <div className="mb-1 flex flex-wrap gap-1">
+                            <Badge variant="outline" className="text-[10px]">
+                              {item.status}
+                            </Badge>
+                            {item.content_type ? (
+                              <Badge variant="secondary" className="text-[10px]">
+                                {item.content_type}
+                              </Badge>
+                            ) : null}
+                          </div>
                           <p className="line-clamp-2">{item.caption || item.niche || item.id.slice(0, 8)}</p>
                           {item.scheduled_at ? (
                             <p className="mt-1 text-[10px] text-muted-foreground tabular-nums">
                               {format(new Date(item.scheduled_at), "HH:mm")}
+                            </p>
+                          ) : null}
+                          {typeof item.target_count === "number" && item.target_count > 0 ? (
+                            <p className="mt-0.5 text-[10px] text-muted-foreground">
+                              {cal.accounts}: {item.target_count}
                             </p>
                           ) : null}
                         </button>
@@ -202,8 +214,9 @@ export default function CalendarPage() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">
-                  {isFr ? "Sans horaire" : "Unscheduled"} ({unscheduled.length})
+                  {cal.unscheduled} ({unscheduled.length})
                 </CardTitle>
+                <p className="text-sm text-muted-foreground">{cal.unscheduledHint}</p>
               </CardHeader>
               <CardContent className="flex flex-wrap gap-2">
                 {unscheduled.map((item) => (
@@ -220,34 +233,46 @@ export default function CalendarPage() {
       <Dialog open={Boolean(editItem)} onOpenChange={(open) => !open && setEditItem(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{isFr ? "Planifier la publication" : "Schedule content"}</DialogTitle>
+            <DialogTitle>{cal.scheduleDialogTitle}</DialogTitle>
             <DialogDescription>
               {editItem?.caption?.slice(0, 120) || editItem?.niche || editItem?.id}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label>{isFr ? "Date et heure" : "Date & time"}</Label>
+              <Label>{cal.dateTime}</Label>
               <DateTimePicker
                 value={editWhen}
                 onChange={setEditWhen}
-                placeholder={isFr ? "Choisir un créneau" : "Pick a slot"}
+                placeholder={cal.pickSlot}
               />
             </div>
             {editItem ? (
               <p className="text-xs text-muted-foreground">
-                {isFr ? "Statut" : "Status"}: <Badge variant="outline">{editItem.status}</Badge>
+                {cal.status}: <Badge variant="outline">{editItem.status}</Badge>
               </p>
             ) : null}
           </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setEditItem(null)}>
-              {isFr ? "Annuler" : "Cancel"}
-            </Button>
-            <Button type="button" onClick={handleSaveSchedule} disabled={saving || !editWhen}>
-              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              {isFr ? "Enregistrer" : "Save"}
-            </Button>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+            {editItem?.generation_job_id ? (
+              <Button type="button" variant="outline" asChild>
+                <Link href={`/generation-studio?job=${encodeURIComponent(editItem.generation_job_id)}`}>
+                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                  {cal.openStudio}
+                </Link>
+              </Button>
+            ) : (
+              <span />
+            )}
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" onClick={() => setEditItem(null)}>
+                {cal.cancel}
+              </Button>
+              <Button type="button" onClick={handleSaveSchedule} disabled={saving || !editWhen}>
+                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {cal.save}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

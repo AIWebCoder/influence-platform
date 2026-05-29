@@ -16,6 +16,7 @@ import {
   removeTrackedGenerationJobId,
 } from "@/lib/generation-job-tracking";
 import toast from "react-hot-toast";
+import { useLocale } from "@/components/i18n/LocaleProvider";
 
 type TrackedJobSnapshot = {
   id: string;
@@ -54,6 +55,8 @@ async function fetchTrackedJobs(ids: string[]): Promise<TrackedJobSnapshot[]> {
 }
 
 export function GenerationJobProgressDock() {
+  const { text, t } = useLocale();
+  const dock = text.generationDock;
   const pathname = usePathname();
   const [trackedIds, setTrackedIds] = useState<string[]>([]);
   const prevStatusRef = useRef<Record<string, string>>({});
@@ -94,18 +97,19 @@ export function GenerationJobProgressDock() {
     for (const j of jobs) {
       const was = prev[j.id];
       if (was && LIVE_STATUSES.has(was) && !LIVE_STATUSES.has(j.status)) {
+        const shortId = `${j.id.slice(0, 8)}…`;
         if (j.status === "completed") {
-          toast.success(`Generation job ${j.id.slice(0, 8)}… finished.`);
+          toast.success(t("generationDock.finished", { id: shortId }));
         } else if (j.status === "failed") {
-          toast.error(`Generation job ${j.id.slice(0, 8)}… failed.`);
+          toast.error(t("generationDock.failed", { id: shortId }));
         } else if (j.status === "cancelled") {
-          toast(`Generation job ${j.id.slice(0, 8)}… was cancelled.`, { icon: "\u23F9" });
+          toast(t("generationDock.cancelled", { id: shortId }), { icon: "\u23F9" });
         }
       }
       next[j.id] = j.status;
     }
     prevStatusRef.current = next;
-  }, [jobs]);
+  }, [jobs, t]);
 
   const visible = useMemo(() => {
     if (pathname === "/login" || trackedIds.length === 0) return false;
@@ -133,12 +137,12 @@ export function GenerationJobProgressDock() {
       <div
         className="pointer-events-auto w-full max-w-md rounded-lg border border-border bg-background/95 p-3 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/80"
         role="region"
-        aria-label="Background generation jobs"
+        aria-label={dock.ariaLabel}
       >
         <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <Clapperboard className="h-3.5 w-3.5 shrink-0" />
-          <span>Tracked generation jobs</span>
-          {error ? <span className="text-destructive">(refresh error)</span> : null}
+          <span>{dock.title}</span>
+          {error ? <span className="text-destructive">{dock.refreshError}</span> : null}
         </div>
         <ul className="max-h-40 space-y-2 overflow-y-auto pr-0.5">
           {list.map((job) => {
@@ -163,7 +167,7 @@ export function GenerationJobProgressDock() {
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     <Button variant="secondary" size="sm" className="h-7 px-2 text-[11px]" asChild>
-                      <Link href={`/generation-studio?job=${encodeURIComponent(job.id)}`}>Open</Link>
+                      <Link href={`/generation-studio?job=${encodeURIComponent(job.id)}`}>{dock.open}</Link>
                     </Button>
                     {canDismiss ? (
                       <Button
@@ -171,7 +175,7 @@ export function GenerationJobProgressDock() {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
-                        aria-label="Remove from background list"
+                        aria-label={dock.dismiss}
                         onClick={() => handleDismiss(job.id)}
                       >
                         <X className="h-3.5 w-3.5" />

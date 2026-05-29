@@ -2,21 +2,73 @@ import axios from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
 import { humanizeGenerationMessage } from '@/lib/generation-errors';
 
-// The Distribution Engine API (Node.js) on port 3001 by default
-const distributionClient = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_DISTRIBUTION_API_URL || 'http://localhost:3001',
-  timeout: 5000,
+/** Hostnames only resolvable inside Docker — the browser must never use these. */
+function isDockerInternalApiUrl(url: string): boolean {
+  try {
+    const h = new URL(url).hostname;
+    return (
+      h === 'distribution-engine' ||
+      h === 'content-factory' ||
+      h === 'emulator-controller'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Browser: public URL or same host as the dashboard. Server (SSR / route handlers): internal service URL. */
+function resolveDistributionBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    const fromEnv = (process.env.NEXT_PUBLIC_DISTRIBUTION_API_URL || '').trim();
+    if (fromEnv && !isDockerInternalApiUrl(fromEnv)) return fromEnv;
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:3001`;
+  }
+  const internal = (process.env.DISTRIBUTION_ENGINE_INTERNAL_URL || '').trim();
+  if (internal) return internal;
+  const pub = (process.env.NEXT_PUBLIC_DISTRIBUTION_API_URL || '').trim();
+  if (pub && !isDockerInternalApiUrl(pub)) return pub;
+  return 'http://distribution-engine:3001';
+}
+
+function resolveContentBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    const fromEnv = (process.env.NEXT_PUBLIC_CONTENT_API_URL || '').trim();
+    if (fromEnv && !isDockerInternalApiUrl(fromEnv)) return fromEnv;
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:8000`;
+  }
+  const internal = (process.env.CONTENT_FACTORY_INTERNAL_URL || '').trim();
+  if (internal) return internal;
+  const pub = (process.env.NEXT_PUBLIC_CONTENT_API_URL || '').trim();
+  if (pub && !isDockerInternalApiUrl(pub)) return pub;
+  return 'http://content-factory:8000';
+}
+
+/** Client `fetch()` calls must use the same rules as axios (never Docker-only hostnames in the browser). */
+export function getClientContentApiUrl(): string {
+  if (typeof window === 'undefined') {
+    return (process.env.NEXT_PUBLIC_CONTENT_API_URL || '').trim() || 'http://localhost:8000';
+  }
+  return resolveContentBaseUrl();
+}
+
+const distributionClient = axios.create({ timeout: 5000 });
+distributionClient.interceptors.request.use((config) => {
+  config.baseURL = resolveDistributionBaseUrl();
+  return config;
 });
 
-// The Content Factory API (Python) on port 8000
-const contentClient = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_CONTENT_API_URL || 'http://localhost:8000',
-  timeout: 5000,
+const contentClient = axios.create({ timeout: 5000 });
+contentClient.interceptors.request.use((config) => {
+  config.baseURL = resolveContentBaseUrl();
+  return config;
 });
 
-const contentClientLongTimeout = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_CONTENT_API_URL || 'http://localhost:8000',
-  timeout: 300000,
+const contentClientLongTimeout = axios.create({ timeout: 300000 });
+contentClientLongTimeout.interceptors.request.use((config) => {
+  config.baseURL = resolveContentBaseUrl();
+  return config;
 });
 
 /** Same JWT_SECRET as distribution-engine + Content Factory — attach session token for Bearer APIs */
@@ -187,6 +239,10 @@ export const api = {
       const response = await distributionClient.post(`/accounts/${id}/proxy/rotate`);
       return response.data;
     },
+    deleteAccount: async (id: string) => {
+      const response = await distributionClient.delete(`/accounts/${id}`);
+      return response.data as { success: boolean; message?: string };
+    },
     getPublications: async (status?: string, limit = 100, offset = 0) => {
       const params = new URLSearchParams();
       if (status) params.set('status', status);
@@ -343,6 +399,10 @@ export const api = {
       const response = await distributionClient.post(`/personas/${personaId}/verify-egress`);
       return response.data as { success: boolean; egress_ip: string };
     },
+    deletePersona: async (personaId: string) => {
+      const response = await distributionClient.delete(`/personas/${personaId}`);
+      return response.data as { deleted: boolean; id: string };
+    },
     getPostAnalytics: async () => {
       const response = await distributionClient.get('/analytics/posts');
       return response.data;
@@ -464,21 +524,29 @@ export const api = {
       const response = await contentClient.get('/scheduling/calendar', { params });
       return response.data as Array<{
         id: string;
+        generation_job_id?: string | null;
         caption?: string | null;
         visual_url?: string | null;
         scheduled_at?: string | null;
         niche?: string | null;
         status: string;
-        template_id?: string | null;
+        mode?: string;
+        content_type?: string;
+        target_count?: number;
       }>;
     },
-    patchPacketSchedule: async (packetId: string, scheduled_at: string) => {
-      const response = await contentClient.patch(`/scheduling/${packetId}/schedule`, { scheduled_at });
+    patchPublishIntentSchedule: async (intentId: string, scheduled_at: string) => {
+      const response = await contentClient.patch(
+        `/scheduling/publish-intents/${intentId}/schedule`,
+        { scheduled_at },
+      );
       return response.data as {
         id: string;
+        generation_job_id?: string | null;
         caption?: string | null;
         scheduled_at?: string | null;
         status: string;
+        mode?: string;
       };
     },
     getReadyQueue: async (params?: { status?: string; limit?: number }) => {
@@ -653,13 +721,16 @@ export const api = {
       };
     },
     /** Create publish intent from a completed job and dispatch to Instagram (queue / ops shortcut). */
-    dispatchCompletedJob: async (jobId: string) => {
+    dispatchCompletedJob: async (
+      jobId: string,
+      targetAccountIds: string[],
+      overrides?: { caption?: string; hashtags?: string[] }
+    ) => {
       const job = (await contentClient.get(`/generation-jobs/${jobId}`)).data as {
         status?: string;
         input_payload?: {
           caption?: string;
           hashtags?: string[];
-          target_accounts?: string[];
           content_type?: string;
         };
       };
@@ -678,21 +749,24 @@ export const api = {
         throw new Error("No public HTTPS video asset on this job");
       }
       const payload = job.input_payload || {};
-      const targetIds = (payload.target_accounts || []).filter(Boolean);
+      const targetIds = targetAccountIds.filter(Boolean);
       if (targetIds.length === 0) {
-        throw new Error("Job has no target accounts");
+        throw new Error("Select at least one account to publish");
       }
       const contentType =
         payload.content_type === "reel" || payload.content_type === "story" || payload.content_type === "post"
           ? payload.content_type
           : "reel";
-      const hashtags = (payload.hashtags || []).map((h) => String(h).replace(/^#/, "").trim()).filter(Boolean);
+      const hashtags = (overrides?.hashtags ?? payload.hashtags ?? [])
+        .map((h) => String(h).replace(/^#/, "").trim())
+        .filter(Boolean);
+      const caption = (typeof overrides?.caption === "string" ? overrides.caption : payload.caption || "").trim();
       const accountKey = [...targetIds].sort().join(",");
       const intent = (
         await contentClient.post(`/generation-jobs/${jobId}/publish-intents`, {
           asset_id: video.id,
           content_type: contentType,
-          caption: (payload.caption || "").trim(),
+          caption,
           hashtags,
           mode: "publish_now",
           target_account_ids: targetIds,
@@ -707,7 +781,7 @@ export const api = {
       mode: string;
       niche: string;
       topic: string;
-      target_accounts: string[];
+      target_accounts?: string[];
       scheduled_at?: string;
       template_id?: string;
       campaign_id?: string;
@@ -727,6 +801,83 @@ export const api = {
       };
       const response = await contentClientLongTimeout.post('/generation-jobs', payload);
       return response.data as { job_id: string };
+    },
+    list: async (params?: { status?: string; limit?: number; skip?: number; readyToPublish?: boolean }) => {
+      const response = await contentClient.get('/generation-jobs', {
+        params: {
+          limit: params?.limit,
+          skip: params?.skip,
+          status: params?.status,
+          ready_to_publish: params?.readyToPublish ? true : undefined,
+        },
+      });
+      return response.data as Array<{
+        id: string;
+        status: string;
+        progress: number;
+        execution_mode?: string;
+        caption?: string | null;
+        topic?: string | null;
+        content_type?: string | null;
+        niche?: string | null;
+        target_account_count: number;
+        target_account_ids?: string[];
+        target_account_usernames?: string[];
+        output_url?: string | null;
+        preview_url?: string | null;
+        publish_intent_id?: string | null;
+        publish_intent_status?: string | null;
+        created_at?: string | null;
+        updated_at?: string | null;
+      }>;
+    },
+    listReadyQueue: async (params?: { limit?: number; skip?: number; accountId?: string }) => {
+      const response = await contentClient.get('/generation-jobs', {
+        params: {
+          ready_to_publish: true,
+          limit: params?.limit ?? 20,
+          skip: params?.skip ?? 0,
+          account_id: params?.accountId || undefined,
+        },
+      });
+      return response.data as {
+        items: Array<{
+          id: string;
+          status: string;
+          progress: number;
+          caption?: string | null;
+          topic?: string | null;
+          content_type?: string | null;
+          niche?: string | null;
+          target_account_count: number;
+          target_account_ids?: string[];
+          target_account_usernames?: string[];
+          output_url?: string | null;
+          preview_url?: string | null;
+          publish_intent_id?: string | null;
+          publish_intent_status?: string | null;
+          queue_display_title?: string | null;
+          updated_at?: string | null;
+        }>;
+        total: number;
+        skip: number;
+        limit: number;
+        account_filters: Array<{ id: string; username: string; count: number }>;
+      };
+    },
+    delete: async (jobId: string) => {
+      const response = await contentClient.delete(`/generation-jobs/${jobId}`);
+      return response.data as { deleted: boolean; job_id: string };
+    },
+    setTargetAccounts: async (jobId: string, targetAccountIds: string[]) => {
+      const response = await contentClient.patch(`/generation-jobs/${jobId}/target-accounts`, {
+        target_account_ids: targetAccountIds,
+      });
+      return response.data as {
+        id: string;
+        target_account_ids?: string[];
+        target_account_usernames?: string[];
+      };
     },
     launch: async (jobId: string) => {
       const response = await contentClient.post(`/generation-jobs/${jobId}/launch`);
@@ -829,11 +980,12 @@ export const api = {
       return response.data as { message: string };
     },
     list: async () => {
-      const response = await contentClient.get('/users');
+      // Trailing slash avoids Starlette 307 → wrong public URL behind /api/content nginx strip.
+      const response = await contentClient.get('/users/');
       return response.data as UserRecord[];
     },
     create: async (payload: { email: string; password: string; role?: AppUserRole }) => {
-      const response = await contentClient.post('/users', payload);
+      const response = await contentClient.post('/users/', payload);
       return response.data as UserRecord;
     },
     update: async (

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { X, Plus, Save, Loader2 } from "lucide-react";
+import { useLocale } from "@/components/i18n/LocaleProvider";
 
 interface ContentEditorProps {
   contentId: string;
@@ -20,6 +21,8 @@ export function ContentEditor({
   onSave,
   onClose,
 }: ContentEditorProps) {
+  const { text } = useLocale();
+  const ce = text.contentEditor;
   const [caption, setCaption] = useState(initialCaption);
   const [hashtags, setHashtags] = useState<string[]>(initialHashtags);
   const [newTag, setNewTag] = useState("");
@@ -57,11 +60,8 @@ export function ContentEditor({
 
   return (
     <div className="bg-white dark:bg-neutral-800 rounded-2xl border border-neutral-200 dark:border-neutral-700 shadow-lg overflow-hidden">
-      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-100 dark:border-neutral-700">
-        <h3 className="text-sm font-bold text-neutral-700 dark:text-neutral-200">
-          Modifier le contenu
-        </h3>
+        <h3 className="text-sm font-bold text-neutral-700 dark:text-neutral-200">{ce.title}</h3>
         <button
           onClick={onClose}
           className="p-1 rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-400 hover:text-neutral-600 transition-colors"
@@ -71,10 +71,9 @@ export function ContentEditor({
       </div>
 
       <div className="p-4 space-y-4">
-        {/* Caption */}
         <div className="space-y-1.5">
           <label className="text-xs font-bold uppercase tracking-wider text-neutral-500">
-            Caption
+            {ce.caption}
           </label>
           <textarea
             value={caption}
@@ -85,7 +84,7 @@ export function ContentEditor({
             }}
             rows={6}
             className="w-full p-3 bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 resize-none transition-shadow"
-            placeholder="Entrez le caption Instagram..."
+            placeholder={ce.captionPlaceholder}
           />
           <div className="flex justify-end">
             <span
@@ -102,10 +101,9 @@ export function ContentEditor({
           </div>
         </div>
 
-        {/* Hashtags */}
         <div className="space-y-2">
           <label className="text-xs font-bold uppercase tracking-wider text-neutral-500">
-            Hashtags
+            {ce.hashtags}
           </label>
           <div className="flex flex-wrap gap-1.5">
             {hashtags.map((tag) => (
@@ -129,7 +127,7 @@ export function ContentEditor({
               onChange={(e) => setNewTag(e.target.value)}
               onKeyDown={handleKeyDown}
               className="flex-1 px-3 py-2 bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-shadow"
-              placeholder="Ajouter un hashtag..."
+              placeholder={ce.hashtagPlaceholder}
             />
             <button
               onClick={addHashtag}
@@ -142,7 +140,6 @@ export function ContentEditor({
         </div>
       </div>
 
-      {/* Save button */}
       <div className="px-4 py-3 border-t border-neutral-100 dark:border-neutral-700">
         <button
           onClick={handleSave}
@@ -154,7 +151,7 @@ export function ContentEditor({
           ) : (
             <Save className="w-4 h-4" />
           )}
-          Sauvegarder & Mettre en queue
+          {ce.saveQueue}
         </button>
       </div>
     </div>

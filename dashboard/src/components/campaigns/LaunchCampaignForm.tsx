@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { api } from "@/lib/api";
+import { useLocale } from "@/components/i18n/LocaleProvider";
 import { Play, Loader2, CheckCircle2 } from "lucide-react";
 import {
   Card,
@@ -23,6 +24,8 @@ import {
 import { useRouter } from "next/navigation";
 
 export function LaunchCampaignForm({ targetAccounts = [] }: { targetAccounts?: string[] }) {
+  const { text } = useLocale();
+  const lc = text.launchCampaign;
   const router = useRouter();
   const [niche, setNiche] = useState("tech");
   const [loading, setLoading] = useState(false);
@@ -31,25 +34,24 @@ export function LaunchCampaignForm({ targetAccounts = [] }: { targetAccounts?: s
   const handleLaunch = async () => {
     setLoading(true);
     setSuccess(false);
-    
+
     try {
       const accountsToUse = targetAccounts.length > 0 ? targetAccounts : ["system_default"];
-      
+
       await api.content.generateContent({
         niche: niche,
-        target_accounts: accountsToUse
+        target_accounts: accountsToUse,
       });
 
       setSuccess(true);
-      
+
       setTimeout(() => {
         router.refresh();
         setSuccess(false);
       }, 2000);
-
     } catch (error) {
       console.error("Failed to launch campaign", error);
-      alert("Erreur lors du lancement de la campagne. Le Content Factory est-il allumé ?");
+      alert(lc.launchError);
     } finally {
       setLoading(false);
     }
@@ -58,42 +60,44 @@ export function LaunchCampaignForm({ targetAccounts = [] }: { targetAccounts?: s
   return (
     <Card className="col-span-3">
       <CardHeader>
-        <CardTitle>Launch Campaign</CardTitle>
-        <CardDescription>
-          Trigger end-to-end AI generation and distribution.
-        </CardDescription>
+        <CardTitle>{lc.title}</CardTitle>
+        <CardDescription>{lc.description}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="niche">Target Niche</Label>
+          <Label htmlFor="niche">{lc.targetNiche}</Label>
           <Select value={niche} onValueChange={setNiche} disabled={loading}>
             <SelectTrigger id="niche">
-              <SelectValue placeholder="Select a niche" />
+              <SelectValue placeholder={lc.selectNiche} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="tech">Technology Startups</SelectItem>
-              <SelectItem value="lifestyle">Lifestyle & Fashion</SelectItem>
-              <SelectItem value="finance">Crypto & Trading</SelectItem>
+              <SelectItem value="tech">{lc.tech}</SelectItem>
+              <SelectItem value="lifestyle">{lc.lifestyle}</SelectItem>
+              <SelectItem value="finance">{lc.finance}</SelectItem>
             </SelectContent>
           </Select>
-          <p className="text-[0.8rem] text-muted-foreground pt-1">
-            Activating this pipeline will prompt Claude API to generate a caption and place it in the remote Redis queue.
-          </p>
+          <p className="text-[0.8rem] text-muted-foreground pt-1">{lc.pipelineHint}</p>
         </div>
       </CardContent>
       <CardFooter>
-        <Button 
-          className="w-full" 
-          onClick={handleLaunch} 
+        <Button
+          className="w-full"
+          onClick={handleLaunch}
           disabled={loading || success}
           variant={success ? "outline" : "default"}
         >
           {loading ? (
-             <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Orchestrating...</>
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> {lc.orchestrating}
+            </>
           ) : success ? (
-            <><CheckCircle2 className="mr-2 h-4 w-4 text-green-500" /> Pipeline Started</>
+            <>
+              <CheckCircle2 className="mr-2 h-4 w-4 text-green-500" /> {lc.pipelineStarted}
+            </>
           ) : (
-            <><Play className="mr-2 h-4 w-4" /> Generate & Distribute</>
+            <>
+              <Play className="mr-2 h-4 w-4" /> {lc.generateDistribute}
+            </>
           )}
         </Button>
       </CardFooter>

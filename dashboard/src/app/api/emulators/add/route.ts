@@ -55,6 +55,7 @@ export async function POST(request: Request) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       cache: "no-store",
+      signal: AbortSignal.timeout(120_000),
     });
     const raw = await res.text();
     let data: Record<string, unknown>;

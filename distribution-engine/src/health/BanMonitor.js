@@ -1,5 +1,6 @@
 const { getPool } = require('../core/database');
 const AccountService = require('../managers/AccountService');
+const AlertService = require('../services/AlertService');
 
 class BanMonitor {
   /**
@@ -19,18 +20,10 @@ class BanMonitor {
 
     await AccountService.updateAccountHealth(accountId, status === 'banned' ? -100 : -20, status);
 
-    // 2. Insert into alerts table
-    const pool = getPool();
-    const query = `
-      INSERT INTO alerts (id, account_id, type, message, is_read, created_at)
-      VALUES (gen_random_uuid(), $1, $2, $3, false, NOW())
-    `;
-    
     try {
-      await pool.query(query, [accountId, type, message]);
+      await AlertService.recordAlert(accountId, type, message);
     } catch (err) {
-      // If table doesn't exist yet in MVP phase, just log it.
-      if (err.code === '42P01') { // relation "alerts" does not exist
+      if (err.code === '42P01') {
         console.warn(`[BanMonitor] 'alerts' table missing, skipping DB insertion.`);
       } else {
         throw err;

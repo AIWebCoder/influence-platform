@@ -7,6 +7,7 @@ import {
   Instagram,
   Linkedin,
   Pencil,
+  Trash2,
   Twitter,
 } from "lucide-react";
 
@@ -42,8 +43,8 @@ function getPlatformIcon(platform: string | undefined | null) {
   return platformIcons[key] || platformIcons.default;
 }
 
-export function formatAccountProxy(url: string | null) {
-  if (!url) return "Unassigned";
+export function formatAccountProxy(url: string | null, unassigned = "Unassigned") {
+  if (!url) return unassigned;
   try {
     return new URL(url.startsWith("http") ? url : `http://${url}`).hostname;
   } catch {
@@ -69,13 +70,16 @@ export type AccountsColumnLabels = {
   health: string;
   actions: string;
   edit: string;
+  delete: string;
   igReady: string;
   igSetup: string;
   na: string;
+  unassigned: string;
 };
 
 export function createAccountsColumns(
   onEdit: (account: AccountRow) => void,
+  onDelete: (account: AccountRow) => void,
   labels: AccountsColumnLabels,
 ): ColumnDef<AccountRow>[] {
   return [
@@ -102,10 +106,12 @@ export function createAccountsColumns(
     },
     {
       id: "proxy",
-      accessorFn: (row) => formatAccountProxy(row.proxy_url),
+      accessorFn: (row) => formatAccountProxy(row.proxy_url, labels.unassigned),
       header: ({ column }) => <DataTableColumnHeader column={column} title={labels.proxy} />,
       cell: ({ row }) => (
-        <span className="text-muted-foreground">{formatAccountProxy(row.original.proxy_url)}</span>
+        <span className="text-muted-foreground">
+          {formatAccountProxy(row.original.proxy_url, labels.unassigned)}
+        </span>
       ),
     },
     {
@@ -151,10 +157,19 @@ export function createAccountsColumns(
       enableSorting: false,
       header: () => <span className="sr-only">{labels.actions}</span>,
       cell: ({ row }) => (
-        <div className="text-right">
+        <div className="flex justify-end gap-1">
           <Button variant="outline" size="sm" onClick={() => onEdit(row.original)}>
             <Pencil className="mr-1 h-3.5 w-3.5" />
             {labels.edit}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+            onClick={() => onDelete(row.original)}
+            aria-label={labels.delete}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
       ),

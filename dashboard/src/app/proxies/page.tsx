@@ -364,7 +364,7 @@ export default function ProxiesPage() {
                 id="proxy-host"
                 value={newHost}
                 onChange={(e) => setNewHost(e.target.value)}
-                placeholder="proxy.example.com"
+                placeholder={p.hostPlaceholder}
                 required
               />
             </div>

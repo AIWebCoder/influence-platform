@@ -240,7 +240,10 @@ class GenerationJobCreateRequest(BaseModel):
     mode: str = Field(default="faceless", description="persona | faceless")
     niche: str
     topic: str
-    target_accounts: list[str]
+    target_accounts: list[str] = Field(
+        default_factory=list,
+        description="Optional at create time; choose accounts when publishing.",
+    )
     scheduled_at: Optional[str] = None
     template_id: Optional[str] = None
     campaign_id: Optional[str] = None
@@ -285,6 +288,41 @@ class GenerationJobCreateRequest(BaseModel):
 
 class GenerationJobCreateResponse(BaseModel):
     job_id: str
+
+
+class GenerationJobListItem(BaseModel):
+    id: str
+    status: str
+    progress: int = 0
+    execution_mode: str = "scene_based"
+    caption: Optional[str] = None
+    topic: Optional[str] = None
+    content_type: Optional[str] = None
+    niche: Optional[str] = None
+    target_account_count: int = 0
+    target_account_ids: list[str] = Field(default_factory=list)
+    target_account_usernames: list[str] = Field(default_factory=list)
+    output_url: Optional[str] = None
+    preview_url: Optional[str] = None
+    publish_intent_id: Optional[str] = None
+    publish_intent_status: Optional[str] = None
+    queue_display_title: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ReadyQueueAccountFilter(BaseModel):
+    id: str
+    username: str
+    count: int
+
+
+class GenerationJobReadyQueuePage(BaseModel):
+    items: list[GenerationJobListItem]
+    total: int
+    skip: int
+    limit: int
+    account_filters: list[ReadyQueueAccountFilter] = Field(default_factory=list)
 
 
 class GeneratedAssetOut(BaseModel):
@@ -359,6 +397,8 @@ def _normalize_uuid_list(raw_values: list[str], field_name: str) -> list[str]:
 
 async def _resolve_target_accounts(db: AsyncSession, raw_targets: list[str]) -> list[str]:
     """Normalize target accounts to UUID strings (accept id, username, or email)."""
+    if not raw_targets:
+        return []
     normalized: list[str] = []
     unresolved: list[str] = []
     seen: set[str] = set()
@@ -403,7 +443,7 @@ async def _resolve_target_accounts(db: AsyncSession, raw_targets: list[str]) -> 
             detail=f"Unknown target account(s): {', '.join(unresolved)}",
         )
     if not normalized:
-        raise HTTPException(status_code=400, detail="At least one valid target account is required.")
+        raise HTTPException(status_code=400, detail="No valid target account matched the provided value(s).")
     return normalized
 
 
@@ -600,6 +640,269 @@ def _serialize_job(job, include_cost: bool = True) -> GenerationJobDetailOut:
     )
 
 
+def _caption_from_payload(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    cap = (payload.get("caption") or "").strip()
+    if cap:
+        return cap
+    topic = (payload.get("topic") or "").strip()
+    return topic or None
+
+
+def _display_account_label(username: str) -> str:
+    trimmed = (username or "").strip()
+    if not trimmed:
+        return ""
+    if "@" in trimmed:
+        return trimmed.split("@", 1)[0].lower()
+    return trimmed.lstrip("@").lower()
+
+
+def _queue_display_title(
+    *,
+    queue_index: Optional[int],
+    target_usernames: list[str],
+    caption: Optional[str],
+    topic: Optional[str],
+    job_id: str,
+) -> str:
+    account_label = ""
+    for name in target_usernames:
+        account_label = _display_account_label(name)
+        if account_label:
+            break
+    if account_label and queue_index:
+        return f"{account_label} video {queue_index}"
+    if caption:
+        return caption
+    if topic:
+        return topic
+    return job_id[:8]
+
+
+async def _serialize_job_list_items(
+    jobs: list,
+    *,
+    db: AsyncSession,
+    queue_index_by_id: Optional[dict[str, int]] = None,
+) -> list[GenerationJobListItem]:
+    if not jobs:
+        return []
+
+    job_ids = [str(j.id) for j in jobs]
+    enrich_res = await db.execute(
+        text(
+            """
+            SELECT
+                gj.id::text AS job_id,
+                (
+                    SELECT ga.public_url
+                    FROM generated_assets ga
+                    WHERE ga.generation_job_id = gj.id
+                      AND ga.public_url IS NOT NULL
+                      AND ga.public_url <> ''
+                    ORDER BY
+                        CASE WHEN ga.asset_type = 'video' THEN 0 ELSE 1 END,
+                        ga.created_at DESC
+                    LIMIT 1
+                ) AS preview_url,
+                (
+                    SELECT pi.id::text
+                    FROM publication_intents pi
+                    WHERE pi.generation_job_id = gj.id
+                    ORDER BY pi.created_at DESC NULLS LAST
+                    LIMIT 1
+                ) AS publish_intent_id,
+                (
+                    SELECT pi.status
+                    FROM publication_intents pi
+                    WHERE pi.generation_job_id = gj.id
+                    ORDER BY pi.created_at DESC NULLS LAST
+                    LIMIT 1
+                ) AS publish_intent_status
+            FROM generation_jobs gj
+            WHERE gj.id = ANY(CAST(:job_ids AS uuid[]))
+            """
+        ),
+        {"job_ids": job_ids},
+    )
+    enrich = {str(r["job_id"]): r for r in enrich_res.mappings().all()}
+
+    account_ids_for_lookup: list[str] = []
+    seen_account_ids: set[str] = set()
+    for job in jobs:
+        payload = job.input_payload if isinstance(job.input_payload, dict) else {}
+        targets = payload.get("target_accounts") or []
+        if not isinstance(targets, list):
+            continue
+        for raw in targets:
+            token = str(raw or "").strip()
+            if not token:
+                continue
+            try:
+                uid = str(uuid.UUID(token))
+            except ValueError:
+                continue
+            if uid not in seen_account_ids:
+                seen_account_ids.add(uid)
+                account_ids_for_lookup.append(uid)
+
+    username_by_id: dict[str, str] = {}
+    if account_ids_for_lookup:
+        account_rows = await db.execute(
+            text(
+                """
+                SELECT id::text, username
+                FROM accounts
+                WHERE id = ANY(CAST(:account_ids AS uuid[]))
+                """
+            ),
+            {"account_ids": account_ids_for_lookup},
+        )
+        username_by_id = {
+            str(r[0]): str(r[1]).strip()
+            for r in account_rows.fetchall()
+            if r[1] and str(r[1]).strip()
+        }
+
+    rows: list[GenerationJobListItem] = []
+    for job in jobs:
+        jid = str(job.id)
+        payload = job.input_payload if isinstance(job.input_payload, dict) else {}
+        targets = payload.get("target_accounts") or []
+        target_ids: list[str] = []
+        if isinstance(targets, list):
+            for raw in targets:
+                token = str(raw or "").strip()
+                if not token:
+                    continue
+                try:
+                    uid = str(uuid.UUID(token))
+                except ValueError:
+                    continue
+                if uid not in target_ids:
+                    target_ids.append(uid)
+        target_usernames = [username_by_id[aid] for aid in target_ids if aid in username_by_id]
+        extra = enrich.get(jid) or {}
+        caption = _caption_from_payload(payload)
+        topic = (str(payload.get("topic") or "").strip() or None)
+        queue_index = (queue_index_by_id or {}).get(jid)
+        rows.append(
+            GenerationJobListItem(
+                id=jid,
+                status=str(job.status),
+                progress=int(job.progress or 0),
+                execution_mode=str(getattr(job, "execution_mode", "scene_based") or "scene_based"),
+                caption=caption,
+                topic=topic,
+                content_type=(str(payload.get("content_type") or "").strip() or None),
+                niche=(str(payload.get("niche") or "").strip() or None),
+                target_account_count=len(target_ids),
+                target_account_ids=target_ids,
+                target_account_usernames=target_usernames,
+                output_url=(str(job.output_url).strip() if job.output_url else None),
+                preview_url=(str(extra.get("preview_url") or "").strip() or None) or None,
+                publish_intent_id=(str(extra.get("publish_intent_id") or "").strip() or None),
+                publish_intent_status=(str(extra.get("publish_intent_status") or "").strip() or None),
+                queue_display_title=_queue_display_title(
+                    queue_index=queue_index,
+                    target_usernames=target_usernames,
+                    caption=caption,
+                    topic=topic,
+                    job_id=jid,
+                ),
+                created_at=job.created_at.isoformat() if job.created_at else None,
+                updated_at=job.updated_at.isoformat() if job.updated_at else None,
+            )
+        )
+    return rows
+
+
+@router.get("")
+async def list_generation_jobs(
+    status: str = Query(
+        default="draft,ready,running,pending,cancelling,completed,failed,cancelled",
+        description="Comma-separated job statuses",
+    ),
+    ready_to_publish: bool = Query(
+        default=False,
+        description="When true: completed jobs with assets, excluding queued/published intents (waiting list).",
+    ),
+    account_id: Optional[str] = Query(
+        default=None,
+        description="When ready_to_publish: filter by first target account id.",
+    ),
+    limit: int = Query(default=50, ge=1, le=200),
+    skip: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = GenerationJobService(db)
+    if ready_to_publish:
+        account_filter: Optional[str] = None
+        if account_id and str(account_id).strip():
+            try:
+                account_filter = str(uuid.UUID(str(account_id).strip()))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid account_id") from exc
+
+        jobs, queue_index_by_id = await svc.list_ready_to_publish(
+            limit=limit,
+            skip=skip,
+            account_id=account_filter,
+        )
+        total = await svc.count_ready_to_publish(account_id=account_filter)
+        account_counts = await svc.list_ready_to_publish_account_counts()
+        account_ids = [aid for aid, _ in account_counts]
+        username_by_id: dict[str, str] = {}
+        if account_ids:
+            account_rows = await db.execute(
+                text(
+                    """
+                    SELECT id::text, username
+                    FROM accounts
+                    WHERE id = ANY(CAST(:account_ids AS uuid[]))
+                    """
+                ),
+                {"account_ids": account_ids},
+            )
+            username_by_id = {
+                str(r[0]): str(r[1]).strip()
+                for r in account_rows.fetchall()
+                if r[1] and str(r[1]).strip()
+            }
+        account_filters = [
+            ReadyQueueAccountFilter(
+                id=aid,
+                username=username_by_id.get(aid, aid),
+                count=count,
+            )
+            for aid, count in account_counts
+            if aid in username_by_id or aid
+        ]
+        items = await _serialize_job_list_items(
+            jobs,
+            db=db,
+            queue_index_by_id=queue_index_by_id,
+        )
+        return GenerationJobReadyQueuePage(
+            items=items,
+            total=total,
+            skip=skip,
+            limit=limit,
+            account_filters=account_filters,
+        )
+    else:
+        allowed = frozenset(
+            {"draft", "ready", "pending", "running", "cancelling", "completed", "failed", "cancelled"}
+        )
+        statuses = [s.strip().lower() for s in status.split(",") if s.strip().lower() in allowed]
+        if not statuses:
+            statuses = list(allowed)
+        jobs = await svc.list_jobs(statuses=statuses, limit=limit, skip=skip)
+        return await _serialize_job_list_items(jobs, db=db)
+
+
 @router.post("", response_model=GenerationJobCreateResponse)
 async def create_generation_job(
     body: GenerationJobCreateRequest,
@@ -621,7 +924,10 @@ async def create_generation_job(
         payload = body_effective.model_dump(exclude_none=True)
         if body.execution_mode == "ailiveai_single_video":
             payload["mode"] = "persona"
-        payload["target_accounts"] = await _resolve_target_accounts(db, payload.get("target_accounts") or [])
+        raw_targets = payload.get("target_accounts") or []
+        payload["target_accounts"] = (
+            await _resolve_target_accounts(db, raw_targets) if raw_targets else []
+        )
         payload.setdefault("content_type", body.content_type)
         from src.services.template_service import resolve_template_payload
 
@@ -1075,6 +1381,88 @@ async def cancel_generation_job(job_id: str, db: AsyncSession = Depends(get_db))
     return {"status": "cancelling", "job_id": job_id}
 
 
+class GenerationJobTargetAccountsBody(BaseModel):
+    target_account_ids: list[str] = Field(
+        default_factory=list,
+        description="Account UUIDs used for queue labels and publishing.",
+    )
+
+
+@router.patch("/{job_id}/target-accounts", response_model=GenerationJobListItem)
+async def set_generation_job_target_accounts(
+    job_id: str,
+    body: GenerationJobTargetAccountsBody,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        jid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+    account_ids = await _resolve_target_accounts(db, body.target_account_ids)
+    svc = GenerationJobService(db)
+    try:
+        job = await svc.set_target_accounts(jid, account_ids)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Job not found") from None
+    await db.commit()
+
+    payload = job.input_payload if isinstance(job.input_payload, dict) else {}
+    username_by_id: dict[str, str] = {}
+    if account_ids:
+        account_rows = await db.execute(
+            text(
+                """
+                SELECT id::text, username
+                FROM accounts
+                WHERE id = ANY(CAST(:account_ids AS uuid[]))
+                """
+            ),
+            {"account_ids": account_ids},
+        )
+        username_by_id = {
+            str(r[0]): str(r[1]).strip()
+            for r in account_rows.fetchall()
+            if r[1] and str(r[1]).strip()
+        }
+    target_usernames = [username_by_id[aid] for aid in account_ids if aid in username_by_id]
+    return GenerationJobListItem(
+        id=str(job.id),
+        status=str(job.status),
+        progress=int(job.progress or 0),
+        execution_mode=str(getattr(job, "execution_mode", "scene_based") or "scene_based"),
+        caption=_caption_from_payload(payload),
+        topic=(str(payload.get("topic") or "").strip() or None),
+        content_type=(str(payload.get("content_type") or "").strip() or None),
+        niche=(str(payload.get("niche") or "").strip() or None),
+        target_account_count=len(account_ids),
+        target_account_ids=account_ids,
+        target_account_usernames=target_usernames,
+        output_url=(str(job.output_url).strip() if job.output_url else None),
+        preview_url=None,
+        publish_intent_id=None,
+        publish_intent_status=None,
+        created_at=job.created_at.isoformat() if job.created_at else None,
+        updated_at=job.updated_at.isoformat() if job.updated_at else None,
+    )
+
+
+@router.delete("/{job_id}")
+async def delete_generation_job(job_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        jid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+    svc = GenerationJobService(db)
+    try:
+        await svc.delete_job(jid)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Job not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return {"deleted": True, "job_id": job_id}
+
+
 class CancelStepBody(BaseModel):
     step: str
 
@@ -1243,6 +1631,34 @@ class RetryStepBody(BaseModel):
     step_name: str
 
 
+async def _claim_job_for_pipeline_retry(db: AsyncSession, jid: uuid.UUID) -> None:
+    """Atomically mark a finished job as running so duplicate retry POSTs cannot stack pipelines."""
+    res = await db.execute(
+        update(GenerationJob)
+        .where(
+            GenerationJob.id == jid,
+            GenerationJob.status.in_(("failed", "completed")),
+        )
+        .values(status="running")
+    )
+    await db.commit()
+    if res.rowcount:
+        return
+    svc = GenerationJobService(db)
+    job = await svc.get_job(jid, with_children=False)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="Pipeline is already running for this job. Wait before retrying again.",
+        )
+    raise HTTPException(
+        status_code=400,
+        detail=f"Cannot retry pipeline while job status is {job.status}.",
+    )
+
+
 @router.post("/{job_id}/retry-step")
 async def retry_step(
     job_id: str,
@@ -1275,6 +1691,7 @@ async def retry_step(
             detail="Wait for the step to finish cancelling before retrying.",
         )
 
+    await _claim_job_for_pipeline_retry(db, jid)
     background_tasks.add_task(run_generation_job_pipeline_from, jid, body.step_name)
     return {"status": "retry_scheduled", "step_name": body.step_name}
 
@@ -1310,6 +1727,7 @@ async def retry_scene(
     if not sc:
         raise HTTPException(status_code=404, detail="Scene not found")
 
+    await _claim_job_for_pipeline_retry(db, jid)
     background_tasks.add_task(run_retry_scene, jid, sid)
     return {"status": "retry_scheduled", "scene_id": body.scene_id}
 

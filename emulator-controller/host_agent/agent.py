@@ -13,6 +13,8 @@ Endpoints:
     GET  /avds             -> {"count": N, "items": ["Pixel_5_API_34", ...]}
     POST /launch           -> {"success": true, "avd_name": "...", "pid": 1234}
         body: {"avd_name": "Pixel_5_API_34", "headless": true, "extra_args": []}
+    POST /stop             -> {"success": true, "serial": "emulator-5556"}
+        body: {"serial": "emulator-5556"}  (runs host-local ``adb emu kill``)
 
 All non-health endpoints require ``Authorization: Bearer <token>`` if the
 ``EMULATOR_AGENT_TOKEN`` environment variable is set.
@@ -44,8 +46,50 @@ LAUNCH_LOG_DIR = os.getenv("EMULATOR_AGENT_LAUNCH_LOG_DIR", "/tmp/emulator-host-
 
 
 AVD_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+EMULATOR_SERIAL_RE = re.compile(r"^emulator-\d+$")
+ADB_CONNECT_TARGET_RE = re.compile(r"^(?P<host>[A-Za-z0-9._-]+):(?P<port>\d{1,5})$")
 
 logger = logging.getLogger("emulator-host-agent")
+
+
+def _sdk_emulator_candidates(root: str) -> list[str]:
+    emu_dir = os.path.join(root, "emulator")
+    if sys.platform == "win32":
+        return [os.path.join(emu_dir, "emulator.exe"), os.path.join(emu_dir, "emulator")]
+    return [os.path.join(emu_dir, "emulator")]
+
+
+def _resolve_adb_binary() -> str | None:
+    explicit = os.getenv("ADB_PATH", "").strip()
+    if explicit:
+        if os.path.isfile(explicit):
+            return explicit
+        which = shutil.which(explicit)
+        if which:
+            return which
+    discovered = shutil.which("adb") or (
+        shutil.which("adb.exe") if sys.platform == "win32" else None
+    )
+    if discovered:
+        return discovered
+    for root_env in ("ANDROID_SDK_ROOT", "ANDROID_HOME"):
+        root = os.getenv(root_env, "").strip()
+        if not root:
+            continue
+        platform_tools = os.path.join(root, "platform-tools", "adb")
+        if sys.platform == "win32":
+            platform_tools = platform_tools + ".exe"
+        if os.path.isfile(platform_tools):
+            return platform_tools
+    return None
+
+
+def _valid_stop_serial(serial: str) -> bool:
+    if not serial:
+        return False
+    if EMULATOR_SERIAL_RE.match(serial):
+        return True
+    return bool(ADB_CONNECT_TARGET_RE.match(serial))
 
 
 def _resolve_emulator_binary() -> str | None:
@@ -56,16 +100,18 @@ def _resolve_emulator_binary() -> str | None:
         which = shutil.which(explicit)
         if which:
             return which
-    discovered = shutil.which("emulator")
+    discovered = shutil.which("emulator") or (
+        shutil.which("emulator.exe") if sys.platform == "win32" else None
+    )
     if discovered:
         return discovered
     for root_env in ("ANDROID_SDK_ROOT", "ANDROID_HOME"):
         root = os.getenv(root_env, "").strip()
         if not root:
             continue
-        candidate = os.path.join(root, "emulator", "emulator")
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
+        for candidate in _sdk_emulator_candidates(root):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
     return None
 
 
@@ -89,7 +135,7 @@ async def healthz(_request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "emulator": _resolve_emulator_binary()})
 
 
-def _detect_kvm() -> dict[str, Any]:
+def _detect_linux_kvm() -> dict[str, Any]:
     cpu_flags: list[str] = []
     try:
         with open("/proc/cpuinfo") as fh:
@@ -128,11 +174,96 @@ def _detect_kvm() -> dict[str, Any]:
 
     return {
         "ready": ready,
+        "backend": "kvm",
+        "host_platform": "linux",
         "has_virt_flag": has_virt_flag,
         "dev_kvm_exists": dev_kvm_exists,
         "dev_kvm_readable": dev_kvm_rw,
         "message": message,
     }
+
+
+async def _detect_acceleration(binary: str | None) -> dict[str, Any]:
+    """Platform-aware virtualization check (KVM on Linux, emulator -accel-check elsewhere)."""
+    if sys.platform == "win32":
+        backend = "whpx"
+        if not binary:
+            return {
+                "ready": False,
+                "backend": backend,
+                "host_platform": "windows",
+                "message": "emulator binary not found on Windows host",
+            }
+        proc = await asyncio.create_subprocess_exec(
+            binary,
+            "-accel-check",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=_emulator_env(),
+        )
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return {
+                "ready": False,
+                "backend": backend,
+                "host_platform": "windows",
+                "message": "emulator -accel-check timed out",
+            }
+        text = out.decode(errors="ignore").strip()
+        ready = proc.returncode == 0 and "usable" in text.lower()
+        return {
+            "ready": ready,
+            "backend": backend,
+            "host_platform": "windows",
+            "message": text or "emulator -accel-check returned no output",
+            "accel_check_exit_code": proc.returncode,
+        }
+
+    if sys.platform == "darwin":
+        backend = "hvf"
+        if not binary:
+            return {
+                "ready": False,
+                "backend": backend,
+                "host_platform": "darwin",
+                "message": "emulator binary not found on macOS host",
+            }
+        proc = await asyncio.create_subprocess_exec(
+            binary,
+            "-accel-check",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=_emulator_env(),
+        )
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return {
+                "ready": False,
+                "backend": backend,
+                "host_platform": "darwin",
+                "message": "emulator -accel-check timed out",
+            }
+        text = out.decode(errors="ignore").strip()
+        ready = proc.returncode == 0 and (
+            "usable" in text.lower() or "hvf" in text.lower() or "enabled" in text.lower()
+        )
+        return {
+            "ready": ready,
+            "backend": backend,
+            "host_platform": "darwin",
+            "message": text or "emulator -accel-check returned no output",
+            "accel_check_exit_code": proc.returncode,
+        }
+
+    linux = _detect_linux_kvm()
+    linux["host_platform"] = "linux"
+    return linux
 
 
 def make_app(expected_token: str | None) -> web.Application:
@@ -307,7 +438,8 @@ def make_app(expected_token: str | None) -> web.Application:
             return unauthorized
 
         binary = _resolve_emulator_binary()
-        kvm = _detect_kvm()
+        accel = await _detect_acceleration(binary)
+        kvm = accel
         avds: list[str] = []
         avds_error: str | None = None
         if binary:
@@ -332,13 +464,13 @@ def make_app(expected_token: str | None) -> web.Application:
                 await proc.communicate()
                 avds_error = "list-avds timed out"
 
-        ready = bool(binary) and kvm["ready"] and bool(avds)
+        ready = bool(binary) and accel["ready"] and bool(avds)
         if ready:
             verdict = "ready"
         elif not binary:
             verdict = "no_emulator_binary"
-        elif not kvm["ready"]:
-            verdict = "no_kvm"
+        elif not accel["ready"]:
+            verdict = "no_accel" if sys.platform in ("win32", "darwin") else "no_kvm"
         elif not avds:
             verdict = "no_avd"
         else:
@@ -348,8 +480,10 @@ def make_app(expected_token: str | None) -> web.Application:
             {
                 "ready": ready,
                 "verdict": verdict,
+                "host_platform": accel.get("host_platform"),
                 "emulator_binary": binary,
                 "kvm": kvm,
+                "acceleration": accel,
                 "avds": avds,
                 "avds_error": avds_error,
             }
@@ -359,7 +493,107 @@ def make_app(expected_token: str | None) -> web.Application:
     app.router.add_get("/healthz", healthz)
     app.router.add_get("/avds", list_avds)
     app.router.add_get("/preflight", preflight)
+    async def stop(request: web.Request) -> web.Response:
+        """Stop an emulator via host-local adb (required for ``emu kill`` from Docker)."""
+        unauthorized = _require_auth(request, expected_token)
+        if unauthorized is not None:
+            return unauthorized
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json_body"}, status=400)
+
+        serial = str(payload.get("serial") or "").strip()
+        if not _valid_stop_serial(serial):
+            return web.json_response({"error": "invalid_serial"}, status=400)
+
+        adb = _resolve_adb_binary()
+        if not adb:
+            return web.json_response(
+                {"success": False, "serial": serial, "error": "adb_binary_not_found"},
+                status=503,
+            )
+
+        started = time.monotonic()
+        if serial.startswith("emulator-"):
+            proc = await asyncio.create_subprocess_exec(
+                adb,
+                "-s",
+                serial,
+                "emu",
+                "kill",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        else:
+            proc = await asyncio.create_subprocess_exec(
+                adb,
+                "disconnect",
+                serial,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=20)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return web.json_response(
+                {
+                    "success": False,
+                    "serial": serial,
+                    "phase": "stop_timeout",
+                    "message": "adb stop timed out",
+                    "elapsed_ms": int((time.monotonic() - started) * 1000),
+                },
+                status=504,
+            )
+
+        stdout_s = out.decode(errors="ignore").strip()
+        stderr_s = err.decode(errors="ignore").strip()
+        combined = (stdout_s + "\n" + stderr_s).lower()
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        if proc.returncode == 0:
+            return web.json_response(
+                {
+                    "success": True,
+                    "serial": serial,
+                    "phase": "completed",
+                    "message": stdout_s or stderr_s or "Emulator session ended",
+                    "elapsed_ms": elapsed_ms,
+                }
+            )
+
+        # Emulator may already be gone (stale adb entry).
+        if "connection refused" in combined or "not found" in combined or "unknown" in combined:
+            return web.json_response(
+                {
+                    "success": True,
+                    "serial": serial,
+                    "phase": "already_stopped",
+                    "message": (
+                        f"{serial} is no longer reachable via adb "
+                        f"({stderr_s or stdout_s or 'already stopped'})"
+                    ),
+                    "elapsed_ms": elapsed_ms,
+                }
+            )
+
+        return web.json_response(
+            {
+                "success": False,
+                "serial": serial,
+                "phase": "stop_failed",
+                "message": stderr_s or stdout_s or f"adb exited with {proc.returncode}",
+                "elapsed_ms": elapsed_ms,
+            },
+            status=500,
+        )
+
     app.router.add_post("/launch", launch)
+    app.router.add_post("/stop", stop)
     return app
 
 

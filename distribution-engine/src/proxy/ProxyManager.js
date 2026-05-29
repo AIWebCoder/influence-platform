@@ -434,40 +434,12 @@ class ProxyManager {
    * One open proxy-pool warning at a time (avoids duplicate rows every 5 min / on each health run).
    */
   async _syncProxyPoolHealthAlert(pool, healthyCount, total) {
+    const AlertService = require('../services/AlertService');
     const messagePrefix = 'Critical proxy pool health:';
     const ratio = total > 0 ? healthyCount / total : 1;
-
-    if (ratio >= 0.2) {
-      await pool.query(
-        `UPDATE alerts SET is_read = true
-         WHERE type = 'warning' AND is_read = false AND message LIKE $1`,
-        [`${messagePrefix}%`],
-      );
-      return;
-    }
-
+    const active = ratio < 0.2;
     const message = `${messagePrefix} only ${healthyCount}/${total} proxies active. Check provider status.`;
-    const existing = await pool.query(
-      `SELECT id FROM alerts
-       WHERE type = 'warning' AND is_read = false AND message LIKE $1
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [`${messagePrefix}%`],
-    );
-
-    if (existing.rows.length > 0) {
-      await pool.query(
-        `UPDATE alerts SET message = $1, created_at = NOW() WHERE id = $2`,
-        [message, existing.rows[0].id],
-      );
-      return;
-    }
-
-    await pool.query(
-      `INSERT INTO alerts (id, type, message, is_read, created_at)
-       VALUES (gen_random_uuid(), 'warning', $1, false, NOW())`,
-      [message],
-    );
+    await AlertService.syncGlobalAlert(pool, messagePrefix, message, 'warning', active);
   }
 
   async getHealthStatus() {

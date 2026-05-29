@@ -20,6 +20,7 @@ import {
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useLocale } from "@/components/i18n/LocaleProvider";
+import type { TranslationTree } from "@/lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +44,8 @@ type PublicationStatus =
   | "retrying"
   | "pending"
   | "publishing";
+
+type PubText = TranslationTree["publications"];
 
 interface Publication {
   id: string;
@@ -115,19 +118,10 @@ interface PublicationDiagnostics {
   content_caption: string | null;
 }
 
-const FILTER_OPTIONS: { label: string; value: string | undefined }[] = [
-  { label: "All", value: undefined },
-  { label: "Published", value: "published" },
-  { label: "Failed", value: "failed" },
-  { label: "Retrying", value: "retrying" },
-  { label: "Pending", value: "pending" },
-  { label: "Perm. Failed", value: "permanently_failed" },
-];
-
-function formatDate(dateStr: string | null) {
-  if (!dateStr) return "-";
+function formatDate(dateStr: string | null, locale: string, dash: string) {
+  if (!dateStr) return dash;
   const d = new Date(dateStr);
-  return d.toLocaleDateString("en-US", {
+  return d.toLocaleDateString(locale === "fr" ? "fr-FR" : "en-US", {
     month: "short",
     day: "numeric",
     hour: "2-digit",
@@ -135,49 +129,25 @@ function formatDate(dateStr: string | null) {
   });
 }
 
-function truncate(str: string | null, len: number) {
-  if (!str) return "-";
+function truncate(str: string | null, len: number, dash: string) {
+  if (!str) return dash;
   return str.length > len ? `${str.slice(0, len)}...` : str;
 }
 
-function statusMeta(status: PublicationStatus) {
+function statusMeta(status: PublicationStatus, pub: PubText) {
   switch (status) {
     case "published":
-      return {
-        label: "Published",
-        variant: "default" as const,
-        icon: CheckCircle2,
-      };
+      return { label: pub.published, variant: "default" as const, icon: CheckCircle2 };
     case "failed":
-      return {
-        label: "Failed",
-        variant: "destructive" as const,
-        icon: XCircle,
-      };
+      return { label: pub.failed, variant: "destructive" as const, icon: XCircle };
     case "permanently_failed":
-      return {
-        label: "Perm. Failed",
-        variant: "secondary" as const,
-        icon: AlertCircle,
-      };
+      return { label: pub.permDead, variant: "secondary" as const, icon: AlertCircle };
     case "retrying":
-      return {
-        label: "Retrying",
-        variant: "outline" as const,
-        icon: RotateCw,
-      };
+      return { label: pub.retrying, variant: "outline" as const, icon: RotateCw };
     case "publishing":
-      return {
-        label: "Publishing",
-        variant: "outline" as const,
-        icon: Zap,
-      };
+      return { label: pub.publishing, variant: "outline" as const, icon: Zap };
     default:
-      return {
-        label: "Pending",
-        variant: "secondary" as const,
-        icon: Clock,
-      };
+      return { label: pub.pending, variant: "secondary" as const, icon: Clock };
   }
 }
 
@@ -209,7 +179,8 @@ function StatCard({
 }
 
 export default function PublicationsPage() {
-  const { text } = useLocale();
+  const { locale, text, t } = useLocale();
+  const pub = text.publications;
   const [publications, setPublications] = useState<Publication[]>([]);
   const [stats, setStats] = useState<PubStats | null>(null);
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
@@ -228,6 +199,18 @@ export default function PublicationsPage() {
   const currentPage = Math.floor(offset / LIMIT) + 1;
   const activeFilterTab = activeFilter ?? "all";
 
+  const filterOptions = useMemo(
+    () => [
+      { label: pub.filterAll, value: undefined },
+      { label: pub.filterPublished, value: "published" },
+      { label: pub.filterFailed, value: "failed" },
+      { label: pub.filterRetrying, value: "retrying" },
+      { label: pub.filterPending, value: "pending" },
+      { label: pub.filterPermFailed, value: "permanently_failed" },
+    ],
+    [pub],
+  );
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     setFetchError(null);
@@ -238,12 +221,12 @@ export default function PublicationsPage() {
         api.distribution.getQueueStats(),
       ]);
       const rejectedRequests = [pubsData, statsData, queueData].filter(
-        (res) => res.status === "rejected"
+        (res) => res.status === "rejected",
       );
       if (rejectedRequests.length === 3) {
-        setFetchError("Unable to load publication data. Check backend services and retry.");
+        setFetchError(pub.loadErrorAll);
       } else if (rejectedRequests.length > 0) {
-        setFetchError("Some publication metrics are temporarily unavailable.");
+        setFetchError(pub.loadErrorPartial);
       }
 
       if (pubsData.status === "fulfilled") {
@@ -257,11 +240,11 @@ export default function PublicationsPage() {
         setQueueStats(queueData.value);
       }
     } catch {
-      setFetchError("Unexpected error while loading publications.");
+      setFetchError(pub.loadErrorUnexpected);
     } finally {
       setLoading(false);
     }
-  }, [activeFilter, offset]);
+  }, [activeFilter, offset, pub.loadErrorAll, pub.loadErrorPartial, pub.loadErrorUnexpected]);
 
   useEffect(() => {
     fetchData();
@@ -274,12 +257,12 @@ export default function PublicationsPage() {
   }, [activeFilter]);
 
   const canRetry = useMemo(
-    () => (pub: Publication) => {
-      if (!["failed", "permanently_failed", "retrying"].includes(pub.status)) return false;
-      if (pub.publication_target_id) return true;
-      return Number(pub.retry_count || 0) < Number(pub.max_retries || 3);
+    () => (item: Publication) => {
+      if (!["failed", "permanently_failed", "retrying"].includes(item.status)) return false;
+      if (item.publication_target_id) return true;
+      return Number(item.retry_count || 0) < Number(item.max_retries || 3);
     },
-    []
+    [],
   );
 
   const handleRetry = async (publicationId: string) => {
@@ -287,8 +270,9 @@ export default function PublicationsPage() {
     try {
       await api.distribution.retryPublication(publicationId);
       await fetchData();
-    } catch (error: any) {
-      setFetchError(error?.response?.data?.error || "Retry action failed.");
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { error?: string } } };
+      setFetchError(err?.response?.data?.error || pub.retryFailed);
     } finally {
       setRetryingId(null);
     }
@@ -300,8 +284,9 @@ export default function PublicationsPage() {
     try {
       const data = await api.distribution.getPublicationDiagnostics(publicationId);
       setDiag(data);
-    } catch (error: any) {
-      setDiagError(error?.response?.data?.error || "Could not load diagnostics.");
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { error?: string } } };
+      setDiagError(err?.response?.data?.error || pub.diagFailed);
       setDiag(null);
     } finally {
       setDiagLoadingId(null);
@@ -314,54 +299,56 @@ export default function PublicationsPage() {
         <div>
           <h2 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
             <BookOpen className="h-6 w-6 text-primary" />
-            {text.publications.title}
+            {pub.title}
           </h2>
-          <p className="text-sm text-muted-foreground">{text.publications.subtitle}</p>
+          <p className="text-sm text-muted-foreground">{pub.subtitle}</p>
         </div>
         <Button onClick={fetchData} disabled={loading} variant="outline">
           <RefreshCw className={cn("mr-2 h-4 w-4", loading && "animate-spin")} />
-          {text.publications.syncStatus}
+          {pub.syncStatus}
         </Button>
       </div>
 
       {fetchError ? (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Data Load Error</AlertTitle>
+          <AlertTitle>{pub.dataLoadError}</AlertTitle>
           <AlertDescription>{fetchError}</AlertDescription>
         </Alert>
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
         <StatCard
-          title="Published"
-          value={stats?.published ?? "-"}
+          title={pub.published}
+          value={stats?.published ?? pub.dash}
           icon={CheckCircle2}
-          sub={stats ? `${stats.published_today} today` : undefined}
+          sub={stats ? t("publications.today", { count: stats.published_today }) : undefined}
         />
         <StatCard
-          title="Failed"
-          value={stats?.failed ?? "-"}
+          title={pub.failed}
+          value={stats?.failed ?? pub.dash}
           icon={XCircle}
-          sub={stats ? `${stats.failed_today} today` : undefined}
+          sub={stats ? t("publications.today", { count: stats.failed_today }) : undefined}
         />
         <StatCard
-          title="Retrying"
-          value={stats?.retrying ?? "-"}
+          title={pub.retrying}
+          value={stats?.retrying ?? pub.dash}
           icon={RotateCw}
-          sub={stats ? `${stats.total_retries} total retries` : undefined}
+          sub={stats ? t("publications.totalRetries", { count: stats.total_retries }) : undefined}
         />
         <StatCard
-          title="Queue Pending"
-          value={queueStats?.queue?.pending ?? "-"}
+          title={pub.queuePending}
+          value={queueStats?.queue?.pending ?? pub.dash}
           icon={Inbox}
-          sub={queueStats ? `${queueStats.queue.delayed} delayed` : undefined}
+          sub={
+            queueStats ? t("publications.delayed", { count: queueStats.queue.delayed }) : undefined
+          }
         />
         <StatCard
-          title="Total"
-          value={stats?.total ?? "-"}
+          title={pub.total}
+          value={stats?.total ?? pub.dash}
           icon={TrendingUp}
-          sub={stats ? `${stats.processing} processing` : undefined}
+          sub={stats ? t("publications.processing", { count: stats.processing }) : undefined}
         />
       </div>
 
@@ -371,10 +358,10 @@ export default function PublicationsPage() {
         className="w-fit max-w-full"
       >
         <TabsList className="w-fit max-w-full justify-start overflow-x-auto">
-          {FILTER_OPTIONS.map((filter) => {
+          {filterOptions.map((filter) => {
             const tabValue = filter.value ?? "all";
             return (
-              <TabsTrigger key={filter.label} value={tabValue}>
+              <TabsTrigger key={tabValue} value={tabValue}>
                 {filter.label}
               </TabsTrigger>
             );
@@ -384,7 +371,7 @@ export default function PublicationsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Publication Queue</CardTitle>
+          <CardTitle className="text-base">{pub.queueTitle}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {loading && publications.length === 0 ? (
@@ -396,11 +383,11 @@ export default function PublicationsPage() {
           ) : publications.length === 0 ? (
             <div className="text-center py-10 text-muted-foreground">
               <Inbox className="h-8 w-8 mx-auto mb-2" />
-              <p className="font-medium">No publications found</p>
+              <p className="font-medium">{pub.noPublications}</p>
               <p className="text-sm">
                 {activeFilter
-                  ? `No publications with status "${activeFilter}"`
-                  : "Publications will appear here once content is published"}
+                  ? t("publications.noStatusPublications", { status: activeFilter })
+                  : pub.emptyHint}
               </p>
             </div>
           ) : (
@@ -408,32 +395,32 @@ export default function PublicationsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Account</TableHead>
-                    <TableHead>Content</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Retries</TableHead>
-                    <TableHead>Error</TableHead>
-                    <TableHead>Timeline</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+                    <TableHead>{pub.account}</TableHead>
+                    <TableHead>{pub.content}</TableHead>
+                    <TableHead>{pub.status}</TableHead>
+                    <TableHead>{pub.retries}</TableHead>
+                    <TableHead>{pub.errorLog}</TableHead>
+                    <TableHead>{pub.timeline}</TableHead>
+                    <TableHead className="text-right">{pub.actions}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {publications.map((pub) => {
-                    const meta = statusMeta(pub.status);
+                  {publications.map((item) => {
+                    const meta = statusMeta(item.status, pub);
                     const Icon = meta.icon;
                     return (
-                      <TableRow key={pub.id}>
+                      <TableRow key={item.id}>
                         <TableCell>
-                          <div className="font-medium">@{pub.account_username}</div>
-                          <div className="text-xs text-muted-foreground">{pub.account_platform}</div>
+                          <div className="font-medium">@{item.account_username}</div>
+                          <div className="text-xs text-muted-foreground">{item.account_platform}</div>
                         </TableCell>
                         <TableCell>
                           <div className="max-w-[260px]">
-                            <p className="truncate">{truncate(pub.content_caption, 80)}</p>
+                            <p className="truncate">{truncate(item.content_caption, 80, pub.dash)}</p>
                             <p className="text-xs text-muted-foreground">
-                              {pub.content_type
-                                ? `${pub.content_type}${pub.content_niche ? ` · ${pub.content_niche}` : ""}`
-                                : "-"}
+                              {item.content_type
+                                ? `${item.content_type}${item.content_niche ? ` · ${item.content_niche}` : ""}`
+                                : pub.dash}
                             </p>
                           </div>
                         </TableCell>
@@ -444,46 +431,52 @@ export default function PublicationsPage() {
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <div className="text-sm">{pub.retry_count}/{pub.max_retries || 3}</div>
-                          {pub.next_retry_at ? (
+                          <div className="text-sm">
+                            {item.retry_count}/{item.max_retries || 3}
+                          </div>
+                          {item.next_retry_at ? (
                             <p className="text-xs text-muted-foreground">
-                              next: {formatDate(pub.next_retry_at)}
+                              {t("publications.nextRetry", {
+                                date: formatDate(item.next_retry_at, locale, pub.dash),
+                              })}
                             </p>
                           ) : null}
                         </TableCell>
                         <TableCell className="max-w-[280px]">
-                          {pub.error_message ? (
+                          {item.error_message ? (
                             <div>
                               <p className="text-sm text-destructive truncate">
-                                {truncate(pub.error_message, 90)}
+                                {truncate(item.error_message, 90, pub.dash)}
                               </p>
-                              {pub.failure_type ? (
+                              {item.failure_type ? (
                                 <p className="text-xs text-muted-foreground uppercase">
-                                  {pub.failure_type}
+                                  {item.failure_type}
                                 </p>
                               ) : null}
                             </div>
                           ) : (
-                            <span className="text-muted-foreground">-</span>
+                            <span className="text-muted-foreground">{pub.dash}</span>
                           )}
                         </TableCell>
-                        <TableCell>{formatDate(pub.published_at || pub.created_at)}</TableCell>
+                        <TableCell>
+                          {formatDate(item.published_at || item.created_at, locale, pub.dash)}
+                        </TableCell>
                         <TableCell className="text-right space-x-2">
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => handleViewDiagnostics(pub.id)}
-                            disabled={diagLoadingId === pub.id}
+                            onClick={() => handleViewDiagnostics(item.id)}
+                            disabled={diagLoadingId === item.id}
                           >
-                            {diagLoadingId === pub.id ? "Loading..." : "Details"}
+                            {diagLoadingId === item.id ? pub.loading : pub.details}
                           </Button>
                           <Button
                             variant="secondary"
                             size="sm"
-                            onClick={() => handleRetry(pub.id)}
-                            disabled={!canRetry(pub) || retryingId === pub.id}
+                            onClick={() => handleRetry(item.id)}
+                            disabled={!canRetry(item) || retryingId === item.id}
                           >
-                            {retryingId === pub.id ? "Retrying..." : "Retry"}
+                            {retryingId === item.id ? pub.retryingAction : pub.retry}
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -494,7 +487,11 @@ export default function PublicationsPage() {
 
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">
-                  Showing {offset + 1}-{Math.min(offset + LIMIT, total)} of {total}
+                  {t("publications.showing", {
+                    start: offset + 1,
+                    end: Math.min(offset + LIMIT, total),
+                    total,
+                  })}
                 </span>
                 <div className="flex items-center gap-2">
                   <Button
@@ -506,7 +503,10 @@ export default function PublicationsPage() {
                     <ChevronLeft className="h-4 w-4" />
                   </Button>
                   <span className="text-sm">
-                    {currentPage} / {Math.max(totalPages, 1)}
+                    {t("publications.pageOf", {
+                      current: currentPage,
+                      total: Math.max(totalPages, 1),
+                    })}
                   </span>
                   <Button
                     variant="outline"
@@ -526,7 +526,7 @@ export default function PublicationsPage() {
       {diagError ? (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Diagnostics Error</AlertTitle>
+          <AlertTitle>{pub.diagErrorTitle}</AlertTitle>
           <AlertDescription>{diagError}</AlertDescription>
         </Alert>
       ) : null}
@@ -536,21 +536,43 @@ export default function PublicationsPage() {
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <Search className="h-4 w-4" />
-              Diagnostics
+              {pub.diagnostics}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-muted-foreground break-all">{diag.id}</p>
             <Separator />
             <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
-              <p>status: <span className="font-medium">{diag.status}</span></p>
-              <p>attempt: <span className="font-medium">{diag.attempt}</span></p>
-              <p>retry_count: <span className="font-medium">{diag.retry_count}</span></p>
-              <p>max_retries: <span className="font-medium">{diag.max_retries}</span></p>
-              <p>last_retry_at: <span className="font-medium">{formatDate(diag.last_retry_at)}</span></p>
-              <p>next_retry_at: <span className="font-medium">{formatDate(diag.next_retry_at)}</span></p>
-              <p>failure_type: <span className="font-medium">{diag.failure_type || "-"}</span></p>
-              <p>error: <span className="font-medium">{diag.error_message || "-"}</span></p>
+              <p>
+                {pub.status}: <span className="font-medium">{diag.status}</span>
+              </p>
+              <p>
+                {pub.retries}: <span className="font-medium">{diag.retry_count}</span>
+              </p>
+              <p>
+                max: <span className="font-medium">{diag.max_retries}</span>
+              </p>
+              <p>
+                attempt: <span className="font-medium">{diag.attempt}</span>
+              </p>
+              <p>
+                last:{" "}
+                <span className="font-medium">
+                  {formatDate(diag.last_retry_at, locale, pub.dash)}
+                </span>
+              </p>
+              <p>
+                next:{" "}
+                <span className="font-medium">
+                  {formatDate(diag.next_retry_at, locale, pub.dash)}
+                </span>
+              </p>
+              <p>
+                failure_type: <span className="font-medium">{diag.failure_type || pub.dash}</span>
+              </p>
+              <p>
+                error: <span className="font-medium">{diag.error_message || pub.dash}</span>
+              </p>
             </div>
           </CardContent>
         </Card>

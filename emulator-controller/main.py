@@ -30,6 +30,24 @@ from proxy_bridge_manager import ProxyBridgeManager, UpstreamProxy
 load_dotenv()
 
 
+def _emulator_lock_is_busy(lock: asyncio.Lock) -> bool:
+    """Return True if the per-emulator lock is already held.
+
+    asyncio.Lock.locked() exists only on Python 3.12+; the container image uses 3.11.
+    """
+    locked_fn = getattr(lock, "locked", None)
+    if callable(locked_fn):
+        return bool(locked_fn())
+    try:
+        acquired = lock.acquire(blocking=False)
+    except RuntimeError:
+        return True
+    if acquired:
+        lock.release()
+        return False
+    return True
+
+
 def _setup_logging() -> None:
     level = os.getenv("LOG_LEVEL", "INFO").upper()
     log_dir = os.getenv("LOG_DIR", "/app/logs")
@@ -107,7 +125,9 @@ class Settings:
             claude_model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
             appium_server_url=os.getenv("APPIUM_SERVER_URL", "http://host.docker.internal:4723"),
             android_app_package=os.getenv("ANDROID_APP_PACKAGE", "com.instagram.android"),
-            android_app_activity=os.getenv("ANDROID_APP_ACTIVITY", "com.instagram.mainactivity.MainActivity"),
+            android_app_activity=os.getenv(
+                "ANDROID_APP_ACTIVITY", "com.instagram.mainactivity.LauncherActivity"
+            ),
             max_parallel_emulators=int(os.getenv("MAX_PARALLEL_EMULATORS", "5")),
             min_human_delay_seconds=float(os.getenv("MIN_HUMAN_DELAY_SECONDS", "1.2")),
             max_human_delay_seconds=float(os.getenv("MAX_HUMAN_DELAY_SECONDS", "4.5")),
@@ -440,32 +460,46 @@ class EmulatorOrchestrator:
             files.sort(key=lambda x: x["modified_at"], reverse=True)
             return web.json_response({"count": len(files), "items": files[:100]})
 
+        async def _emulator_list_item(device) -> dict[str, Any]:
+            try:
+                size = await asyncio.wait_for(
+                    self.device_manager.get_screen_size(device.serial),
+                    timeout=5.0,
+                )
+            except Exception:
+                size = None
+            lock = self._get_emulator_lock(device.serial)
+            return {
+                "serial": device.serial,
+                "status": device.status,
+                "model": device.model,
+                "busy": _emulator_lock_is_busy(lock),
+                "screen_size": (
+                    {"width": size[0], "height": size[1]} if size else None
+                ),
+            }
+
         async def list_emulators(_request: web.Request) -> web.Response:
-            devices = await self.device_manager.list_connected_emulators()
-            items = []
-            for d in devices:
-                size = await self.device_manager.get_screen_size(d.serial)
-                lock = self._get_emulator_lock(d.serial)
-                items.append(
+            try:
+                devices = await self.device_manager.list_connected_emulators()
+                if devices:
+                    items = await asyncio.gather(
+                        *[_emulator_list_item(d) for d in devices]
+                    )
+                else:
+                    items = []
+                return web.json_response(
                     {
-                        "serial": d.serial,
-                        "status": d.status,
-                        "model": d.model,
-                        "busy": lock.locked(),
-                        "screen_size": {
-                            "width": size[0],
-                            "height": size[1],
-                        }
-                        if size
-                        else None,
+                        "count": len(items),
+                        "items": items,
                     }
                 )
-            return web.json_response(
-                {
-                    "count": len(items),
-                    "items": items,
-                }
-            )
+            except Exception as exc:
+                logger.exception("list_emulators_failed")
+                return web.json_response(
+                    {"count": 0, "items": [], "error": str(exc)},
+                    status=500,
+                )
 
         async def emulator_frame(request: web.Request) -> web.StreamResponse:
             serial = request.match_info.get("serial", "")
@@ -535,6 +569,47 @@ class EmulatorOrchestrator:
                 action_type="swipe",
                 data={"x1": x1, "y1": y1, "x2": x2, "y2": y2, "duration": duration},
                 runner=lambda: self.device_manager.input_swipe(serial, x1, y1, x2, y2, duration),
+                started=started,
+            )
+
+        async def input_key(request: web.Request) -> web.Response:
+            serial = request.match_info.get("serial", "")
+            started = monotonic()
+            try:
+                payload = await request.json()
+                key = payload.get("key")
+                if self.device_manager.is_app_drawer_key(key):
+                    width = payload.get("width")
+                    height = payload.get("height")
+                    w = int(width) if width is not None else None
+                    h = int(height) if height is not None else None
+                    return await self._execute_input_action(
+                        serial=serial,
+                        action_type="app_drawer",
+                        data={"key": str(key), "width": w, "height": h},
+                        runner=lambda: self.device_manager.input_app_drawer(serial, w, h),
+                        started=started,
+                    )
+                code = self.device_manager.resolve_keyevent_code(
+                    key,
+                    payload.get("keycode"),
+                )
+            except (TypeError, ValueError) as exc:
+                return web.json_response(
+                    {
+                        "status": "error",
+                        "execution_time_ms": int((monotonic() - started) * 1000),
+                        "error": str(exc)
+                        or 'Invalid JSON body; expected {"key":"app_drawer"} or {"keycode":4}',
+                    },
+                    status=400,
+                )
+
+            return await self._execute_input_action(
+                serial=serial,
+                action_type="key",
+                data={"keycode": code},
+                runner=lambda: self.device_manager.input_keyevent(serial, code),
                 started=started,
             )
 
@@ -671,7 +746,7 @@ class EmulatorOrchestrator:
                 )
 
             lock = self._get_emulator_lock(serial)
-            if lock.locked():
+            if _emulator_lock_is_busy(lock):
                 return web.json_response(
                     {
                         "success": False,
@@ -720,6 +795,74 @@ class EmulatorOrchestrator:
                 )
                 return web.json_response(result, status=status_code)
 
+        async def stop_emulator(request: web.Request) -> web.Response:
+            serial = request.match_info.get("serial", "")
+            started = monotonic()
+            if not is_valid_emulator_serial(serial):
+                return web.json_response(
+                    {
+                        "success": False,
+                        "serial": serial,
+                        "phase": "validation_failed",
+                        "message": "Invalid emulator serial",
+                        "elapsed_ms": int((monotonic() - started) * 1000),
+                    },
+                    status=400,
+                )
+
+            lock = self._get_emulator_lock(serial)
+            if _emulator_lock_is_busy(lock):
+                return web.json_response(
+                    {
+                        "success": False,
+                        "serial": serial,
+                        "phase": "busy",
+                        "message": "Emulator is busy",
+                        "elapsed_ms": int((monotonic() - started) * 1000),
+                    },
+                    status=409,
+                )
+
+            async with lock:
+                try:
+                    result = await self.device_manager.stop_emulator(serial)
+                except ValueError as exc:
+                    return web.json_response(
+                        {
+                            "success": False,
+                            "serial": serial,
+                            "phase": "validation_failed",
+                            "message": str(exc),
+                            "elapsed_ms": int((monotonic() - started) * 1000),
+                        },
+                        status=404,
+                    )
+                except Exception as exc:
+                    logger.exception("emulator_stop_failed serial=%s", serial)
+                    return web.json_response(
+                        {
+                            "success": False,
+                            "serial": serial,
+                            "phase": "stop_failed",
+                            "message": str(exc),
+                            "elapsed_ms": int((monotonic() - started) * 1000),
+                        },
+                        status=500,
+                    )
+
+            if serial in self.emulator_locks:
+                del self.emulator_locks[serial]
+
+            status_code = 200 if result.get("success") else 500
+            logger.info(
+                "emulator_stop serial=%s phase=%s success=%s elapsed_ms=%s",
+                serial,
+                result.get("phase"),
+                result.get("success"),
+                result.get("elapsed_ms"),
+            )
+            return web.json_response(result, status=status_code)
+
         async def launch_instagram_app(request: web.Request) -> web.Response:
             serial = request.match_info.get("serial", "")
             started = monotonic()
@@ -740,8 +883,10 @@ class EmulatorOrchestrator:
         app.router.add_get("/emulators/{serial}/frame.png", emulator_frame)
         app.router.add_post("/emulators/{serial}/input/tap", input_tap)
         app.router.add_post("/emulators/{serial}/input/swipe", input_swipe)
+        app.router.add_post("/emulators/{serial}/input/key", input_key)
         app.router.add_post("/emulators/{serial}/apps/instagram", launch_instagram_app)
         app.router.add_post("/emulators/{serial}/actions/restart", restart_emulator)
+        app.router.add_post("/emulators/{serial}/actions/stop", stop_emulator)
         app.router.add_static("/screenshots/file/", self.settings.screenshot_dir, show_index=False)
 
         self.screenshot_runner = web.AppRunner(app)
@@ -780,7 +925,7 @@ class EmulatorOrchestrator:
             )
 
         lock = self._get_emulator_lock(serial)
-        if lock.locked():
+        if _emulator_lock_is_busy(lock):
             return web.json_response(
                 {
                     "status": "error",
@@ -792,7 +937,7 @@ class EmulatorOrchestrator:
 
         async with lock:
             try:
-                await runner()
+                result = await runner()
                 duration_ms = int((monotonic() - started) * 1000)
                 logger.info(
                     "emulator_input_action serial=%s action=%s data=%s duration_ms=%s",
@@ -801,12 +946,13 @@ class EmulatorOrchestrator:
                     json.dumps(data, ensure_ascii=True),
                     duration_ms,
                 )
-                return web.json_response(
-                    {
-                        "status": "success",
-                        "execution_time_ms": duration_ms,
-                    }
-                )
+                payload: dict[str, Any] = {
+                    "status": "success",
+                    "execution_time_ms": duration_ms,
+                }
+                if isinstance(result, dict):
+                    payload.update(result)
+                return web.json_response(payload)
             except Exception as exc:
                 duration_ms = int((monotonic() - started) * 1000)
                 logger.error(

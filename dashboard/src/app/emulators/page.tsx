@@ -4,16 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import {
   AlertCircle,
   CheckCircle2,
-  Instagram,
   Monitor,
   Plus,
   RefreshCw,
   RotateCcw,
   Smartphone,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import {
+  EmulatorDeviceCard,
+  type EmulatorInfo,
+} from "@/components/emulators/EmulatorDeviceCard";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -34,14 +36,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-type EmulatorInfo = {
-  serial: string;
-  status: string;
-  model?: string | null;
-  busy?: boolean;
-  screen_size?: { width: number; height: number } | null;
-};
+import { useLocale } from "@/components/i18n/LocaleProvider";
 
 type EmulatorResponse = {
   count: number;
@@ -49,34 +44,43 @@ type EmulatorResponse = {
   error?: string;
 };
 
-function StatCard({
-  title,
-  value,
-  icon: Icon,
-  sub,
+function EmulatorStatsBar({
+  connected,
+  online,
+  busy,
+  labels,
 }: {
-  title: string;
-  value: number | string;
-  icon: React.ElementType;
-  sub?: string;
+  connected: number;
+  online: number;
+  busy: number;
+  labels: { connected: string; ready: string; busy: string };
 }) {
+  const items = [
+    { label: labels.connected, value: connected, icon: Smartphone },
+    { label: labels.ready, value: online, icon: CheckCircle2 },
+    { label: labels.busy, value: busy, icon: RotateCcw },
+  ] as const;
+
   return (
-    <Card>
-      <CardContent className="pt-6">
-        <div className="flex items-start justify-between">
+    <div className="grid grid-cols-3 divide-x rounded-lg border bg-muted/30">
+      {items.map(({ label, value, icon: Icon }) => (
+        <div key={label} className="flex items-center gap-3 px-5 py-3 first:pl-5 last:pr-5">
+          <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
           <div>
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">{title}</p>
-            <p className="text-2xl font-semibold mt-1">{value}</p>
-            {sub ? <p className="text-xs text-muted-foreground mt-1">{sub}</p> : null}
+            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              {label}
+            </p>
+            <p className="text-lg font-semibold tabular-nums leading-tight">{value}</p>
           </div>
-          <Icon className="h-5 w-5 text-muted-foreground" />
         </div>
-      </CardContent>
-    </Card>
+      ))}
+    </div>
   );
 }
 
 export default function EmulatorsPage() {
+  const { text, t } = useLocale();
+  const e = text.emulators;
   const [data, setData] = useState<EmulatorResponse>({ count: 0, items: [] });
   const [loading, setLoading] = useState(true);
   const [refreshingAll, setRefreshingAll] = useState(false);
@@ -84,7 +88,9 @@ export default function EmulatorsPage() {
   const [controlEnabled, setControlEnabled] = useState(true);
   const [busyBySerial, setBusyBySerial] = useState<Record<string, boolean>>({});
   const [restartingBySerial, setRestartingBySerial] = useState<Record<string, boolean>>({});
+  const [stoppingBySerial, setStoppingBySerial] = useState<Record<string, boolean>>({});
   const [launchingIgBySerial, setLaunchingIgBySerial] = useState<Record<string, boolean>>({});
+  const [pressingMenuBySerial, setPressingMenuBySerial] = useState<Record<string, boolean>>({});
   const [refreshingBySerial, setRefreshingBySerial] = useState<Record<string, boolean>>({});
   const [errorBySerial, setErrorBySerial] = useState<Record<string, string | undefined>>({});
   const [rippleBySerial, setRippleBySerial] = useState<
@@ -96,18 +102,21 @@ export default function EmulatorsPage() {
 
   const loadEmulators = useCallback(async (): Promise<void> => {
     try {
-      const res = await fetch("/api/emulators", { cache: "no-store" });
+      const res = await fetch("/api/emulators", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(12_000),
+      });
       if (!res.ok) {
         throw new Error(`API returned status ${res.status}`);
       }
       const payload = (await res.json()) as EmulatorResponse;
       setData(payload);
     } catch {
-      setData({ count: 0, items: [], error: "Unable to fetch emulator list" });
+      setData({ count: 0, items: [], error: e.listFetchError });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [e.listFetchError]);
 
   useEffect(() => {
     void loadEmulators();
@@ -164,14 +173,14 @@ export default function EmulatorsPage() {
       if (!res.ok || body.status !== "success") {
         setErrorBySerial((prev) => ({
           ...prev,
-          [serial]: body.error || "Input action failed",
+          [serial]: body.error || e.inputFailed,
         }));
         return false;
       }
       setTick((t) => t + 1);
       return true;
     } catch {
-      setErrorBySerial((prev) => ({ ...prev, [serial]: "Network error while sending input" }));
+      setErrorBySerial((prev) => ({ ...prev, [serial]: e.inputNetworkError }));
       return false;
     } finally {
       setBusyBySerial((prev) => ({ ...prev, [serial]: false }));
@@ -195,11 +204,11 @@ export default function EmulatorsPage() {
         phase?: string;
       };
       if (!res.ok || !payload.success) {
-        const msg = payload.message || payload.phase || "Restart failed";
+        const msg = payload.message || payload.phase || e.restartFailed;
         setErrorBySerial((prev) => ({ ...prev, [serial]: msg }));
       }
     } catch {
-      setErrorBySerial((prev) => ({ ...prev, [serial]: "Network error during restart" }));
+      setErrorBySerial((prev) => ({ ...prev, [serial]: e.restartNetworkError }));
     } finally {
       setRestartingBySerial((prev) => ({ ...prev, [serial]: false }));
       await loadEmulators();
@@ -207,8 +216,87 @@ export default function EmulatorsPage() {
     }
   };
 
+  const endSession = async (serial: string) => {
+    if (stoppingBySerial[serial] || restartingBySerial[serial]) return;
+    setErrorBySerial((prev) => ({ ...prev, [serial]: undefined }));
+    setStoppingBySerial((prev) => ({ ...prev, [serial]: true }));
+    try {
+      const res = await fetch(
+        `/api/emulators/${encodeURIComponent(serial)}/actions/stop`,
+        { method: "POST", cache: "no-store" }
+      );
+      const payload = (await res.json()) as {
+        success?: boolean;
+        message?: string;
+        phase?: string;
+      };
+      if (!res.ok || !payload.success) {
+        const msg = payload.message || payload.phase || e.endSessionFailed;
+        setErrorBySerial((prev) => ({ ...prev, [serial]: msg }));
+      }
+    } catch {
+      setErrorBySerial((prev) => ({ ...prev, [serial]: e.endSessionNetworkError }));
+    } finally {
+      setStoppingBySerial((prev) => ({ ...prev, [serial]: false }));
+      await loadEmulators();
+      setTick((t) => t + 1);
+    }
+  };
+
+  const openAppDrawer = async (emulator: EmulatorInfo) => {
+    const serial = emulator.serial;
+    if (pressingMenuBySerial[serial]) return;
+    setErrorBySerial((prev) => ({ ...prev, [serial]: undefined }));
+    setPressingMenuBySerial((prev) => ({ ...prev, [serial]: true }));
+    const width = emulator.screen_size?.width ?? 1080;
+    const height = emulator.screen_size?.height ?? 2400;
+    try {
+      const res = await fetch(
+        `/api/emulators/${encodeURIComponent(serial)}/input/key`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key: "app_drawer", width, height }),
+          cache: "no-store",
+        }
+      );
+      const body = (await res.json()) as {
+        status: string;
+        error?: string;
+        method?: string;
+      };
+      if (!res.ok || body.status !== "success") {
+        setErrorBySerial((prev) => ({
+          ...prev,
+          [serial]: body.error || e.appDrawerFailed,
+        }));
+        return;
+      }
+      setTick((t) => t + 1);
+      window.setTimeout(() => setTick((t) => t + 1), 700);
+    } catch {
+      setErrorBySerial((prev) => ({
+        ...prev,
+        [serial]: e.appDrawerNetworkError,
+      }));
+    } finally {
+      setPressingMenuBySerial((prev) => ({ ...prev, [serial]: false }));
+    }
+  };
+
   const openInstagram = async (serial: string) => {
     if (launchingIgBySerial[serial]) return;
+    const emu = data.items.find((item) => item.serial === serial);
+    if (emu && emu.status !== "device") {
+      setErrorBySerial((prev) => ({
+        ...prev,
+        [serial]:
+          emu.status === "unauthorized"
+            ? e.acceptUsbThenRefresh
+            : t("emulators.notReady", { status: emu.status }),
+      }));
+      return;
+    }
     setErrorBySerial((prev) => ({ ...prev, [serial]: undefined }));
     setLaunchingIgBySerial((prev) => ({ ...prev, [serial]: true }));
     try {
@@ -220,7 +308,7 @@ export default function EmulatorsPage() {
       if (!res.ok || body.status !== "success") {
         setErrorBySerial((prev) => ({
           ...prev,
-          [serial]: body.error || "Failed to open Instagram",
+          [serial]: body.error || e.openInstagramFailed,
         }));
         return;
       }
@@ -228,7 +316,7 @@ export default function EmulatorsPage() {
     } catch {
       setErrorBySerial((prev) => ({
         ...prev,
-        [serial]: "Network error while opening Instagram",
+        [serial]: e.openInstagramNetworkError,
       }));
     } finally {
       setLaunchingIgBySerial((prev) => ({ ...prev, [serial]: false }));
@@ -243,7 +331,7 @@ export default function EmulatorsPage() {
       await loadEmulators();
       setTick((t) => t + 1);
     } catch {
-      setErrorBySerial((prev) => ({ ...prev, [serial]: "Failed to refresh emulator state" }));
+      setErrorBySerial((prev) => ({ ...prev, [serial]: e.refreshStateFailed }));
     } finally {
       setRefreshingBySerial((prev) => ({ ...prev, [serial]: false }));
     }
@@ -316,7 +404,7 @@ export default function EmulatorsPage() {
     () =>
       data.items.filter((item) => {
         const s = (item.status || "").toLowerCase();
-        return s === "online" || s === "ready" || s === "connected" || s === "running";
+        return s === "device" || s === "online" || s === "ready" || s === "connected" || s === "running";
       }).length,
     [data.items]
   );
@@ -328,43 +416,46 @@ export default function EmulatorsPage() {
           item.busy ||
           busyBySerial[item.serial] ||
           restartingBySerial[item.serial] ||
+          stoppingBySerial[item.serial] ||
           launchingIgBySerial[item.serial]
       ).length,
-    [data.items, busyBySerial, restartingBySerial, launchingIgBySerial]
+    [data.items, busyBySerial, restartingBySerial, stoppingBySerial, launchingIgBySerial]
   );
 
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="space-y-1">
+          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
             <Monitor className="h-6 w-6 text-primary" />
-            Emulator Displays
+            {e.title}
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Live UI previews from connected Android emulators.
-          </p>
+          <p className="max-w-xl text-sm text-muted-foreground">{e.subtitle}</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
+            size="sm"
             variant={controlEnabled ? "default" : "outline"}
             onClick={() => setControlEnabled((v) => !v)}
           >
-            Control: {controlEnabled ? "ON" : "OFF"}
+            {controlEnabled ? e.controlOn : e.controlOff}
           </Button>
           <Button
             type="button"
+            size="sm"
             variant="outline"
             disabled={refreshingAll}
             onClick={() => void refreshAllEmulators()}
           >
-            <RefreshCw className={`h-4 w-4 ${refreshingAll ? "animate-spin" : ""}`} />
-            {refreshingAll ? "Refreshing..." : "Refresh now"}
+            <RefreshCw
+              className={`mr-1.5 h-4 w-4 ${refreshingAll ? "animate-spin" : ""}`}
+            />
+            {refreshingAll ? e.refreshingAll : e.refreshAll}
           </Button>
-          <Button type="button" onClick={() => setAddDialogOpen(true)}>
-            <Plus className="h-4 w-4" />
-            Add emulator
+          <Button type="button" size="sm" onClick={() => setAddDialogOpen(true)}>
+            <Plus className="mr-1.5 h-4 w-4" />
+            {e.addEmulator}
           </Button>
         </div>
       </div>
@@ -381,137 +472,70 @@ export default function EmulatorsPage() {
       {data.error ? (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Emulator API Error</AlertTitle>
+          <AlertTitle>{e.apiErrorTitle}</AlertTitle>
           <AlertDescription>{data.error}</AlertDescription>
         </Alert>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <StatCard title="Connected" value={data.count} icon={Smartphone} />
-        <StatCard title="Online" value={onlineCount} icon={CheckCircle2} />
-        <StatCard title="Busy" value={busyCount} icon={RotateCcw} />
-      </div>
+      <EmulatorStatsBar
+        connected={data.count}
+        online={onlineCount}
+        busy={busyCount}
+        labels={{
+          connected: e.statsConnected,
+          ready: e.statsReady,
+          busy: e.statsBusy,
+        }}
+      />
 
       {loading ? (
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 2xl:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i}>
-              <CardHeader>
-                <Skeleton className="h-5 w-40" />
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <Skeleton className="h-[420px] w-full" />
-                <Skeleton className="h-4 w-56" />
-              </CardContent>
-            </Card>
-          ))}
+        <div className="mx-auto grid max-w-md gap-6">
+          <Card>
+            <CardContent className="space-y-4 p-6">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="mx-auto aspect-[9/20] w-full max-w-[280px] rounded-2xl" />
+              <Skeleton className="h-3 w-48 mx-auto" />
+            </CardContent>
+          </Card>
         </div>
       ) : data.items.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
             <Smartphone className="h-8 w-8 mx-auto mb-2" />
-            <p className="font-medium">No connected emulators found.</p>
-            <p className="text-sm mt-1">
-              Start Android emulators and ensure ADB sees them.
-            </p>
+            <p className="font-medium">{e.emptyTitle}</p>
+            <p className="text-sm mt-1">{e.emptyHint}</p>
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 2xl:grid-cols-3">
+        <div
+          className={
+            data.items.length === 1
+              ? "mx-auto grid max-w-md gap-6"
+              : "grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3"
+          }
+        >
           {data.items.map((emulator) => (
-            <Card key={emulator.serial} className="overflow-hidden">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between gap-3">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Monitor className="h-4 w-4 text-muted-foreground" />
-                    {emulator.serial}
-                  </CardTitle>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary">{emulator.status}</Badge>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={
-                        Boolean(launchingIgBySerial[emulator.serial]) ||
-                        Boolean(busyBySerial[emulator.serial]) ||
-                        Boolean(emulator.busy)
-                      }
-                      onClick={() => void openInstagram(emulator.serial)}
-                      title="Launch Instagram on this emulator via ADB"
-                    >
-                      <Instagram
-                        className={`mr-1 h-3.5 w-3.5 text-pink-500 ${launchingIgBySerial[emulator.serial] ? "animate-pulse" : ""}`}
-                      />
-                      {launchingIgBySerial[emulator.serial] ? "Opening…" : "Instagram"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={Boolean(refreshingBySerial[emulator.serial])}
-                      onClick={() => void refreshEmulator(emulator.serial)}
-                    >
-                      <RefreshCw
-                        className={`mr-1 h-3.5 w-3.5 ${refreshingBySerial[emulator.serial] ? "animate-spin" : ""}`}
-                      />
-                      Refresh
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={Boolean(restartingBySerial[emulator.serial])}
-                      onClick={() => void restartEmulator(emulator.serial)}
-                    >
-                      {restartingBySerial[emulator.serial] ? "Restarting..." : "Restart"}
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="bg-zinc-100 dark:bg-zinc-950 rounded-md overflow-hidden">
-                  <div
-                    className={`relative h-[520px] w-full ${
-                      controlEnabled ? "cursor-crosshair" : "cursor-default"
-                    }`}
-                    onMouseDown={(event) => onMouseDown(emulator.serial, event)}
-                    onMouseUp={(event) => void onMouseUp(emulator, event)}
-                  >
-                    <img
-                      src={frameUrl(emulator.serial)}
-                      alt={`Live frame for ${emulator.serial}`}
-                      className="h-[520px] w-full select-none object-contain"
-                      draggable={false}
-                    />
-                    {(busyBySerial[emulator.serial] || emulator.busy) && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/25 text-xs font-medium text-white">
-                        Executing action...
-                      </div>
-                    )}
-                    {rippleBySerial[emulator.serial] && (
-                      <span
-                        key={rippleBySerial[emulator.serial]?.key}
-                        className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-cyan-400"
-                        style={{
-                          left: rippleBySerial[emulator.serial]?.x,
-                          top: rippleBySerial[emulator.serial]?.y,
-                        }}
-                      />
-                    )}
-                  </div>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Model: {emulator.model || "unknown"}
-                  {emulator.screen_size
-                    ? ` | ${emulator.screen_size.width}x${emulator.screen_size.height}`
-                    : ""}
-                  {errorBySerial[emulator.serial] ? (
-                    <span className="ml-2 text-destructive">{errorBySerial[emulator.serial]}</span>
-                  ) : null}
-                </p>
-              </CardContent>
-            </Card>
+            <EmulatorDeviceCard
+              key={emulator.serial}
+              emulator={emulator}
+              frameUrl={frameUrl(emulator.serial)}
+              controlEnabled={controlEnabled}
+              busy={Boolean(busyBySerial[emulator.serial])}
+              restarting={Boolean(restartingBySerial[emulator.serial])}
+              stopping={Boolean(stoppingBySerial[emulator.serial])}
+              refreshing={Boolean(refreshingBySerial[emulator.serial])}
+              launchingIg={Boolean(launchingIgBySerial[emulator.serial])}
+              pressingMenu={Boolean(pressingMenuBySerial[emulator.serial])}
+              error={errorBySerial[emulator.serial]}
+              ripple={rippleBySerial[emulator.serial]}
+              onMouseDown={(event) => onMouseDown(emulator.serial, event)}
+              onMouseUp={(event) => void onMouseUp(emulator, event)}
+              onRefresh={() => void refreshEmulator(emulator.serial)}
+              onRestart={() => void restartEmulator(emulator.serial)}
+              onEndSession={() => void endSession(emulator.serial)}
+              onOpenInstagram={() => void openInstagram(emulator.serial)}
+              onPressMenu={() => void openAppDrawer(emulator)}
+            />
           ))}
         </div>
       )}
@@ -530,6 +554,7 @@ type PreflightResponse = {
   verdict?:
     | "ready"
     | "no_kvm"
+    | "no_accel"
     | "no_emulator_binary"
     | "no_avd"
     | "no_agent_configured"
@@ -541,8 +566,11 @@ type PreflightResponse = {
     | "unknown";
   message?: string;
   emulator_binary?: string | null;
+  host_platform?: string;
   kvm?: {
     ready?: boolean;
+    backend?: string;
+    host_platform?: string;
     has_virt_flag?: boolean;
     dev_kvm_exists?: boolean;
     dev_kvm_readable?: boolean;
@@ -569,6 +597,8 @@ function AddEmulatorDialog({
   onOpenChange: (next: boolean) => void;
   onAdded: () => void;
 }) {
+  const { text, t } = useLocale();
+  const e = text.emulators;
   const [mode, setMode] = useState<"launch_avd" | "adb_connect">("launch_avd");
   const [avds, setAvds] = useState<string[]>([]);
   const [avdsLoading, setAvdsLoading] = useState(false);
@@ -576,7 +606,7 @@ function AddEmulatorDialog({
   const [avdsError, setAvdsError] = useState<string | undefined>(undefined);
   const [preflight, setPreflight] = useState<PreflightResponse | undefined>(undefined);
   const [selectedAvd, setSelectedAvd] = useState<string>("");
-  const [headless, setHeadless] = useState(true);
+  const [headless, setHeadless] = useState(false);
   const [hostPort, setHostPort] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
@@ -596,7 +626,7 @@ function AddEmulatorDialog({
       setAvdsError(errMsg);
       return { items, error: errMsg };
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : "Failed to load AVDs";
+      const errMsg = err instanceof Error ? err.message : e.loadAvdsError;
       setAvds([]);
       setAvdsError(errMsg);
       return { items: [], error: errMsg };
@@ -642,20 +672,23 @@ function AddEmulatorDialog({
     const body: Record<string, unknown> = { mode };
     if (mode === "launch_avd") {
       if (!selectedAvd) {
-        setErrorMessage("Pick an AVD to launch.");
+        setErrorMessage(e.pickAvdError);
         return;
       }
       body.avd_name = selectedAvd;
       body.headless = headless;
     } else {
       if (!hostPortValid) {
-        setErrorMessage("Enter a valid host:port (e.g. 192.168.1.10:5555).");
+        setErrorMessage(e.hostPortError);
         return;
       }
       body.host_port = hostPort.trim();
     }
 
     setSubmitting(true);
+    setSuccessMessage(
+      mode === "launch_avd" ? e.launchingAvd : undefined,
+    );
     try {
       const res = await fetch("/api/emulators/add", {
         method: "POST",
@@ -665,19 +698,28 @@ function AddEmulatorDialog({
       const payload = (await res.json()) as AddEmulatorResult;
       if (!res.ok || !payload.success) {
         setErrorMessage(payload.message || payload.phase || `Request failed (HTTP ${res.status})`);
+        setSuccessMessage(undefined);
         return;
       }
 
       const friendlySerial = payload.serial || payload.target || payload.avd_name || "device";
       const phase = payload.phase || "completed";
+      const elapsed =
+        typeof (payload as { elapsed_ms?: number }).elapsed_ms === "number"
+          ? ` (${Math.round((payload as { elapsed_ms: number }).elapsed_ms / 1000)}s)`
+          : "";
       setSuccessMessage(
         phase === "completed"
-          ? `Added ${friendlySerial}.`
-          : `Added ${friendlySerial} (${phase}). It may take a moment to appear.`
+          ? t("emulators.addedSerial", { serial: friendlySerial, elapsed })
+          : phase === "unauthorized"
+            ? `${payload.message || e.adbUnauthorized}${elapsed}`
+            : t("emulators.addedWithPhase", {
+                message: payload.message || `${friendlySerial} (${phase})${elapsed}`,
+              })
       );
       onAdded();
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Network error while adding emulator");
+      setErrorMessage(err instanceof Error ? err.message : e.addNetworkError);
     } finally {
       setSubmitting(false);
     }
@@ -687,47 +729,32 @@ function AddEmulatorDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Add emulator</DialogTitle>
-          <DialogDescription>
-            Launch a local Android Virtual Device or connect to a remote device over ADB.
-          </DialogDescription>
+          <DialogTitle>{e.addDialogTitle}</DialogTitle>
+          <DialogDescription>{e.addDialogDescription}</DialogDescription>
         </DialogHeader>
 
         <Tabs value={mode} onValueChange={(v) => setMode(v as typeof mode)}>
           <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="launch_avd" disabled={showAvdUnavailableAlert}>
-              Launch AVD
-            </TabsTrigger>
-            <TabsTrigger value="adb_connect">Connect via ADB</TabsTrigger>
+            <TabsTrigger value="launch_avd">{e.tabLaunchAvd}</TabsTrigger>
+            <TabsTrigger value="adb_connect">{e.tabAdbConnect}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="launch_avd" className="space-y-3">
             {showAvdUnavailableAlert ? (
               <Alert variant="destructive">
                 <AlertCircle className="h-4 w-4" />
-                <AlertTitle>No AVDs available</AlertTitle>
+                <AlertTitle>{e.noAvdsTitle}</AlertTitle>
                 <AlertDescription className="space-y-2">
                   <p>
-                    The emulator controller can&apos;t list any Android Virtual Devices.
+                    {e.noAvdsBody}
                     {avdsError ? (
                       <>
-                        {" "}
-                        Upstream said: <code className="font-mono">{avdsError}</code>.
+                        {e.noAvdsUpstream}{" "}
+                        <code className="font-mono">{avdsError}</code>.
                       </>
                     ) : null}
                   </p>
-                  <p>
-                    Launching AVDs requires the Android SDK on the host. Run the
-                    host-agent (
-                    <code className="font-mono">
-                      emulator-controller/host_agent/README.md
-                    </code>
-                    ) and set <code className="font-mono">EMULATOR_AGENT_URL</code> +{" "}
-                    <code className="font-mono">EMULATOR_AGENT_TOKEN</code> in your
-                    <code className="font-mono"> .env</code>, then restart the
-                    controller. Or use the <strong>Connect via ADB</strong> tab to
-                    attach a remote / cloud emulator.
-                  </p>
+                  <p>{e.noAvdsHint}</p>
                 </AlertDescription>
               </Alert>
             ) : (
@@ -737,18 +764,19 @@ function AddEmulatorDialog({
                     <AlertCircle className="h-4 w-4" />
                     <AlertTitle>
                       {preflight.verdict === "no_kvm"
-                        ? "Host has no KVM — Launch AVD will fail"
-                        : "Host not ready to launch AVDs"}
+                        ? e.preflightNoKvm
+                        : preflight.verdict === "no_accel"
+                          ? e.preflightNoAccel
+                          : e.preflightNotReady}
                     </AlertTitle>
                     <AlertDescription className="space-y-1">
-                      <p>{preflight.kvm?.message || preflight.message || "Preflight reported the host is not ready."}</p>
-                      {preflight.verdict === "no_kvm" ? (
-                        <p>
-                          Enable nested virtualization on the hypervisor for this VM, or run the
-                          host-agent on a different machine with KVM. Verify with{" "}
-                          <code className="font-mono">sudo ./scripts/setup-emulator-host.sh --check</code>{" "}
-                          on the agent host.
-                        </p>
+                      <p>{preflight.kvm?.message || preflight.message || e.preflightDefault}</p>
+                      {preflight.verdict === "no_kvm" ? <p>{e.preflightKvmHint}</p> : null}
+                      {preflight.verdict === "no_accel" &&
+                      (preflight.host_platform === "windows" || preflight.kvm?.host_platform === "windows") ? (
+                        <p>{e.preflightWindowsHint}</p>
+                      ) : preflight.verdict === "no_accel" ? (
+                        <p>{e.preflightAccelHint}</p>
                       ) : null}
                     </AlertDescription>
                   </Alert>
@@ -756,7 +784,7 @@ function AddEmulatorDialog({
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <Label htmlFor="avd-select">Available AVDs</Label>
+                    <Label htmlFor="avd-select">{e.availableAvds}</Label>
                     <Button
                       type="button"
                       variant="ghost"
@@ -765,7 +793,7 @@ function AddEmulatorDialog({
                       onClick={() => void loadAvds()}
                     >
                       <RefreshCw className={`h-3.5 w-3.5 ${avdsLoading ? "animate-spin" : ""}`} />
-                      Reload
+                      {e.reload}
                     </Button>
                   </div>
                   <Select
@@ -775,7 +803,7 @@ function AddEmulatorDialog({
                   >
                     <SelectTrigger id="avd-select">
                       <SelectValue
-                        placeholder={avdsLoading ? "Loading AVDs..." : "Pick an AVD"}
+                        placeholder={avdsLoading ? e.loadingAvds : e.pickAvd}
                       />
                     </SelectTrigger>
                     <SelectContent>
@@ -794,15 +822,18 @@ function AddEmulatorDialog({
                     checked={headless}
                     onChange={(event) => setHeadless(event.target.checked)}
                   />
-                  Headless (no window, no audio)
+                  {e.headlessLabel}
                 </label>
+                {headless ? (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">{e.headlessWarning}</p>
+                ) : null}
               </>
             )}
           </TabsContent>
 
           <TabsContent value="adb_connect" className="space-y-3">
             <div className="space-y-2">
-              <Label htmlFor="host-port">ADB target (host:port)</Label>
+              <Label htmlFor="host-port">{e.adbTargetLabel}</Label>
               <Input
                 id="host-port"
                 placeholder="192.168.1.10:5555"
@@ -810,10 +841,7 @@ function AddEmulatorDialog({
                 onChange={(event) => setHostPort(event.target.value)}
                 autoComplete="off"
               />
-              <p className="text-xs text-muted-foreground">
-                Used for cloud emulators, Genymotion, or a TCP-exposed device. Equivalent to
-                running <code className="font-mono">adb connect host:port</code>.
-              </p>
+              <p className="text-xs text-muted-foreground">{e.adbTargetHint}</p>
             </div>
           </TabsContent>
         </Tabs>
@@ -821,14 +849,14 @@ function AddEmulatorDialog({
         {errorMessage ? (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Could not add emulator</AlertTitle>
+            <AlertTitle>{e.addFailedTitle}</AlertTitle>
             <AlertDescription>{errorMessage}</AlertDescription>
           </Alert>
         ) : null}
         {successMessage ? (
           <Alert>
             <CheckCircle2 className="h-4 w-4" />
-            <AlertTitle>Done</AlertTitle>
+            <AlertTitle>{e.addDoneTitle}</AlertTitle>
             <AlertDescription>{successMessage}</AlertDescription>
           </Alert>
         ) : null}
@@ -840,7 +868,7 @@ function AddEmulatorDialog({
             disabled={submitting}
             onClick={() => onOpenChange(false)}
           >
-            Close
+            {e.close}
           </Button>
           <Button
             type="button"
@@ -852,7 +880,7 @@ function AddEmulatorDialog({
             }
             onClick={() => void handleSubmit()}
           >
-            {submitting ? "Adding..." : mode === "launch_avd" ? "Launch AVD" : "Connect"}
+            {submitting ? e.adding : mode === "launch_avd" ? e.launchAvdButton : e.connectButton}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -153,13 +153,20 @@ async function start() {
 
     // 1. Proxy Health Check (every 5 minutes)
     const ProxyManager = require('./proxy/ProxyManager');
+    const OperationalAlertMonitor = require('./services/OperationalAlertMonitor');
     setInterval(() => {
       console.log('[DistributionEngine] Running scheduled proxy health checks...');
       runScheduled('proxy-health', () => ProxyManager.runHealthCheckAll());
     }, 5 * 60 * 1000);
+    setInterval(() => {
+      runScheduled('operational-alerts', () => OperationalAlertMonitor.runAll());
+    }, 5 * 60 * 1000);
     // Initial run
     ProxyManager.runHealthCheckAll().catch(err =>
       console.warn('[HealthCheck] Initial proxy check failed:', err.message)
+    );
+    OperationalAlertMonitor.runAll().catch(err =>
+      console.warn('[OperationalAlertMonitor] Initial run failed:', err.message)
     );
 
     // 2. Campaign Automation orchestrator

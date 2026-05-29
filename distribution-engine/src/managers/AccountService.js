@@ -98,8 +98,28 @@ class AccountService {
 
   async deleteAccount(id) {
     const pool = getPool();
-    const result = await pool.query('DELETE FROM accounts WHERE id = $1 RETURNING id', [id]);
-    return result.rowCount > 0;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const existing = await client.query('SELECT id FROM accounts WHERE id = $1', [id]);
+      if (existing.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+      await client.query('DELETE FROM engagement_intents WHERE account_id = $1', [id]);
+      await client.query('DELETE FROM publication_targets WHERE account_id = $1', [id]);
+      await client.query('UPDATE proxies SET assigned_account_id = NULL WHERE assigned_account_id = $1', [
+        id,
+      ]);
+      await client.query('DELETE FROM accounts WHERE id = $1', [id]);
+      await client.query('COMMIT');
+      return true;
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   async updateAccountHealth(id, scoreChange, newStatus = null) {

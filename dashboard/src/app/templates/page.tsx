@@ -46,8 +46,8 @@ type TemplateRow = {
 type NicheRow = { id: string; name: string };
 
 export default function TemplatesPage() {
-  const { locale } = useLocale();
-  const isFr = locale === "fr";
+  const { text } = useLocale();
+  const tpl = text.templatesPage;
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
   const [niches, setNiches] = useState<NicheRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,18 +65,21 @@ export default function TemplatesPage() {
     setLoading(true);
     setError(null);
     try {
-      const [tpl, nicheList] = await Promise.all([api.content.getTemplates(), api.content.getNiches()]);
-      setTemplates(tpl);
+      const [tplList, nicheList] = await Promise.all([
+        api.content.getTemplates(),
+        api.content.getNiches(),
+      ]);
+      setTemplates(tplList);
       setNiches(nicheList);
     } catch {
-      setError(isFr ? "Impossible de charger les modèles." : "Failed to load templates.");
+      setError(tpl.loadError);
     } finally {
       setLoading(false);
     }
-  }, [isFr]);
+  }, [tpl.loadError]);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
   const nicheName = (id: string | null | undefined) =>
@@ -97,19 +100,19 @@ export default function TemplatesPage() {
       setForm({ name: "", caption_template: "", visual_prompt: "", niche_id: "" });
       await load();
     } catch {
-      setError(isFr ? "Échec de la création." : "Create failed.");
+      setError(tpl.createError);
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm(isFr ? "Supprimer ce modèle ?" : "Delete this template?")) return;
+    if (!confirm(tpl.deleteConfirm)) return;
     try {
       await api.content.deleteTemplate(id);
       await load();
     } catch {
-      setError(isFr ? "Échec de la suppression." : "Delete failed.");
+      setError(tpl.deleteError);
     }
   };
 
@@ -117,22 +120,16 @@ export default function TemplatesPage() {
     <div className="mx-auto max-w-6xl space-y-6 p-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {isFr ? "Modèles de contenu" : "Content templates"}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {isFr
-              ? "Captions et prompts visuels réutilisables pour le studio."
-              : "Reusable caption and visual prompts for the generation studio."}
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">{tpl.title}</h1>
+          <p className="text-sm text-muted-foreground">{tpl.subtitle}</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
             <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
           </Button>
           <Button size="sm" onClick={() => setDialogOpen(true)}>
             <Plus className="size-4" />
-            {isFr ? "Nouveau" : "New"}
+            {tpl.new}
           </Button>
         </div>
       </div>
@@ -147,11 +144,9 @@ export default function TemplatesPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <FileText className="size-5" />
-            {isFr ? "Liste" : "List"}
+            {tpl.list}
           </CardTitle>
-          <CardDescription>
-            {isFr ? "Utilisez {{niche}} et {{topic}} dans les modèles." : "Use {{niche}} and {{topic}} in templates."}
-          </CardDescription>
+          <CardDescription>{tpl.listHint}</CardDescription>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -162,10 +157,10 @@ export default function TemplatesPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{isFr ? "Nom" : "Name"}</TableHead>
-                  <TableHead>{isFr ? "Niche" : "Niche"}</TableHead>
-                  <TableHead>{isFr ? "Caption" : "Caption"}</TableHead>
-                  <TableHead>{isFr ? "Actif" : "Active"}</TableHead>
+                  <TableHead>{tpl.name}</TableHead>
+                  <TableHead>{tpl.niche}</TableHead>
+                  <TableHead>{tpl.caption}</TableHead>
+                  <TableHead>{tpl.active}</TableHead>
                   <TableHead className="w-[80px]" />
                 </TableRow>
               </TableHeader>
@@ -173,22 +168,22 @@ export default function TemplatesPage() {
                 {templates.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={5} className="text-center text-muted-foreground">
-                      {isFr ? "Aucun modèle." : "No templates yet."}
+                      {tpl.empty}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  templates.map((t) => (
-                    <TableRow key={t.id}>
-                      <TableCell className="font-medium">{t.name}</TableCell>
-                      <TableCell>{nicheName(t.niche_id)}</TableCell>
-                      <TableCell className="max-w-md truncate">{t.caption_template}</TableCell>
+                  templates.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="font-medium">{row.name}</TableCell>
+                      <TableCell>{nicheName(row.niche_id)}</TableCell>
+                      <TableCell className="max-w-md truncate">{row.caption_template}</TableCell>
                       <TableCell>
-                        <Badge variant={t.is_active ? "default" : "secondary"}>
-                          {t.is_active ? (isFr ? "Oui" : "Yes") : (isFr ? "Non" : "No")}
+                        <Badge variant={row.is_active ? "default" : "secondary"}>
+                          {row.is_active ? tpl.yes : tpl.no}
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <Button variant="ghost" size="icon" onClick={() => handleDelete(t.id)}>
+                        <Button variant="ghost" size="icon" onClick={() => void handleDelete(row.id)}>
                           <Trash2 className="size-4 text-destructive" />
                         </Button>
                       </TableCell>
@@ -204,18 +199,18 @@ export default function TemplatesPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>{isFr ? "Nouveau modèle" : "New template"}</DialogTitle>
+            <DialogTitle>{tpl.dialogTitle}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>{isFr ? "Nom" : "Name"}</Label>
+              <Label>{tpl.name}</Label>
               <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
             </div>
             <div className="space-y-2">
-              <Label>{isFr ? "Niche" : "Niche"}</Label>
+              <Label>{tpl.niche}</Label>
               <Select value={form.niche_id} onValueChange={(v) => setForm((f) => ({ ...f, niche_id: v }))}>
                 <SelectTrigger>
-                  <SelectValue placeholder={isFr ? "Optionnel" : "Optional"} />
+                  <SelectValue placeholder={tpl.optional} />
                 </SelectTrigger>
                 <SelectContent>
                   {niches.map((n) => (
@@ -227,7 +222,7 @@ export default function TemplatesPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>{isFr ? "Modèle de caption" : "Caption template"}</Label>
+              <Label>{tpl.captionTemplate}</Label>
               <textarea
                 rows={3}
                 className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -236,7 +231,7 @@ export default function TemplatesPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>{isFr ? "Prompt visuel" : "Visual prompt"}</Label>
+              <Label>{tpl.visualPrompt}</Label>
               <textarea
                 rows={2}
                 className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -247,10 +242,10 @@ export default function TemplatesPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
-              {isFr ? "Annuler" : "Cancel"}
+              {tpl.cancel}
             </Button>
-            <Button onClick={handleCreate} disabled={saving}>
-              {saving ? <Loader2 className="size-4 animate-spin" /> : isFr ? "Créer" : "Create"}
+            <Button onClick={() => void handleCreate()} disabled={saving}>
+              {saving ? <Loader2 className="size-4 animate-spin" /> : tpl.create}
             </Button>
           </DialogFooter>
         </DialogContent>

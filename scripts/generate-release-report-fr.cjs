@@ -1,0 +1,29 @@
+/* Regenerate PDF from docs/rapport-pre-release-influence-platform-fr.md (source of truth). */
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+const root = path.join(__dirname, '..');
+const mdPath = path.join(root, 'docs', 'rapport-pre-release-influence-platform-fr.md');
+const pdfPath = path.join(root, 'docs', 'rapport-pre-release-influence-platform-fr.pdf');
+const mdStatusPath = path.join(root, 'docs', 'project-status', 'rapport-pre-release-fr-2026-05.md');
+
+if (!fs.existsSync(mdPath)) {
+  console.error('Missing', mdPath);
+  process.exit(1);
+}
+
+const md = fs.readFileSync(mdPath, 'utf8');
+fs.writeFileSync(mdStatusPath, md, 'utf8');
+console.log('Synced', mdStatusPath);
+
+try {
+  execSync(
+    `node "${path.join(__dirname, 'md-to-pdf-pdfkit.cjs')}" "${mdPath}" "${pdfPath}"`,
+    { cwd: root, stdio: 'inherit' }
+  );
+  console.log('Wrote', pdfPath);
+} catch (err) {
+  console.warn('PDF generation failed:', err.message);
+  process.exit(1);
+}

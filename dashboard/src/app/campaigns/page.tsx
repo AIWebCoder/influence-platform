@@ -307,17 +307,21 @@ export default function CampaignsPage() {
               <Input value={niche} onChange={(e) => setNiche(e.target.value)} placeholder={t.targetNichePlaceholder} />
             </div>
             <div className="space-y-2">
-              <Label>Topic</Label>
-              <Input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Reel topic for generation" />
+              <Label>{t.topic}</Label>
+              <Input
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                placeholder={t.topicPlaceholder}
+              />
             </div>
             <div className="space-y-2">
               <Label>{t.targetAccount} (Instagram)</Label>
               <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2">
                 {igAccounts.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    No Instagram accounts.{" "}
+                    {t.noIgAccounts}{" "}
                     <Link href="/accounts" className="text-primary underline">
-                      Add one
+                      {t.addIgAccount}
                     </Link>
                     .
                   </p>

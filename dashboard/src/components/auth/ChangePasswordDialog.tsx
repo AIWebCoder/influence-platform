@@ -3,6 +3,7 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
 
+import { useLocale } from "@/components/i18n/LocaleProvider";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,6 +23,8 @@ type Props = {
 };
 
 export function ChangePasswordDialog({ open, onOpenChange }: Props) {
+  const { text } = useLocale();
+  const cp = text.changePassword;
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -36,21 +39,21 @@ export function ChangePasswordDialog({ open, onOpenChange }: Props) {
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (next.length < 8) {
-      toast.error("New password must be at least 8 characters.");
+      toast.error(cp.minLength);
       return;
     }
     if (next !== confirm) {
-      toast.error("Confirmation does not match the new password.");
+      toast.error(cp.mismatch);
       return;
     }
     setSubmitting(true);
     try {
       await api.users.changeMyPassword({ current_password: current, new_password: next });
-      toast.success("Password updated.");
+      toast.success(cp.success);
       reset();
       onOpenChange(false);
     } catch (error) {
-      toast.error(formatContentApiError(error, "Could not change password."));
+      toast.error(formatContentApiError(error, cp.error));
     } finally {
       setSubmitting(false);
     }
@@ -66,14 +69,12 @@ export function ChangePasswordDialog({ open, onOpenChange }: Props) {
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Change password</DialogTitle>
-          <DialogDescription>
-            Choose a new password with at least 8 characters, including upper-, lower-case, a digit and a special character.
-          </DialogDescription>
+          <DialogTitle>{cp.title}</DialogTitle>
+          <DialogDescription>{cp.description}</DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={onSubmit}>
           <div className="space-y-2">
-            <Label htmlFor="current-password">Current password</Label>
+            <Label htmlFor="current-password">{cp.current}</Label>
             <Input
               id="current-password"
               type="password"
@@ -84,7 +85,7 @@ export function ChangePasswordDialog({ open, onOpenChange }: Props) {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="new-password">New password</Label>
+            <Label htmlFor="new-password">{cp.new}</Label>
             <Input
               id="new-password"
               type="password"
@@ -96,7 +97,7 @@ export function ChangePasswordDialog({ open, onOpenChange }: Props) {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="confirm-password">Confirm new password</Label>
+            <Label htmlFor="confirm-password">{cp.confirm}</Label>
             <Input
               id="confirm-password"
               type="password"
@@ -109,10 +110,10 @@ export function ChangePasswordDialog({ open, onOpenChange }: Props) {
           </div>
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
-              Cancel
+              {cp.cancel}
             </Button>
             <Button type="submit" disabled={submitting || !current || !next || !confirm}>
-              {submitting ? "Saving..." : "Update password"}
+              {submitting ? cp.saving : cp.save}
             </Button>
           </DialogFooter>
         </form>

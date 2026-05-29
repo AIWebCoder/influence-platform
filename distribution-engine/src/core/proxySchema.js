@@ -4,6 +4,12 @@
  */
 async function ensureProxySchema(pool) {
   const alters = [
+    'ALTER TABLE proxies ADD COLUMN IF NOT EXISTS username VARCHAR(100)',
+    'ALTER TABLE proxies ADD COLUMN IF NOT EXISTS password_encrypted TEXT',
+    'ALTER TABLE proxies ADD COLUMN IF NOT EXISTS provider VARCHAR(50)',
+    'ALTER TABLE proxies ADD COLUMN IF NOT EXISTS country VARCHAR(10)',
+    'ALTER TABLE proxies ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true',
+    'ALTER TABLE proxies ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ',
     'ALTER TABLE proxies ADD COLUMN IF NOT EXISTS response_time INTEGER',
     'ALTER TABLE proxies ADD COLUMN IF NOT EXISTS success_rate DECIMAL(5,2) DEFAULT 100.00',
     'ALTER TABLE proxies ADD COLUMN IF NOT EXISTS failure_count INTEGER DEFAULT 0',

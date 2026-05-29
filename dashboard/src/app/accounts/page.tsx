@@ -7,9 +7,11 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Trash2,
   Upload,
   Users,
 } from "lucide-react";
+import toast from "react-hot-toast";
 import { api, formatContentApiError } from "@/lib/api";
 import { useLocale } from "@/components/i18n/LocaleProvider";
 import {
@@ -104,7 +106,8 @@ function StatCard({
 }
 
 export default function AccountsPage() {
-  const { text, locale } = useLocale();
+  const { text, t } = useLocale();
+  const a = text.accounts;
 
   const [open, setOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -124,6 +127,9 @@ export default function AccountsPage() {
   const [igAccessToken, setIgAccessToken] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState<AccountRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editAccount, setEditAccount] = useState<AccountRow | null>(null);
   const [editStatus, setEditStatus] = useState("warming");
@@ -151,11 +157,11 @@ export default function AccountsPage() {
       setAccounts(data);
       setProxySlots(proxyStats?.capacity?.slots_available ?? null);
     } catch (err: any) {
-      setError(err?.response?.data?.error || "Failed to load accounts.");
+      setError(err?.response?.data?.error || a.loadError);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [a.loadError]);
 
   useEffect(() => {
     loadAccounts();
@@ -186,11 +192,11 @@ export default function AccountsPage() {
     const trimmedProxy = proxy.trim();
 
     if (!trimmedUsername) {
-      setError("Username is required.");
+      setError(a.usernameRequired);
       return;
     }
     if (trimmedPassword.length < 8) {
-      setError("Password must be at least 8 characters.");
+      setError(a.passwordMin);
       return;
     }
 
@@ -283,6 +289,34 @@ export default function AccountsPage() {
     }
   };
 
+  const openDelete = useCallback((acc: AccountRow) => {
+    setDeletingAccount(acc);
+    setDeleteOpen(true);
+  }, []);
+
+  const handleDeleteAccount = async () => {
+    if (!deletingAccount) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await api.distribution.deleteAccount(deletingAccount.id);
+      toast.success(a.deleted);
+      setDeleteOpen(false);
+      if (editAccount?.id === deletingAccount.id) {
+        setEditOpen(false);
+        setEditAccount(null);
+      }
+      setDeletingAccount(null);
+      await loadAccounts();
+    } catch (err: unknown) {
+      const msg = formatContentApiError(err, a.deleteError);
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const openEdit = useCallback(async (acc: AccountRow) => {
     setEditAccount(acc);
     setEditStatus((acc.status || "warming").toLowerCase());
@@ -304,24 +338,26 @@ export default function AccountsPage() {
 
   const columnLabels = useMemo(
     () => ({
-      username: text.accounts.username,
-      platform: text.accounts.platform,
-      proxy: text.accounts.proxy,
-      igPublish: "IG publish",
-      status: text.accounts.status,
-      health: "Health",
-      actions: "Actions",
-      edit: text.accounts.editAccount,
-      igReady: "Ready",
-      igSetup: "Setup required",
-      na: "N/A",
+      username: a.username,
+      platform: a.platform,
+      proxy: a.proxy,
+      igPublish: a.igPublish,
+      status: a.status,
+      health: a.health,
+      actions: a.actions,
+      edit: a.editAccount,
+      delete: a.delete,
+      igReady: a.igReady,
+      igSetup: a.igSetup,
+      na: a.na,
+      unassigned: a.unassigned,
     }),
-    [text.accounts],
+    [a],
   );
 
   const columns = useMemo(
-    () => createAccountsColumns(openEdit, columnLabels),
-    [openEdit, columnLabels],
+    () => createAccountsColumns(openEdit, openDelete, columnLabels),
+    [openEdit, openDelete, columnLabels],
   );
 
   const handleSaveEdit = async () => {
@@ -391,7 +427,7 @@ export default function AccountsPage() {
   };
 
   const hasAssignedProxy = Boolean(
-    editAccount?.proxy_url && formatAccountProxy(editAccount.proxy_url) !== "Unassigned",
+    editAccount?.proxy_url && formatAccountProxy(editAccount.proxy_url, a.unassigned) !== a.unassigned,
   );
 
   return (
@@ -400,9 +436,9 @@ export default function AccountsPage() {
         <div>
           <h2 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
             <Users className="h-6 w-6 text-primary" />
-            {text.accounts.title}
+            {a.title}
           </h2>
-          <p className="text-sm text-muted-foreground">{text.accounts.subtitle}</p>
+          <p className="text-sm text-muted-foreground">{a.subtitle}</p>
         </div>
         <div className="flex h-10 gap-2">
           <Button
@@ -412,15 +448,15 @@ export default function AccountsPage() {
             disabled={loading}
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            Refresh
+            {a.refresh}
           </Button>
           <Button variant="outline" className="h-full min-h-0 shrink-0" onClick={() => setBulkOpen(true)}>
             <Upload className="mr-2 h-4 w-4" />
-            {text.accounts.bulkImport}
+            {a.bulkImport}
           </Button>
           <Button className="h-full min-h-0 shrink-0" onClick={() => setOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
-            {text.accounts.addNode}
+            {a.addNode}
           </Button>
         </div>
       </div>
@@ -428,13 +464,13 @@ export default function AccountsPage() {
       {proxySlots !== null && proxySlots < 3 ? (
         <Alert variant={proxySlots === 0 ? "destructive" : "default"}>
           <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Proxy pool (strict 1:1)</AlertTitle>
+          <AlertTitle>{a.proxyPoolTitle}</AlertTitle>
           <AlertDescription>
             {proxySlots === 0
-              ? "No free proxies — add proxies before creating accounts."
-              : `${proxySlots} free proxy slot(s) available. Each account needs one dedicated proxy.`}{" "}
+              ? a.proxyPoolEmpty
+              : t("accounts.proxyPoolSlots", { count: proxySlots })}{" "}
             <a href="/proxies" className="font-medium underline">
-              Manage proxies
+              {a.manageProxies}
             </a>
           </AlertDescription>
         </Alert>
@@ -443,7 +479,7 @@ export default function AccountsPage() {
       {error ? (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Error</AlertTitle>
+          <AlertTitle>{a.errorTitle}</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
@@ -451,21 +487,21 @@ export default function AccountsPage() {
       {success ? (
         <Alert>
           <CheckCircle2 className="h-4 w-4" />
-          <AlertTitle>Success</AlertTitle>
+          <AlertTitle>{a.successTitle}</AlertTitle>
           <AlertDescription>{success}</AlertDescription>
         </Alert>
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Total" value={stats.total} icon={Users} />
-        <StatCard title="Active" value={stats.active} icon={CheckCircle2} />
-        <StatCard title="Warming" value={stats.warming} icon={RefreshCw} />
-        <StatCard title="Inactive" value={stats.inactive} icon={AlertCircle} />
+        <StatCard title={a.statTotal} value={stats.total} icon={Users} />
+        <StatCard title={a.active} value={stats.active} icon={CheckCircle2} />
+        <StatCard title={a.warming} value={stats.warming} icon={RefreshCw} />
+        <StatCard title={a.inactive} value={stats.inactive} icon={AlertCircle} />
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Accounts</CardTitle>
+          <CardTitle className="text-base">{a.listTitle}</CardTitle>
         </CardHeader>
         <CardContent>
           {loading && accounts.length === 0 ? (
@@ -480,7 +516,7 @@ export default function AccountsPage() {
               data={accounts}
               filterColumnId="username"
               filterPlaceholder={text.accountHealth.search}
-              emptyMessage="No accounts synchronized."
+              emptyMessage={a.emptyList}
               paginationLabels={text.dataTable}
             />
           )}
@@ -561,29 +597,25 @@ export default function AccountsPage() {
             {platform.toLowerCase() === "instagram" ? (
               <>
                 <div className="space-y-1.5">
-                  <Label>Instagram user ID (Graph API)</Label>
+                  <Label>{a.igUserIdLabel}</Label>
                   <Input
                     type="text"
                     value={igUserId}
                     onChange={(e) => setIgUserId(e.target.value)}
-                    placeholder="178414..."
+                    placeholder={a.igUserIdPlaceholder}
                     autoComplete="off"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Instagram access token</Label>
+                  <Label>{a.igAccessTokenLabel}</Label>
                   <Input
                     type="password"
                     value={igAccessToken}
                     onChange={(e) => setIgAccessToken(e.target.value)}
-                    placeholder="EAAG..."
+                    placeholder={a.tokenPlaceholder}
                     autoComplete="off"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    {locale === "fr"
-                      ? "Pour lire/repondre aux commentaires (Engagement), le token Meta doit inclure instagram_business_manage_comments et instagram_business_basic (pas seulement la publication)."
-                      : "To read/reply to comments (Engagement), the Meta token must include instagram_business_manage_comments and instagram_business_basic—not publish-only."}
-                  </p>
+                  <p className="text-xs text-muted-foreground">{a.igTokenHint}</p>
                 </div>
               </>
             ) : null}
@@ -629,7 +661,8 @@ export default function AccountsPage() {
             {bulkResult && bulkResult.failures.length > 0 ? (
               <Alert variant="destructive">
                 <AlertTitle>
-                  {bulkResult.failed} {bulkResult.failed === 1 ? "failure" : "failures"}
+                  {bulkResult.failed}{" "}
+                  {bulkResult.failed === 1 ? a.bulkFailure : a.bulkFailures}
                 </AlertTitle>
                 <AlertDescription>
                   <ul className="mt-2 max-h-32 list-disc space-y-1 overflow-y-auto pl-4 text-xs">
@@ -682,7 +715,9 @@ export default function AccountsPage() {
               <div className="rounded-md border p-3 space-y-3">
                 <p className="text-sm font-medium">{text.accounts.currentProxy}</p>
                 <p className="text-sm text-muted-foreground">
-                  {hasAssignedProxy ? formatAccountProxy(editAccount.proxy_url) : "Unassigned"}
+                  {hasAssignedProxy
+                    ? formatAccountProxy(editAccount.proxy_url, a.unassigned)
+                    : a.unassigned}
                 </p>
                 {availableProxies.length === 0 && !hasAssignedProxy ? (
                   <p className="text-xs text-muted-foreground">{text.accounts.noFreeProxiesHint}</p>
@@ -733,33 +768,74 @@ export default function AccountsPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label>Instagram user ID (Graph API)</Label>
+                <Label>{a.igUserIdLabel}</Label>
                 <Input
                   value={editIgUserId}
                   onChange={(e) => setEditIgUserId(e.target.value)}
-                  placeholder="178414..."
+                  placeholder={a.igUserIdPlaceholder}
                   autoComplete="off"
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Instagram access token</Label>
+                <Label>{a.igAccessTokenLabel}</Label>
                 <Input
                   type="password"
                   value={editIgAccessToken}
                   onChange={(e) => setEditIgAccessToken(e.target.value)}
-                  placeholder={editAccount.ig_token_configured ? "Leave blank to keep current" : "EAAG..."}
+                  placeholder={
+                    editAccount.ig_token_configured ? a.keepTokenPlaceholder : a.tokenPlaceholder
+                  }
                   autoComplete="off"
                 />
               </div>
             </div>
           ) : null}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
-              {text.accounts.cancel}
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={!editAccount || deleting}
+              onClick={() => editAccount && openDelete(editAccount)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              {a.delete}
             </Button>
-            <Button type="button" onClick={handleSaveEdit} disabled={editSaving}>
-              {editSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              {text.accounts.saveChanges}
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
+                {text.accounts.cancel}
+              </Button>
+              <Button type="button" onClick={handleSaveEdit} disabled={editSaving}>
+                {editSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {text.accounts.saveChanges}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          setDeleteOpen(open);
+          if (!open) setDeletingAccount(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{a.deleteTitle}</DialogTitle>
+            <DialogDescription>
+              {deletingAccount
+                ? t("accounts.deleteDescription", { username: `@${deletingAccount.username}` })
+                : a.deleteDescription}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+              {a.cancel}
+            </Button>
+            <Button variant="destructive" disabled={deleting} onClick={() => void handleDeleteAccount()}>
+              {deleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {a.deleteConfirm}
             </Button>
           </DialogFooter>
         </DialogContent>
