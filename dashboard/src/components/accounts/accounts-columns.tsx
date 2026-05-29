@@ -7,6 +7,7 @@ import {
   Instagram,
   Linkedin,
   Pencil,
+  Trash2,
   Twitter,
 } from "lucide-react";
 
@@ -69,6 +70,7 @@ export type AccountsColumnLabels = {
   health: string;
   actions: string;
   edit: string;
+  delete: string;
   igReady: string;
   igSetup: string;
   na: string;
@@ -77,6 +79,7 @@ export type AccountsColumnLabels = {
 
 export function createAccountsColumns(
   onEdit: (account: AccountRow) => void,
+  onDelete: (account: AccountRow) => void,
   labels: AccountsColumnLabels,
 ): ColumnDef<AccountRow>[] {
   return [
@@ -154,10 +157,19 @@ export function createAccountsColumns(
       enableSorting: false,
       header: () => <span className="sr-only">{labels.actions}</span>,
       cell: ({ row }) => (
-        <div className="text-right">
+        <div className="flex justify-end gap-1">
           <Button variant="outline" size="sm" onClick={() => onEdit(row.original)}>
             <Pencil className="mr-1 h-3.5 w-3.5" />
             {labels.edit}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+            onClick={() => onDelete(row.original)}
+            aria-label={labels.delete}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
       ),

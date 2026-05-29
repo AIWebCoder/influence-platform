@@ -429,7 +429,9 @@ router.delete('/:id', async (req, res) => {
     if (!success) return res.status(404).json({ error: 'Account not found' });
     res.json({ success: true, message: 'Account deleted' });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to delete account' });
+    const msg = err.message || 'Failed to delete account';
+    const status = err.code === '23503' ? 409 : 500;
+    res.status(status).json({ error: msg, details: err.detail || null });
   }
 });
 

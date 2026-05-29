@@ -249,6 +249,31 @@ class PersonaService {
     return result.rows[0] || null;
   }
 
+  async deletePersona(personaId) {
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const existing = await client.query('SELECT id FROM personas WHERE id = $1', [personaId]);
+      if (existing.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      await client.query('UPDATE accounts SET persona_id = NULL WHERE persona_id = $1', [personaId]);
+      await client.query('UPDATE proxies SET assigned_persona_id = NULL WHERE assigned_persona_id = $1', [
+        personaId,
+      ]);
+      await client.query('DELETE FROM personas WHERE id = $1', [personaId]);
+      await client.query('COMMIT');
+      return { deleted: true, id: personaId };
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
   async getProxyCredentialsPayload(accountId) {
     const proxyConfig = await this.resolveProxyConfigForAccount(accountId);
     if (!proxyConfig) {

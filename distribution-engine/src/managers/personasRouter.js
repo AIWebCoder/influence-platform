@@ -43,6 +43,16 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+router.delete('/:id', async (req, res) => {
+  try {
+    const result = await PersonaService.deletePersona(req.params.id);
+    if (!result) return res.status(404).json({ error: 'Persona not found' });
+    return res.json(result);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+});
+
 router.post('/:id/proxy/assign', async (req, res) => {
   try {
     const proxyId = req.body?.proxy_id;

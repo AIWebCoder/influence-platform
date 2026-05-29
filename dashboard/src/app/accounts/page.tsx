@@ -7,9 +7,11 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Trash2,
   Upload,
   Users,
 } from "lucide-react";
+import toast from "react-hot-toast";
 import { api, formatContentApiError } from "@/lib/api";
 import { useLocale } from "@/components/i18n/LocaleProvider";
 import {
@@ -125,6 +127,9 @@ export default function AccountsPage() {
   const [igAccessToken, setIgAccessToken] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState<AccountRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editAccount, setEditAccount] = useState<AccountRow | null>(null);
   const [editStatus, setEditStatus] = useState("warming");
@@ -284,6 +289,34 @@ export default function AccountsPage() {
     }
   };
 
+  const openDelete = useCallback((acc: AccountRow) => {
+    setDeletingAccount(acc);
+    setDeleteOpen(true);
+  }, []);
+
+  const handleDeleteAccount = async () => {
+    if (!deletingAccount) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await api.distribution.deleteAccount(deletingAccount.id);
+      toast.success(a.deleted);
+      setDeleteOpen(false);
+      if (editAccount?.id === deletingAccount.id) {
+        setEditOpen(false);
+        setEditAccount(null);
+      }
+      setDeletingAccount(null);
+      await loadAccounts();
+    } catch (err: unknown) {
+      const msg = formatContentApiError(err, a.deleteError);
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const openEdit = useCallback(async (acc: AccountRow) => {
     setEditAccount(acc);
     setEditStatus((acc.status || "warming").toLowerCase());
@@ -313,6 +346,7 @@ export default function AccountsPage() {
       health: a.health,
       actions: a.actions,
       edit: a.editAccount,
+      delete: a.delete,
       igReady: a.igReady,
       igSetup: a.igSetup,
       na: a.na,
@@ -322,8 +356,8 @@ export default function AccountsPage() {
   );
 
   const columns = useMemo(
-    () => createAccountsColumns(openEdit, columnLabels),
-    [openEdit, columnLabels],
+    () => createAccountsColumns(openEdit, openDelete, columnLabels),
+    [openEdit, openDelete, columnLabels],
   );
 
   const handleSaveEdit = async () => {
@@ -756,13 +790,52 @@ export default function AccountsPage() {
               </div>
             </div>
           ) : null}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
-              {text.accounts.cancel}
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={!editAccount || deleting}
+              onClick={() => editAccount && openDelete(editAccount)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              {a.delete}
             </Button>
-            <Button type="button" onClick={handleSaveEdit} disabled={editSaving}>
-              {editSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              {text.accounts.saveChanges}
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
+                {text.accounts.cancel}
+              </Button>
+              <Button type="button" onClick={handleSaveEdit} disabled={editSaving}>
+                {editSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {text.accounts.saveChanges}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          setDeleteOpen(open);
+          if (!open) setDeletingAccount(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{a.deleteTitle}</DialogTitle>
+            <DialogDescription>
+              {deletingAccount
+                ? t("accounts.deleteDescription", { username: `@${deletingAccount.username}` })
+                : a.deleteDescription}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+              {a.cancel}
+            </Button>
+            <Button variant="destructive" disabled={deleting} onClick={() => void handleDeleteAccount()}>
+              {deleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {a.deleteConfirm}
             </Button>
           </DialogFooter>
         </DialogContent>

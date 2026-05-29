@@ -8,9 +8,11 @@ import {
   RefreshCw,
   ShieldCheck,
   Smartphone,
+  Trash2,
   Users,
   Zap,
 } from "lucide-react";
+import toast from "react-hot-toast";
 import { api, formatContentApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useLocale } from "@/components/i18n/LocaleProvider";
@@ -115,6 +117,9 @@ export default function PersonasPage() {
   const [deviceSerial, setDeviceSerial] = useState("");
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [egressById, setEgressById] = useState<Record<string, string>>({});
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletingPersona, setDeletingPersona] = useState<PersonaRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchData = useCallback(async () => {
     setError(null);
@@ -228,6 +233,38 @@ export default function PersonasPage() {
       setError(p.bindDeviceError);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openDelete = (persona: PersonaRow) => {
+    setDeletingPersona(persona);
+    setDeleteOpen(true);
+  };
+
+  const handleDeletePersona = async () => {
+    if (!deletingPersona) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await api.distribution.deletePersona(deletingPersona.id);
+      toast.success(p.deleted);
+      setDeleteOpen(false);
+      if (selected?.id === deletingPersona.id) {
+        setManageOpen(false);
+        setSelected(null);
+      }
+      setDeletingPersona(null);
+      setRefreshing(true);
+      await fetchData();
+    } catch (err: unknown) {
+      const msg =
+        err && typeof err === "object" && "response" in err
+          ? String((err as { response?: { data?: { error?: string } } }).response?.data?.error || "")
+          : "";
+      setError(msg || p.deleteError);
+      toast.error(msg || p.deleteError);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -407,6 +444,15 @@ export default function PersonasPage() {
                     >
                       {p.manage}
                     </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => openDelete(persona)}
+                      aria-label={p.delete}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -533,9 +579,46 @@ export default function PersonasPage() {
               </div>
             </div>
           ) : null}
-          <DialogFooter>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={!selected || deleting}
+              onClick={() => selected && openDelete(selected)}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              {p.delete}
+            </Button>
             <Button variant="outline" onClick={() => setManageOpen(false)}>
               {p.cancel}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          setDeleteOpen(open);
+          if (!open) setDeletingPersona(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{p.deleteTitle}</DialogTitle>
+            <DialogDescription>
+              {deletingPersona
+                ? `${deletingPersona.name} — ${p.deleteDescription}`
+                : p.deleteDescription}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+              {p.cancel}
+            </Button>
+            <Button variant="destructive" disabled={deleting} onClick={() => void handleDeletePersona()}>
+              {deleting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              {p.deleteConfirm}
             </Button>
           </DialogFooter>
         </DialogContent>
