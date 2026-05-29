@@ -44,6 +44,7 @@ import {
   Circle,
   GripVertical,
   Loader2,
+  ListOrdered,
   Maximize2,
   RefreshCw,
   Rocket,
@@ -61,6 +62,9 @@ import {
   type GenerationStudioI18n,
   type GenerationStudioPipelineLabels,
 } from "@/lib/i18n-generation-studio";
+
+const queueSimulationEnabled =
+  String(process.env.NEXT_PUBLIC_GENERATION_ALLOW_QUEUE_SIMULATION ?? "").toLowerCase() === "true";
 
 type ContentType = "post" | "reel" | "story";
 type Mode = "persona" | "faceless";
@@ -670,6 +674,7 @@ function GenerationStudioPageInner() {
   const [createLoading, setCreateLoading] = useState(false);
   const [launchLoading, setLaunchLoading] = useState(false);
   const [readyLoading, setReadyLoading] = useState(false);
+  const [simulateLoading, setSimulateLoading] = useState(false);
   const [cancelLoading, setCancelLoading] = useState(false);
   const [cancelStepLoading, setCancelStepLoading] = useState<string | null>(null);
   const [retryStepLoading, setRetryStepLoading] = useState<string | null>(null);
@@ -950,6 +955,31 @@ function GenerationStudioPageInner() {
       toast.error(parseApiError(e, toastMsg.markReadyError));
     } finally {
       setReadyLoading(false);
+    }
+  };
+
+  const handleSimulateQueue = async () => {
+    setSimulateLoading(true);
+    try {
+      const res = await api.generationJobs.simulateQueueEntry({
+        job_id: jobId ?? undefined,
+        execution_mode: executionMode,
+        content_type: contentType,
+        mode,
+        niche,
+        topic: topic.trim() || undefined,
+        target_accounts: pipelineTargetAccountId ? [pipelineTargetAccountId] : [],
+      });
+      if (res.job_id) {
+        setJobId(res.job_id);
+        addTrackedGenerationJobId(res.job_id);
+      }
+      toast.success(toastMsg.simulateQueueSuccess);
+      router.push("/queue");
+    } catch (e: unknown) {
+      toast.error(parseApiError(e, toastMsg.simulateQueueError));
+    } finally {
+      setSimulateLoading(false);
     }
   };
 
@@ -1345,6 +1375,24 @@ function GenerationStudioPageInner() {
                   {createLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Video className="h-4 w-4" />}
                   {ctrl.createDraft}
                 </Button>
+                {queueSimulationEnabled ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={simulateLoading}
+                      onClick={() => void handleSimulateQueue()}
+                    >
+                      {simulateLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <ListOrdered className="h-4 w-4" />
+                      )}
+                      {ctrl.simulateQueue}
+                    </Button>
+                    <p className="text-xs text-muted-foreground">{ctrl.simulateQueueHint}</p>
+                  </>
+                ) : null}
                 {jobId && canLaunch ? (
                   <>
                     <Button type="button" variant="secondary" disabled={readyLoading} onClick={handleMarkReady}>

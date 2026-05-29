@@ -88,7 +88,12 @@ class Settings(BaseSettings):
     GENERATION_KIE_VIDEO_CREATE_MAX_ATTEMPTS: int = 3
     # If True, multi-clip ffmpeg failure still sets output_url to first scene clip (demo only)
     GENERATION_ASSEMBLY_FALLBACK_ON_CONCAT_FAIL: bool = True
-    
+    # Dev/demo: create completed jobs for /queue E2E without Kie/Seedance/AliveAI tokens.
+    GENERATION_ALLOW_QUEUE_SIMULATION: bool = False
+    GENERATION_QUEUE_SIMULATION_VIDEO_URL: str = (
+        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+    )
+
     # Bootstrap admin — used only to seed the first admin row into the `users` table when it is empty.
     # Login no longer accepts these env vars at runtime; only DB users can authenticate.
     ADMIN_USERNAME: str = "admin"  # kept for compatibility / display

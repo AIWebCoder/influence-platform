@@ -910,6 +910,19 @@ export const api = {
       const response = await contentClient.post(`/generation-jobs/${jobId}/ready`);
       return response.data as { status: string; job_id: string };
     },
+    /** Dev/demo: completed job on /queue without Kie tokens (requires GENERATION_ALLOW_QUEUE_SIMULATION). */
+    simulateQueueEntry: async (data: {
+      job_id?: string;
+      execution_mode?: 'scene_based' | 'multi_scene_single_video' | 'ailiveai_single_video';
+      content_type?: string;
+      mode?: string;
+      niche?: string;
+      topic?: string;
+      target_accounts?: string[];
+    }) => {
+      const response = await contentClient.post('/generation-jobs/simulate-queue', data);
+      return response.data as { job_id: string; status: string; simulated: boolean };
+    },
     getCostEstimate: async (jobId: string) => {
       const response = await contentClient.get(`/generation-jobs/${jobId}/cost-estimate`);
       return response.data as {

@@ -231,6 +231,90 @@ async def preview_scenes(body: PreviewScenesBody, request: Request):
     return plan
 
 
+class SimulateQueueBody(BaseModel):
+    job_id: Optional[str] = Field(
+        default=None,
+        description="Optional existing draft/ready job to complete without Kie. When omitted, a new simulated job is created.",
+    )
+    execution_mode: str = Field(default="scene_based")
+    content_type: str = Field(default="reel")
+    mode: str = Field(default="faceless")
+    niche: str = Field(default="lifestyle")
+    topic: str = Field(default="Queue E2E test")
+    target_accounts: list[str] = Field(default_factory=list)
+
+
+class SimulateQueueResponse(BaseModel):
+    job_id: str
+    status: str
+    simulated: bool = True
+
+
+@router.post("/simulate-queue", response_model=SimulateQueueResponse)
+async def simulate_queue_entry(body: SimulateQueueBody, db: AsyncSession = Depends(get_db)):
+    """Create or complete a job with a sample video so /queue can be tested without Kie tokens."""
+    if not settings.GENERATION_ALLOW_QUEUE_SIMULATION:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Queue simulation is disabled. Set GENERATION_ALLOW_QUEUE_SIMULATION=true "
+                "on Content Factory to enable."
+            ),
+        )
+
+    video_url = (settings.GENERATION_QUEUE_SIMULATION_VIDEO_URL or "").strip()
+    if not video_url.startswith("https://"):
+        raise HTTPException(status_code=503, detail="GENERATION_QUEUE_SIMULATION_VIDEO_URL must be a public https URL")
+
+    svc = GenerationJobService(db)
+    try:
+        if body.job_id:
+            try:
+                jid = uuid.UUID(body.job_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid job id") from exc
+            job = await svc.get_job(jid, with_children=True)
+            if not job:
+                raise HTTPException(status_code=404, detail="Job not found")
+            if job.status in ("running", "pending", "cancelling"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot simulate while the job pipeline is running. Cancel it first or create a new simulation.",
+                )
+            job = await svc.complete_as_simulated_queue_entry(job, video_url=video_url)
+        else:
+            if body.execution_mode not in ("scene_based", "multi_scene_single_video", "ailiveai_single_video"):
+                raise HTTPException(status_code=400, detail="Invalid execution_mode")
+            payload = body.model_dump(exclude={"job_id"}, exclude_none=True)
+            raw_targets = payload.pop("target_accounts", []) or []
+            payload["target_accounts"] = (
+                await _resolve_target_accounts(db, raw_targets) if raw_targets else []
+            )
+            payload.setdefault("content_type", body.content_type)
+            job = await svc.create_job(payload, execution_mode=body.execution_mode)
+            job = await svc.complete_as_simulated_queue_entry(
+                job,
+                video_url=video_url,
+                create_minimal_scene=True,
+            )
+        await db.commit()
+        emit("queue_simulation_completed", job_id=str(job.id), step="api")
+        return SimulateQueueResponse(job_id=str(job.id), status=str(job.status))
+    except HTTPException:
+        await db.rollback()
+        raise
+    except LookupError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        await db.rollback()
+        logger.exception("simulate_queue_entry failed")
+        raise HTTPException(status_code=500, detail=f"Queue simulation failed: {exc}") from exc
+
+
 class GenerationJobCreateRequest(BaseModel):
     execution_mode: str = Field(
         default="scene_based",
