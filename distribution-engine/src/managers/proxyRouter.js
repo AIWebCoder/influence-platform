@@ -1,10 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const ProxyManager = require('../proxy/ProxyManager');
+const { filterProxiesForScope, forbidViewerWrite } = require('../core/accessScope');
 
 router.get('/', async (req, res) => {
   try {
-    const proxies = await ProxyManager.getHealthStatus();
+    const proxies = filterProxiesForScope(
+      await ProxyManager.getHealthStatus(),
+      req.accessScope,
+    );
     res.json(proxies);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch proxies', details: err.message });
@@ -36,6 +40,7 @@ router.get('/stats', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     const { host, port, username, password_encrypted, provider, country } = req.body || {};
     const proxy = await ProxyManager.createProxy({
@@ -53,6 +58,7 @@ router.post('/', async (req, res) => {
 });
 
 router.patch('/:id', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     const proxy = await ProxyManager.updateProxy(req.params.id, req.body || {});
     res.json(proxy);
@@ -63,6 +69,7 @@ router.patch('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     const result = await ProxyManager.deleteProxy(req.params.id);
     res.json(result);
@@ -73,6 +80,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 router.post('/check', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     ProxyManager.runHealthCheckAll();
     res.json({ message: 'Health check triggered for all proxies' });

@@ -3,6 +3,7 @@ const router = express.Router();
 const crypto = require('crypto');
 const AccountService = require('./AccountService');
 const { getPool } = require('../core/database');
+const { buildAccountScope, allowsPersona, forbidViewerWrite, assertAccountAccess } = require('../core/accessScope');
 
 const PROXY_STRICT_ONE_TO_ONE = process.env.PROXY_STRICT_ONE_TO_ONE !== 'false';
 
@@ -35,7 +36,10 @@ function decryptProxyPassword(passwordEncrypted) {
 router.get('/', async (req, res) => {
   try {
     const pool = getPool();
-    const result = await pool.query(`
+    const scope = req.accessScope;
+    const { clause, params } = buildAccountScope(scope, 'a', 1);
+    const result = await pool.query(
+      `
       SELECT
         a.id,
         a.username,
@@ -61,7 +65,11 @@ router.get('/', async (req, res) => {
         ) AS proxy_url
       FROM accounts a
       LEFT JOIN proxies p ON p.id = a.proxy_id
-    `);
+      WHERE ${clause}
+      ORDER BY a.created_at DESC
+      `,
+      params,
+    );
     res.json(result.rows);
   } catch (error) {
     console.error('Erreur GET /accounts:', error);
@@ -74,6 +82,7 @@ router.get('/', async (req, res) => {
  * Body: { accounts: [{ username, password_encrypted, status?, ig_user_id?, ig_access_token? }] }
  */
 router.post('/bulk', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   const items = Array.isArray(req.body?.accounts) ? req.body.accounts : [];
   if (items.length === 0) {
     return res.status(400).json({ error: 'accounts array is required' });
@@ -163,7 +172,11 @@ router.get('/:id', async (req, res) => {
       [req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
-    res.json(result.rows[0]);
+    const row = result.rows[0];
+    if (!allowsPersona(req.accessScope, row.persona_id)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    res.json(row);
   } catch (error) {
     console.error('Erreur GET /accounts/:id:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -197,6 +210,7 @@ router.get('/:id/proxy-credentials', async (req, res) => {
 });
 
 router.post('/:id/proxy/rotate', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     const accountId = req.params.id;
     const ProxyManager = require('../proxy/ProxyManager');
@@ -209,6 +223,7 @@ router.post('/:id/proxy/rotate', async (req, res) => {
 
 /** Assign a dedicated proxy to an existing account (auto-pick or explicit proxy_id). */
 router.post('/:id/proxy/assign', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     const accountId = req.params.id;
     const pool = getPool();
@@ -256,6 +271,7 @@ router.post('/:id/proxy/assign', async (req, res) => {
 });
 
 router.patch('/:id', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     const { status } = req.body || {};
     if (!status) {
@@ -283,6 +299,7 @@ router.patch('/:id', async (req, res) => {
 
 // POST /accounts/:id/execute — action completion callback from emulator-controller
 router.post('/:id/execute', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     const pool = getPool();
     const accountId = req.params.id;
@@ -325,6 +342,7 @@ router.post('/:id/execute', async (req, res) => {
 const ALLOWED_PLATFORMS = new Set(['instagram']);
 
 router.post('/', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     const {
       username,
@@ -399,6 +417,7 @@ router.post('/', async (req, res) => {
 });
 
 router.patch('/:id/instagram', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     const { ig_user_id: igUserId, ig_access_token: igAccessToken } = req.body || {};
     if (igUserId == null && igAccessToken == null) {
@@ -424,6 +443,7 @@ router.patch('/:id/instagram', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     const success = await AccountService.deleteAccount(req.params.id);
     if (!success) return res.status(404).json({ error: 'Account not found' });

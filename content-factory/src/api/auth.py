@@ -8,6 +8,7 @@ import re
 
 from src.core.config import settings
 from src.core.database import get_db
+from src.core.access_scope import DEFAULT_ORGANIZATION_ID
 from src.core.security import verify_password, create_access_token
 from src.models.user import User
 from src.models.verification import VerificationSession
@@ -15,6 +16,27 @@ from src.services.sms_service import sms_service, generate_otp
 from src.services.otp_metrics import otp_verifications_total
 
 router = APIRouter()
+
+
+def _access_token_for_user(user: User) -> str:
+    org_id = user.organization_id or DEFAULT_ORGANIZATION_ID
+    return create_access_token(
+        subject=user.email,
+        role=user.role,
+        expires_delta=timedelta(minutes=settings.JWT_EXPIRE_MINUTES),
+        user_id=str(user.id),
+        organization_id=str(org_id),
+    )
+
+
+def _user_auth_payload(user: User) -> dict:
+    org_id = user.organization_id or DEFAULT_ORGANIZATION_ID
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "role": user.role,
+        "organization_id": str(org_id),
+    }
 
 
 class SendOTPRequest(BaseModel):
@@ -255,20 +277,12 @@ async def register_with_phone(
     await db.commit()
     await db.refresh(user)
     
-    access_token = create_access_token(
-        subject=user.email,
-        role=user.role,
-        expires_delta=timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
-    )
-    
+    access_token = _access_token_for_user(user)
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": {
-            "id": str(user.id),
-            "email": user.email,
-            "role": user.role
-        }
+        "user": _user_auth_payload(user),
     }
 
 
@@ -288,13 +302,9 @@ async def login(
         )
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is disabled")
-    access_token = create_access_token(
-        subject=user.email,
-        role=user.role,
-        expires_delta=timedelta(minutes=settings.JWT_EXPIRE_MINUTES),
-    )
+    access_token = _access_token_for_user(user)
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": {"id": str(user.id), "email": user.email, "role": user.role},
+        "user": _user_auth_payload(user),
     }

@@ -28,7 +28,14 @@ class GenerationJobService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def create_job(self, input_payload: dict, execution_mode: str = "scene_based") -> GenerationJob:
+    async def create_job(
+        self,
+        input_payload: dict,
+        execution_mode: str = "scene_based",
+        *,
+        organization_id: Optional[uuid.UUID] = None,
+        created_by_user_id: Optional[uuid.UUID] = None,
+    ) -> GenerationJob:
         job = GenerationJob(
             status="draft",
             execution_mode=execution_mode or "scene_based",
@@ -37,6 +44,8 @@ class GenerationJobService:
             step_control=default_step_control(),
             output_url=None,
             logs=[],
+            organization_id=organization_id,
+            created_by_user_id=created_by_user_id,
         )
         self.db.add(job)
         await self.db.flush()

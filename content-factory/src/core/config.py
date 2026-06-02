@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "changeme"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 1440  # 24h
+    # fleet = operators see all org data (V1); scoped = operators see assigned personas only
+    ACCESS_MODE: str = "scoped"
+    DEFAULT_ORGANIZATION_SLUG: str = "influence"
     ENVIRONMENT: str = "development"
     CONTENT_QUEUE_NAME: str = "content:ready"
     # publish_intents = studio uses intents only (no content:ready push from orchestrator)

@@ -134,7 +134,7 @@ export function AppSidebar() {
         { name: text.nav.publications, href: "/publications", icon: BookOpen },
         { name: text.nav.engagement, href: "/engagement", icon: MessageCircle },
         { name: text.nav.campaigns, href: "/campaigns", icon: Activity },
-        { name: text.nav.emulators, href: "/emulators", icon: Smartphone },
+        ...(isAdmin ? [{ name: text.nav.emulators, href: "/emulators", icon: Smartphone }] : []),
       ],
     },
     {

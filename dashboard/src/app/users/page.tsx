@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import toast from "react-hot-toast";
-import { Plus, Trash2, KeyRound, ShieldCheck, ShieldX } from "lucide-react";
+import { Plus, Trash2, KeyRound, ShieldCheck, ShieldX, Users } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -65,6 +65,7 @@ export default function UsersPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [resetTarget, setResetTarget] = useState<UserRecord | null>(null);
+  const [personaTarget, setPersonaTarget] = useState<UserRecord | null>(null);
 
   if (status === "loading") {
     return <div className="p-6 text-sm text-muted-foreground">{u.loading}</div>;
@@ -201,6 +202,17 @@ export default function UsersPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
+                        {user.role !== "admin" ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1"
+                            onClick={() => setPersonaTarget(user)}
+                          >
+                            <Users className="size-4" />
+                            {u.assignPersonas}
+                          </Button>
+                        ) : null}
                         <Button
                           size="sm"
                           variant="outline"
@@ -261,7 +273,120 @@ export default function UsersPage() {
           if (!open) setResetTarget(null);
         }}
       />
+      <PersonaAssignDialog
+        target={personaTarget}
+        labels={u}
+        onOpenChange={(open) => {
+          if (!open) setPersonaTarget(null);
+        }}
+      />
     </div>
+  );
+}
+
+function PersonaAssignDialog({
+  target,
+  labels: u,
+  onOpenChange,
+}: {
+  target: UserRecord | null;
+  labels: TranslationTree["users"];
+  onOpenChange: (open: boolean) => void;
+}) {
+  const open = Boolean(target);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const { data: personaData } = useSWR(
+    open ? "personas-for-assign" : null,
+    () => api.distribution.listPersonas(),
+    { revalidateOnFocus: false },
+  );
+  const personas = personaData?.personas ?? [];
+
+  useEffect(() => {
+    if (!open || !target) {
+      setSelected([]);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    api.users
+      .getPersonas(target.id)
+      .then((res) => {
+        if (!cancelled) setSelected(res.persona_ids ?? []);
+      })
+      .catch((err) => {
+        if (!cancelled) toast.error(formatContentApiError(err, u.assignPersonasError));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, target, u.assignPersonasError]);
+
+  function togglePersona(id: string, checked: boolean) {
+    setSelected((prev) => (checked ? [...prev, id] : prev.filter((p) => p !== id)));
+  }
+
+  async function onSave() {
+    if (!target) return;
+    setSubmitting(true);
+    try {
+      await api.users.setPersonas(target.id, selected);
+      toast.success(u.assignPersonasSuccess);
+      onOpenChange(false);
+    } catch (err) {
+      toast.error(formatContentApiError(err, u.assignPersonasError));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(value) => !submitting && onOpenChange(value)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{u.assignPersonasTitle}</DialogTitle>
+          <DialogDescription>
+            {u.assignPersonasDesc} {target ? `(${target.email})` : ""}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border p-3">
+          {loading ? (
+            <p className="text-sm text-muted-foreground">{u.loadingUsers}</p>
+          ) : personas.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{u.assignPersonasEmpty}</p>
+          ) : (
+            personas.map((persona) => (
+              <label
+                key={persona.id}
+                className="flex cursor-pointer items-center gap-2 text-sm"
+              >
+                <input
+                  type="checkbox"
+                  className="size-4 rounded border"
+                  checked={selected.includes(persona.id)}
+                  onChange={(e) => togglePersona(persona.id, e.target.checked)}
+                />
+                <span>{persona.name}</span>
+              </label>
+            ))
+          )}
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+            {u.cancel}
+          </Button>
+          <Button type="button" onClick={onSave} disabled={submitting || loading}>
+            {submitting ? u.saving : u.assignPersonasSave}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

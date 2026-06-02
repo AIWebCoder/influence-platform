@@ -1031,6 +1031,16 @@ export const api = {
       const response = await contentClient.delete(`/users/${id}`);
       return response.data as { message: string };
     },
+    getPersonas: async (id: string) => {
+      const response = await contentClient.get(`/users/${id}/personas`);
+      return response.data as { persona_ids: string[] };
+    },
+    setPersonas: async (id: string, personaIds: string[]) => {
+      const response = await contentClient.put(`/users/${id}/personas`, {
+        persona_ids: personaIds,
+      });
+      return response.data as { persona_ids: string[] };
+    },
   },
 };
 

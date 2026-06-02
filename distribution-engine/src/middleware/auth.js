@@ -1,4 +1,5 @@
-﻿const jwt = require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
+const { loadAccessScope } = require('../core/accessScope');
 
 function authMiddleware(req, res, next) {
   const header = req.headers.authorization || '';
@@ -12,14 +13,23 @@ function authMiddleware(req, res, next) {
     return res.status(401).json({ error: 'JWT_SECRET is not configured' });
   }
 
+  let decoded;
   try {
-    const decoded = jwt.verify(token, secret);
-    req.user = decoded;
-    return next();
+    decoded = jwt.verify(token, secret);
   } catch (_err) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
+
+  req.user = decoded;
+  loadAccessScope(decoded)
+    .then((scope) => {
+      req.accessScope = scope;
+      return next();
+    })
+    .catch((err) => {
+      console.error('access scope resolution failed:', err);
+      return res.status(500).json({ error: 'Failed to resolve access scope' });
+    });
 }
 
 module.exports = authMiddleware;
-

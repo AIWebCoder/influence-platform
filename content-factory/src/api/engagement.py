@@ -8,6 +8,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
+from src.core.access_scope import AccessScope, assert_account_access, get_access_scope
+from src.api.deps_scope import require_write_access
 from src.services.engagement_dispatcher import ACTION_TYPES, TARGET_TYPES, dispatch_engagement_intent
 
 router = APIRouter()
@@ -65,12 +67,23 @@ async def list_engagement_intents(
     limit: int = Query(default=50, ge=1, le=200),
     skip: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
+    scope: AccessScope = Depends(get_access_scope),
 ):
     allowed_status = frozenset({"ready", "queued", "processing", "completed", "failed"})
     statuses = [s.strip().lower() for s in status.split(",") if s.strip().lower() in allowed_status]
 
-    clauses = ["1=1"]
+    clauses: list[str] = []
     params: dict[str, Any] = {"limit": limit, "skip": skip}
+    if scope.is_fleet:
+        clauses.append("TRUE")
+    else:
+        from src.core.access_scope import allowed_account_ids
+
+        allowed = await allowed_account_ids(db, scope)
+        if not allowed:
+            return []
+        clauses.append("ei.account_id = ANY(CAST(:scope_account_ids AS uuid[]))")
+        params["scope_account_ids"] = [str(a) for a in allowed]
     if statuses:
         status_sql = ", ".join(f"'{s}'" for s in statuses)
         clauses.append(f"ei.status IN ({status_sql})")
@@ -93,6 +106,7 @@ async def list_engagement_intents(
                 ei.external_result_id,
                 ei.created_at
             FROM engagement_intents ei
+            JOIN accounts a ON a.id = ei.account_id
             WHERE {where_sql}
             ORDER BY ei.created_at DESC NULLS LAST
             LIMIT :limit OFFSET :skip
@@ -123,6 +137,7 @@ async def list_engagement_intents(
 async def create_engagement_intent(
     body: EngagementIntentCreate,
     db: AsyncSession = Depends(get_db),
+    scope: AccessScope = Depends(require_write_access),
 ):
     action = (body.action_type or "").strip().lower()
     if action not in ACTION_TYPES:
@@ -141,6 +156,7 @@ async def create_engagement_intent(
         account_uuid = UUID(body.account_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid account_id")
+    await assert_account_access(db, scope, account_uuid)
 
     existing = await db.execute(
         text("SELECT id::text, status FROM engagement_intents WHERE idempotency_key = :key LIMIT 1"),
@@ -231,11 +247,24 @@ async def create_engagement_intent(
 
 
 @router.post("/intents/{intent_id}/dispatch", response_model=EngagementDispatchResponse)
-async def dispatch_intent(intent_id: str, db: AsyncSession = Depends(get_db)):
+async def dispatch_intent(
+    intent_id: str,
+    db: AsyncSession = Depends(get_db),
+    scope: AccessScope = Depends(require_write_access),
+):
     try:
         UUID(intent_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid intent id")
+    row = await db.execute(
+        text("SELECT account_id::text FROM engagement_intents WHERE id = :id LIMIT 1"),
+        {"id": intent_id},
+    )
+    intent_row = row.first()
+    if not intent_row:
+        raise HTTPException(status_code=404, detail="Engagement intent not found")
+    await assert_account_access(db, scope, intent_row[0])
+
     try:
         result = await dispatch_engagement_intent(intent_id, db)
     except ValueError as exc:

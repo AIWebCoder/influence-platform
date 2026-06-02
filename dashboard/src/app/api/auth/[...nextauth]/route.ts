@@ -4,6 +4,8 @@ import CredentialsProvider from "next-auth/providers/credentials";
 type FastApiTokenClaims = {
   sub?: string;
   role?: string;
+  user_id?: string;
+  organization_id?: string;
   exp?: number;
 };
 
@@ -85,16 +87,20 @@ const authOptions: NextAuthOptions = {
           if (res.ok && data.access_token) {
             const claims = decodeJwtPayload(data.access_token) ?? {};
             const apiUser = (data && typeof data === "object" ? data.user : null) as
-              | { id?: string; email?: string; role?: string }
+              | { id?: string; email?: string; role?: string; organization_id?: string }
               | null;
             const email = apiUser?.email || claims.sub || credentials?.username || "";
             const role = apiUser?.role || claims.role || "viewer";
+            const userId = apiUser?.id || claims.user_id || email;
+            const organizationId =
+              apiUser?.organization_id || claims.organization_id || undefined;
             return {
-              id: apiUser?.id || email,
+              id: userId,
               name: email,
               email,
               accessToken: data.access_token,
               role,
+              organizationId,
             };
           }
           return null;
@@ -111,6 +117,7 @@ const authOptions: NextAuthOptions = {
         token.accessToken = user.accessToken;
         token.role = user.role;
         token.email = user.email;
+        token.organizationId = user.organizationId;
       }
       return token;
     },
@@ -120,6 +127,7 @@ const authOptions: NextAuthOptions = {
         ...(session.user ?? {}),
         email: token.email ?? session.user?.email ?? null,
         role: token.role ?? "viewer",
+        organizationId: token.organizationId,
       };
       return session;
     },

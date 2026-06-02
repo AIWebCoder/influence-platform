@@ -21,6 +21,8 @@ class GenerationJob(Base):
     step_control = Column(JSONB, nullable=False, default=dict)
     output_url = Column(Text, nullable=True)
     logs = Column(JSONB, nullable=False, default=list)
+    organization_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    created_by_user_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 

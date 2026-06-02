@@ -2,13 +2,14 @@ const express = require('express');
 const PersonaService = require('../persona/personaService');
 const ProxyHttpClient = require('../persona/proxyHttpClient');
 const { recordProxyRequest } = require('../persona/personaMetrics');
+const { allowsPersona, forbidViewerWrite } = require('../core/accessScope');
 
 const router = express.Router();
 
 router.get('/', async (req, res) => {
   try {
     const status = req.query.status ? String(req.query.status) : undefined;
-    const rows = await PersonaService.listPersonas({ status });
+    const rows = await PersonaService.listPersonas({ status, scope: req.accessScope });
     return res.json({ personas: rows });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -16,6 +17,7 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     const { name, proxy_id, timezone, locale, status } = req.body || {};
     if (!name) return res.status(400).json({ error: 'name is required' });
@@ -25,6 +27,7 @@ router.post('/', async (req, res) => {
       timezone,
       locale,
       status,
+      organization_id: req.accessScope?.organizationId || null,
     });
     return res.status(201).json(persona);
   } catch (err) {
@@ -36,6 +39,9 @@ router.get('/:id', async (req, res) => {
   try {
     const persona = await PersonaService.getPersonaById(req.params.id);
     if (!persona) return res.status(404).json({ error: 'Persona not found' });
+    if (!allowsPersona(req.accessScope, persona.id)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     const accounts = await PersonaService.getAccountsForPersona(req.params.id);
     return res.json({ ...persona, accounts });
   } catch (err) {
@@ -44,7 +50,11 @@ router.get('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
+    if (!allowsPersona(req.accessScope, req.params.id)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     const result = await PersonaService.deletePersona(req.params.id);
     if (!result) return res.status(404).json({ error: 'Persona not found' });
     return res.json(result);
@@ -54,6 +64,10 @@ router.delete('/:id', async (req, res) => {
 });
 
 router.post('/:id/proxy/assign', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
+  if (!allowsPersona(req.accessScope, req.params.id)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
   try {
     const proxyId = req.body?.proxy_id;
     if (!proxyId) return res.status(400).json({ error: 'proxy_id is required' });
@@ -66,6 +80,10 @@ router.post('/:id/proxy/assign', async (req, res) => {
 });
 
 router.post('/:id/device/bind', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
+  if (!allowsPersona(req.accessScope, req.params.id)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
   try {
     const { emulator_serial, adb_port, appium_port } = req.body || {};
     if (!emulator_serial) return res.status(400).json({ error: 'emulator_serial is required' });
@@ -80,6 +98,10 @@ router.post('/:id/device/bind', async (req, res) => {
 });
 
 router.post('/:id/accounts/:accountId', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
+  if (!allowsPersona(req.accessScope, req.params.id)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
   try {
     await PersonaService.assignAccountToPersona(req.params.accountId, req.params.id);
     const accounts = await PersonaService.getAccountsForPersona(req.params.id);
@@ -110,6 +132,10 @@ router.get('/:id/proxy-credentials', async (req, res) => {
 
 /** Verify egress IP for persona (ipify through proxy). */
 router.post('/:id/verify-egress', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
+  if (!allowsPersona(req.accessScope, req.params.id)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
   const started = Date.now();
   try {
     const { egress_ip, proxy } = await ProxyHttpClient.verifyEgressForPersona(req.params.id);

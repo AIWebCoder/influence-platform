@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getPool } = require('../core/database');
 const { getRedis } = require('../core/redis');
+const { getAllowedAccountIds } = require('../core/accessScope');
 
 /**
  * GET /queue/stats
@@ -33,18 +34,51 @@ router.get('/stats', async (req, res) => {
       publishProcessing = 0;
     }
 
-    // DB aggregates from publications table
-    const dbResult = await pool.query(`
+    const scope = req.accessScope;
+    let pubWhere = '';
+    let pubParams = [];
+    if (!scope.isFleet) {
+      const ids = await getAllowedAccountIds(pool, scope);
+      if (ids.length === 0) {
+        return res.json({
+          queue: {
+            pending: pendingInQueue,
+            delayed: delayedInQueue,
+            publish_commands_pending: publishCommandsPending,
+            publish_processing: publishProcessing,
+            publish_failed_dlq: publishFailedDlq,
+            engagement_commands_pending: engagementCommandsPending,
+          },
+          publications: {
+            total: 0,
+            pending: 0,
+            processing: 0,
+            published: 0,
+            failed: 0,
+            retrying: 0,
+            total_retries: 0,
+          },
+        });
+      }
+      pubWhere = 'WHERE p.account_id = ANY($1::uuid[])';
+      pubParams = [ids];
+    }
+
+    const dbResult = await pool.query(
+      `
       SELECT 
-        COUNT(*) FILTER (WHERE status = 'pending') as pending,
-        COUNT(*) FILTER (WHERE status = 'publishing') as processing,
-        COUNT(*) FILTER (WHERE status IN ('failed', 'permanently_failed')) as failed,
-        COUNT(*) FILTER (WHERE status = 'retrying') as retrying,
-        COUNT(*) FILTER (WHERE status = 'published') as published,
+        COUNT(*) FILTER (WHERE p.status = 'pending') as pending,
+        COUNT(*) FILTER (WHERE p.status = 'publishing') as processing,
+        COUNT(*) FILTER (WHERE p.status IN ('failed', 'permanently_failed')) as failed,
+        COUNT(*) FILTER (WHERE p.status = 'retrying') as retrying,
+        COUNT(*) FILTER (WHERE p.status = 'published') as published,
         COUNT(*) as total,
-        COALESCE(SUM(retry_count) FILTER (WHERE retry_count > 0), 0) as total_retries
-      FROM publications
-    `);
+        COALESCE(SUM(p.retry_count) FILTER (WHERE p.retry_count > 0), 0) as total_retries
+      FROM publications p
+      ${pubWhere}
+      `,
+      pubParams,
+    );
 
     const stats = dbResult.rows[0];
 

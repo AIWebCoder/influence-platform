@@ -124,10 +124,26 @@ apt_install() {
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"
 }
 
+# Ubuntu 24.04+ (noble) renamed several runtime libs to *t64.
+resolve_apt_pkg() {
+  local pkg="$1"
+  if apt-cache show "$pkg" &>/dev/null; then
+    printf '%s' "$pkg"
+    return
+  fi
+  case "$pkg" in
+    libasound2) printf '%s' libasound2t64 ;;
+    libglib2.0-0) printf '%s' libglib2.0-0t64 ;;
+    *) printf '%s' "$pkg" ;;
+  esac
+}
+
 ensure_packages() {
   local missing=()
+  local pkg resolved
   for pkg in "$@"; do
-    dpkg -s "$pkg" &>/dev/null || missing+=("$pkg")
+    resolved="$(resolve_apt_pkg "$pkg")"
+    dpkg -s "$resolved" &>/dev/null || missing+=("$resolved")
   done
   if (( ${#missing[@]} )); then
     log "installing packages: ${missing[*]}"
@@ -301,11 +317,15 @@ fi
 
 # ── 1. Base packages ─────────────────────────────────────────────────────────
 
+# QEMU (emulator) needs X11 client libs even with -no-window (headless).
 ensure_packages \
   openjdk-17-jre-headless \
   unzip curl ca-certificates \
   python3 python3-venv \
-  libpulse0 libnss3 libstdc++6 libgl1 libegl1
+  libasound2 libglib2.0-0 \
+  libpulse0 libnss3 libstdc++6 libgl1 libegl1 \
+  libx11-6 libxext6 libxrender1 libxtst6 libxi6 libxrandr2 \
+  libxcomposite1 libxcursor1 libxdamage1 libxfixes3
 
 # ── 2. Android SDK ───────────────────────────────────────────────────────────
 

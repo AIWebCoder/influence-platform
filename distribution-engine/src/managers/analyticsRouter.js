@@ -3,6 +3,7 @@ const router = express.Router();
 const { getPool } = require('../core/database');
 const MetricsCollector = require('../analytics/MetricsCollector');
 const OptimizationService = require('../analytics/OptimizationService');
+const { buildAccountScope, assertAccountAccess, forbidViewerWrite } = require('../core/accessScope');
 
 /**
  * GET /analytics/posts
@@ -11,7 +12,9 @@ const OptimizationService = require('../analytics/OptimizationService');
 router.get('/posts', async (req, res) => {
   const pool = getPool();
   try {
-    const result = await pool.query(`
+    const { clause, params } = buildAccountScope(req.accessScope, 'a', 1);
+    const result = await pool.query(
+      `
       SELECT 
         p.id, 
         p.instagram_post_id, 
@@ -30,10 +33,12 @@ router.get('/posts', async (req, res) => {
         WHERE publication_id = p.id 
         ORDER BY recorded_at DESC LIMIT 1
       ) m ON true
-      WHERE p.status = 'published'
+      WHERE p.status = 'published' AND ${clause}
       ORDER BY p.published_at DESC
       LIMIT 50
-    `);
+      `,
+      params,
+    );
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch post analytics', details: err.message });
@@ -47,6 +52,7 @@ router.get('/posts', async (req, res) => {
 router.get('/accounts/:id/growth', async (req, res) => {
   const pool = getPool();
   try {
+    await assertAccountAccess(pool, req.accessScope, req.params.id);
     const result = await pool.query(
       `SELECT followers_count, posts_count, recorded_at 
        FROM account_growth 
@@ -67,7 +73,9 @@ router.get('/accounts/:id/growth', async (req, res) => {
 router.get('/top-performing', async (req, res) => {
   const pool = getPool();
   try {
-    const result = await pool.query(`
+    const { clause, params } = buildAccountScope(req.accessScope, 'a', 1);
+    const result = await pool.query(
+      `
       SELECT 
         p.id, 
         p.instagram_post_id,
@@ -78,10 +86,12 @@ router.get('/top-performing', async (req, res) => {
       FROM post_metrics m
       JOIN publications p ON m.publication_id = p.id
       JOIN accounts a ON p.account_id = a.id
-      WHERE m.recorded_at > NOW() - INTERVAL '30 days'
+      WHERE m.recorded_at > NOW() - INTERVAL '30 days' AND ${clause}
       ORDER BY m.engagement_rate DESC
       LIMIT 10
-    `);
+      `,
+      params,
+    );
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch top performing posts', details: err.message });
@@ -93,6 +103,7 @@ router.get('/top-performing', async (req, res) => {
  * Manual trigger for metrics collection
  */
 router.post('/collect', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     MetricsCollector.collectAll();
     res.json({ message: 'Metrics collection triggered' });
@@ -124,6 +135,7 @@ router.get('/optimization/frequency', async (req, res) => {
     return res.status(400).json({ error: 'accountId is required' });
   }
   try {
+    await assertAccountAccess(getPool(), req.accessScope, req.query.accountId);
     const frequency = await OptimizationService.getFrequencyOptimization(req.query.accountId);
     res.json(frequency);
   } catch (err) {

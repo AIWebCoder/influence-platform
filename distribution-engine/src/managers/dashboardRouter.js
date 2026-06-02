@@ -3,11 +3,49 @@ const router = express.Router();
 const { getPool } = require('../core/database');
 const { getRedis } = require('../core/redis');
 const ProxyManager = require('../proxy/ProxyManager');
+const { buildAccountScope, getAllowedAccountIds } = require('../core/accessScope');
 
 router.get('/ops-summary', async (req, res) => {
   try {
     const pool = getPool();
     const redis = getRedis();
+    const scope = req.accessScope;
+
+    let pubWhere = '';
+    let pubParams = [];
+    let accountWhere = '';
+    let accountParams = [];
+    if (scope.isFleet) {
+      const { clause, params } = buildAccountScope(scope, 'a', 1);
+      accountWhere = `WHERE ${clause}`;
+      accountParams = params;
+    } else {
+      const ids = await getAllowedAccountIds(pool, scope);
+      if (ids.length === 0) {
+        return res.json({
+          generated_at: new Date().toISOString(),
+          publication_windows: {
+            last_15m: { published: 0, failed: 0, permanently_failed: 0 },
+            last_1h: { published: 0, failed: 0, permanently_failed: 0 },
+          },
+          retry_backlog: { count: 0, oldest_age_min: 0 },
+          intervention: { needed_count: 0 },
+          queue: {
+            content_ready: 0,
+            publish_commands_pending: 0,
+            publish_delayed: 0,
+            publish_failed_dlq: 0,
+          },
+          accounts: { total: 0, active: 0, warming: 0, low_health: 0 },
+          failure_breakdown: [],
+          proxy_capacity: null,
+        });
+      }
+      pubWhere = 'WHERE p.account_id = ANY($1::uuid[])';
+      pubParams = [ids];
+      accountWhere = 'WHERE a.id = ANY($1::uuid[])';
+      accountParams = [ids];
+    }
 
     const [
       publicationWindowsResult,
@@ -21,52 +59,70 @@ router.get('/ops-summary', async (req, res) => {
       publishFailedDlq,
       proxyCapacity,
     ] = await Promise.all([
-      pool.query(`
+      pool.query(
+        `
         SELECT
-          COUNT(*) FILTER (WHERE published_at >= NOW() - INTERVAL '15 minutes') AS published_15m,
-          COUNT(*) FILTER (WHERE updated_at >= NOW() - INTERVAL '15 minutes' AND status = 'failed') AS failed_15m,
-          COUNT(*) FILTER (WHERE updated_at >= NOW() - INTERVAL '15 minutes' AND status = 'permanently_failed') AS permanently_failed_15m,
-          COUNT(*) FILTER (WHERE published_at >= NOW() - INTERVAL '1 hour') AS published_1h,
-          COUNT(*) FILTER (WHERE updated_at >= NOW() - INTERVAL '1 hour' AND status = 'failed') AS failed_1h,
-          COUNT(*) FILTER (WHERE updated_at >= NOW() - INTERVAL '1 hour' AND status = 'permanently_failed') AS permanently_failed_1h
-        FROM publications
-      `),
-      pool.query(`
+          COUNT(*) FILTER (WHERE p.published_at >= NOW() - INTERVAL '15 minutes') AS published_15m,
+          COUNT(*) FILTER (WHERE p.updated_at >= NOW() - INTERVAL '15 minutes' AND p.status = 'failed') AS failed_15m,
+          COUNT(*) FILTER (WHERE p.updated_at >= NOW() - INTERVAL '15 minutes' AND p.status = 'permanently_failed') AS permanently_failed_15m,
+          COUNT(*) FILTER (WHERE p.published_at >= NOW() - INTERVAL '1 hour') AS published_1h,
+          COUNT(*) FILTER (WHERE p.updated_at >= NOW() - INTERVAL '1 hour' AND p.status = 'failed') AS failed_1h,
+          COUNT(*) FILTER (WHERE p.updated_at >= NOW() - INTERVAL '1 hour' AND p.status = 'permanently_failed') AS permanently_failed_1h
+        FROM publications p
+        ${pubWhere}
+        `,
+        pubParams,
+      ),
+      pool.query(
+        `
         SELECT
-          COUNT(*) FILTER (WHERE status = 'retrying') AS retrying_count,
+          COUNT(*) FILTER (WHERE p.status = 'retrying') AS retrying_count,
           COALESCE(
-            ROUND(EXTRACT(EPOCH FROM (NOW() - MIN(COALESCE(last_retry_at, created_at)))) / 60),
+            ROUND(EXTRACT(EPOCH FROM (NOW() - MIN(COALESCE(p.last_retry_at, p.created_at)))) / 60),
             0
           )::int AS oldest_retry_age_min
-        FROM publications
-        WHERE status = 'retrying'
-      `),
-      pool.query(`
+        FROM publications p
+        ${pubWhere ? `${pubWhere} AND p.status = 'retrying'` : "WHERE p.status = 'retrying'"}
+        `,
+        pubParams,
+      ),
+      pool.query(
+        `
         SELECT
-          COUNT(*) FILTER (WHERE status IN ('failed', 'permanently_failed')) +
+          COUNT(*) FILTER (WHERE p.status IN ('failed', 'permanently_failed')) +
           COUNT(*) FILTER (
-            WHERE status = 'retrying'
-              AND next_retry_at IS NOT NULL
-              AND next_retry_at <= NOW()
+            WHERE p.status = 'retrying'
+              AND p.next_retry_at IS NOT NULL
+              AND p.next_retry_at <= NOW()
           ) AS intervention_needed
-        FROM publications
-      `),
-      pool.query(`
-        SELECT COALESCE(failure_type, 'unknown') AS failure_type, COUNT(*) AS total
-        FROM publications
-        WHERE status IN ('failed', 'permanently_failed', 'retrying')
-        GROUP BY COALESCE(failure_type, 'unknown')
+        FROM publications p
+        ${pubWhere}
+        `,
+        pubParams,
+      ),
+      pool.query(
+        `
+        SELECT COALESCE(p.failure_type, 'unknown') AS failure_type, COUNT(*) AS total
+        FROM publications p
+        ${pubWhere ? `${pubWhere} AND` : 'WHERE'} p.status IN ('failed', 'permanently_failed', 'retrying')
+        GROUP BY COALESCE(p.failure_type, 'unknown')
         ORDER BY COUNT(*) DESC
         LIMIT 5
-      `),
-      pool.query(`
+        `,
+        pubParams,
+      ),
+      pool.query(
+        `
         SELECT
           COUNT(*) AS total,
-          COUNT(*) FILTER (WHERE LOWER(status) = 'active') AS active,
-          COUNT(*) FILTER (WHERE LOWER(status) = 'warming') AS warming,
-          COUNT(*) FILTER (WHERE COALESCE(health_score, 0) < 50) AS low_health
-        FROM accounts
-      `),
+          COUNT(*) FILTER (WHERE LOWER(a.status) = 'active') AS active,
+          COUNT(*) FILTER (WHERE LOWER(a.status) = 'warming') AS warming,
+          COUNT(*) FILTER (WHERE COALESCE(a.health_score, 0) < 50) AS low_health
+        FROM accounts a
+        ${accountWhere}
+        `,
+        accountParams,
+      ),
       ProxyManager.getPoolCapacity().catch(() => null),
       redis.llen('content:ready').catch(() => 0),
       redis.llen('publish:commands').catch(() => 0),

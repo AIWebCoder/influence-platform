@@ -2,12 +2,20 @@ import uuid
 import json
 import logging
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
 from src.core.redis import push_to_queue
 from src.core.config import settings
 from src.core.database import get_db
+from src.core.access_scope import (
+    AccessScope,
+    assert_account_access,
+    assert_content_packet_access,
+    filter_content_packets_for_scope,
+    get_access_scope,
+)
+from src.api.deps_scope import require_write_access
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.services.content_service import ContentService
 from src.services.gemini_service import GeminiService
@@ -82,7 +90,8 @@ def _prefer_anthropic_for_caption() -> bool:
 async def generate_content(
     request: ContentGenerateRequest,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    scope: AccessScope = Depends(require_write_access),
 ):
     """
     Génère un packet de contenu via IA (Claude + DALL-E) en arrière-plan.
@@ -90,6 +99,9 @@ async def generate_content(
     Deprecated for new integrations: prefer `POST /generation-jobs` for orchestrated,
     step-tracked generation with scene-level retries.
     """
+    for account_id in request.target_accounts:
+        await assert_account_access(db, scope, account_id)
+
     from src.services.generation_task import generate_single_content
     
     packet_id = str(uuid.uuid4())
@@ -299,10 +311,17 @@ async def get_queue_size():
 
 
 @router.get("", response_model=list[ContentPacket])
-async def list_contents(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
+async def list_contents(
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    scope: AccessScope = Depends(get_access_scope),
+):
     """Liste tous les contenus"""
     service = ContentService(db)
-    db_packets = await service.get_packets(skip=skip, limit=limit)
+    db_packets = await filter_content_packets_for_scope(
+        db, await service.get_packets(skip=skip, limit=limit), scope
+    )
     return [
         ContentPacket(
             id=str(p.id),
@@ -322,13 +341,18 @@ async def list_contents(skip: int = 0, limit: int = 100, db: AsyncSession = Depe
 
 
 @router.get("/{content_id}", response_model=ContentPacket)
-async def get_content(content_id: str, db: AsyncSession = Depends(get_db)):
+async def get_content(
+    content_id: str,
+    db: AsyncSession = Depends(get_db),
+    scope: AccessScope = Depends(get_access_scope),
+):
     """Récupère un packet de contenu par son ID"""
     service = ContentService(db)
     p = await service.get_packet_by_id(content_id)
     if not p:
         raise HTTPException(status_code=404, detail="Content not found")
-        
+    await assert_content_packet_access(db, scope, p)
+
     return ContentPacket(
         id=str(p.id),
         type=p.type,
@@ -346,13 +370,21 @@ async def get_content(content_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.put("/{content_id}", response_model=ContentPacket)
-async def update_content(content_id: str, request: ContentGenerateRequest, db: AsyncSession = Depends(get_db)):
+async def update_content(
+    content_id: str,
+    request: ContentGenerateRequest,
+    db: AsyncSession = Depends(get_db),
+    scope: AccessScope = Depends(require_write_access),
+):
     """Met à jour un packet de contenu"""
     service = ContentService(db)
     p = await service.get_packet_by_id(content_id)
     if not p:
         raise HTTPException(status_code=404, detail="Content not found")
-        
+    await assert_content_packet_access(db, scope, p)
+    for account_id in request.target_accounts:
+        await assert_account_access(db, scope, account_id)
+
     p.niche = request.niche
     p.type = request.type
     p.target_accounts = request.target_accounts
@@ -384,12 +416,18 @@ class ContentEditRequest(BaseModel):
 
 
 @router.patch("/{content_id}", response_model=ContentPacket)
-async def patch_content(content_id: str, request: ContentEditRequest, db: AsyncSession = Depends(get_db)):
+async def patch_content(
+    content_id: str,
+    request: ContentEditRequest,
+    db: AsyncSession = Depends(get_db),
+    scope: AccessScope = Depends(require_write_access),
+):
     """Patch caption and/or hashtags on a content packet (lightweight edit)."""
     service = ContentService(db)
     p = await service.get_packet_by_id(content_id)
     if not p:
         raise HTTPException(status_code=404, detail="Content not found")
+    await assert_content_packet_access(db, scope, p)
 
     if request.caption is not None:
         p.caption = request.caption
@@ -414,9 +452,17 @@ async def patch_content(content_id: str, request: ContentEditRequest, db: AsyncS
 
 
 @router.delete("/{content_id}")
-async def delete_content(content_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_content(
+    content_id: str,
+    db: AsyncSession = Depends(get_db),
+    scope: AccessScope = Depends(require_write_access),
+):
     """Supprime un packet de contenu"""
     service = ContentService(db)
+    p = await service.get_packet_by_id(content_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Content not found")
+    await assert_content_packet_access(db, scope, p)
     success = await service.delete_packet(content_id)
     if not success:
         raise HTTPException(status_code=404, detail="Content not found")

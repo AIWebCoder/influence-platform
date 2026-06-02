@@ -10,8 +10,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.access_scope import AccessScope, filter_generation_jobs_for_scope, get_access_scope, resolve_optional_access_scope
 from src.core.config import settings
 from src.core.database import get_db
+from src.core.security import get_optional_current_user
 from src.models.generation_job import GenerationJob
 from src.services.generation_job_service import PIPELINE_STEPS, GenerationJobService, default_step_control
 from src.services.pipeline_trace import emit, get_job_trace
@@ -920,6 +922,7 @@ async def list_generation_jobs(
     limit: int = Query(default=50, ge=1, le=200),
     skip: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
+    scope: AccessScope = Depends(get_access_scope),
 ):
     svc = GenerationJobService(db)
     if ready_to_publish:
@@ -935,7 +938,8 @@ async def list_generation_jobs(
             skip=skip,
             account_id=account_filter,
         )
-        total = await svc.count_ready_to_publish(account_id=account_filter)
+        jobs = await filter_generation_jobs_for_scope(db, jobs, scope)
+        total = len(jobs)
         account_counts = await svc.list_ready_to_publish_account_counts()
         account_ids = [aid for aid, _ in account_counts]
         username_by_id: dict[str, str] = {}
@@ -984,6 +988,7 @@ async def list_generation_jobs(
         if not statuses:
             statuses = list(allowed)
         jobs = await svc.list_jobs(statuses=statuses, limit=limit, skip=skip)
+        jobs = await filter_generation_jobs_for_scope(db, jobs, scope)
         return await _serialize_job_list_items(jobs, db=db)
 
 
@@ -992,6 +997,7 @@ async def create_generation_job(
     body: GenerationJobCreateRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
 ):
     try:
         if body.execution_mode not in ("scene_based", "multi_scene_single_video", "ailiveai_single_video"):
@@ -1016,8 +1022,14 @@ async def create_generation_job(
         from src.services.template_service import resolve_template_payload
 
         payload = await resolve_template_payload(db, payload)
+        scope = await resolve_optional_access_scope(db, current_user)
         svc = GenerationJobService(db)
-        job = await svc.create_job(payload, execution_mode=body.execution_mode)
+        job = await svc.create_job(
+            payload,
+            execution_mode=body.execution_mode,
+            organization_id=scope.organization_id if scope else None,
+            created_by_user_id=scope.user_id if scope else None,
+        )
         await db.flush()
         await populate_draft_scenes(db, job)
         await db.commit()

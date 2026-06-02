@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.access_scope import DEFAULT_ORGANIZATION_ID, get_access_scope, resolve_access_scope
 from src.core.database import get_db
 from src.core.security import (
     get_current_user,
@@ -70,6 +71,10 @@ class UserResponse(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str = Field(..., min_length=8)
+
+
+class PersonaAssignmentUpdate(BaseModel):
+    persona_ids: list[str] = Field(default_factory=list)
 
 
 def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
@@ -163,11 +168,13 @@ async def create_user(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already registered")
 
+    admin_scope = await resolve_access_scope(db, _admin)
     user = User(
         email=email,
         hashed_password=get_password_hash(request.password),
         role=request.role,
         is_active=True,
+        organization_id=admin_scope.organization_id,
     )
     db.add(user)
     await db.flush()
@@ -252,3 +259,82 @@ async def delete_user(
 
     await db.delete(user)
     return {"message": "User deleted successfully"}
+
+
+@router.get("/{user_id}/personas")
+async def get_user_persona_assignments(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
+    """List persona IDs assigned to a user (scoped operators)."""
+    from sqlalchemy import text
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    rows = await db.execute(
+        text("SELECT persona_id::text FROM user_persona_assignments WHERE user_id = :uid"),
+        {"uid": str(user.id)},
+    )
+    return {"persona_ids": [r[0] for r in rows.fetchall()]}
+
+
+@router.put("/{user_id}/personas")
+async def set_user_persona_assignments(
+    user_id: str,
+    body: PersonaAssignmentUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin_scope=Depends(get_access_scope),
+    _admin: dict = Depends(require_admin),
+):
+    """Replace persona assignments for an operator/viewer."""
+    import uuid as uuid_mod
+    from sqlalchemy import text
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    persona_ids: list[uuid_mod.UUID] = []
+    for raw in body.persona_ids:
+        try:
+            persona_ids.append(uuid_mod.UUID(str(raw).strip()))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid persona_id: {raw}") from exc
+
+    if persona_ids:
+        check = await db.execute(
+            text(
+                """
+                SELECT COUNT(*)::int
+                FROM personas
+                WHERE id = ANY(CAST(:ids AS uuid[]))
+                  AND (organization_id = :org_id OR organization_id IS NULL)
+                """
+            ),
+            {"ids": [str(p) for p in persona_ids], "org_id": str(admin_scope.organization_id)},
+        )
+        if int(check.scalar() or 0) != len(persona_ids):
+            raise HTTPException(status_code=400, detail="One or more personas are invalid for this organization")
+
+    await db.execute(
+        text("DELETE FROM user_persona_assignments WHERE user_id = :uid"),
+        {"uid": str(user.id)},
+    )
+    for pid in persona_ids:
+        await db.execute(
+            text(
+                """
+                INSERT INTO user_persona_assignments (user_id, persona_id)
+                VALUES (:uid, :pid)
+                ON CONFLICT (user_id, persona_id) DO NOTHING
+                """
+            ),
+            {"uid": str(user.id), "pid": str(pid)},
+        )
+    await db.flush()
+    return {"persona_ids": [str(p) for p in persona_ids]}

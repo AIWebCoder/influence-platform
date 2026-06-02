@@ -3,7 +3,9 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
+from src.core.access_scope import AccessScope, get_access_scope
 from src.core.database import get_db
+from src.api.deps_scope import require_write_access
 from src.services.template_service import TemplateService
 from src.services.cache_service import cache_service
 
@@ -41,6 +43,7 @@ async def list_templates(
     niche_id: uuid.UUID | None = None,
     active_only: bool = False,
     db: AsyncSession = Depends(get_db),
+    _scope: AccessScope = Depends(get_access_scope),
 ):
     cache_key = f"templates:list:{skip}:{limit}:{niche_id}:{active_only}"
 
@@ -56,7 +59,11 @@ async def list_templates(
     return serialized
 
 @router.get("/{template_id}", response_model=TemplateResponse)
-async def get_template(template_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_template(
+    template_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _scope: AccessScope = Depends(get_access_scope),
+):
     svc = TemplateService(db)
     template = await svc.get_by_id(template_id)
     if not template:
@@ -64,12 +71,21 @@ async def get_template(template_id: uuid.UUID, db: AsyncSession = Depends(get_db
     return template
 
 @router.post("", response_model=TemplateResponse, status_code=status.HTTP_201_CREATED)
-async def create_template(request: TemplateCreate, db: AsyncSession = Depends(get_db)):
+async def create_template(
+    request: TemplateCreate,
+    db: AsyncSession = Depends(get_db),
+    _scope: AccessScope = Depends(require_write_access),
+):
     svc = TemplateService(db)
     return await svc.create(**request.model_dump())
 
 @router.put("/{template_id}", response_model=TemplateResponse)
-async def update_template(template_id: uuid.UUID, request: TemplateUpdate, db: AsyncSession = Depends(get_db)):
+async def update_template(
+    template_id: uuid.UUID,
+    request: TemplateUpdate,
+    db: AsyncSession = Depends(get_db),
+    _scope: AccessScope = Depends(require_write_access),
+):
     svc = TemplateService(db)
     template = await svc.get_by_id(template_id)
     if not template:
@@ -77,7 +93,11 @@ async def update_template(template_id: uuid.UUID, request: TemplateUpdate, db: A
     return await svc.update(template, **request.model_dump(exclude_unset=True))
 
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_template(template_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def delete_template(
+    template_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _scope: AccessScope = Depends(require_write_access),
+):
     svc = TemplateService(db)
     template = await svc.get_by_id(template_id)
     if not template:

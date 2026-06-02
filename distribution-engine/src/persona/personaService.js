@@ -1,18 +1,25 @@
 const { getPool } = require('../core/database');
 const { v4: uuidv4 } = require('uuid');
 const { decryptProxyPassword } = require('./proxyCredentials');
+const { buildPersonaScope } = require('../core/accessScope');
 
 const PROXY_STRICT_ONE_TO_ONE = process.env.PROXY_STRICT_ONE_TO_ONE !== 'false';
 
 class PersonaService {
-  async listPersonas({ status, limit = 100, offset = 0 } = {}) {
+  async listPersonas({ status, limit = 100, offset = 0, scope = null } = {}) {
     const pool = getPool();
     const params = [];
-    let where = '';
+    const whereParts = [];
+    if (scope) {
+      const built = buildPersonaScope(scope, 'p', 1);
+      whereParts.push(built.clause);
+      params.push(...built.params);
+    }
     if (status) {
       params.push(status);
-      where = `WHERE p.status = $${params.length}`;
+      whereParts.push(`p.status = $${params.length}`);
     }
+    const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
     params.push(limit, offset);
     const result = await pool.query(
       `SELECT p.*,
@@ -143,14 +150,15 @@ class PersonaService {
     timezone = 'Europe/Paris',
     locale = 'fr-FR',
     status = 'active',
+    organization_id = null,
   }) {
     const pool = getPool();
     const id = uuidv4();
     const result = await pool.query(
-      `INSERT INTO personas (id, name, proxy_id, timezone, locale, status)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO personas (id, name, proxy_id, timezone, locale, status, organization_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [id, name, proxy_id, timezone, locale, status],
+      [id, name, proxy_id, timezone, locale, status, organization_id],
     );
     await pool.query(
       `INSERT INTO persona_behavior_profiles (persona_id) VALUES ($1)

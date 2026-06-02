@@ -1,6 +1,7 @@
 const express = require('express');
 const { getPool } = require('../core/database');
 const { getRedis } = require('../core/redis');
+const { assertAccountAccess, buildAccountScope, forbidViewerWrite } = require('../core/accessScope');
 const {
   listPostsForAccount,
   fetchCommentsForMedia,
@@ -51,6 +52,7 @@ router.get('/posts', async (req, res) => {
   const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 25));
   const includeGraph = String(req.query.include_graph || 'true').toLowerCase() !== 'false';
   try {
+    await assertAccountAccess(pool, req.accessScope, accountId);
     const result = await listPostsForAccount(pool, accountId, { limit, includeGraph });
     res.json({
       posts: result.posts,
@@ -77,6 +79,7 @@ router.get('/posts/:mediaId/comments', async (req, res) => {
   }
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
   try {
+    await assertAccountAccess(pool, req.accessScope, accountId);
     const result = await fetchCommentsForMedia({
       pool,
       accountId,
@@ -133,6 +136,13 @@ router.get('/intents', async (req, res) => {
     clauses.push(`ei.action_type = $${params.length}`);
   }
 
+  const { clause: accountScope, params: scopeParams, nextIndex } = buildAccountScope(
+    req.accessScope,
+    'a',
+    1,
+  );
+  clauses.push(accountScope);
+  params.push(...scopeParams);
   const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   params.push(limit, skip);
 
@@ -150,6 +160,7 @@ router.get('/intents', async (req, res) => {
         ei.external_result_id,
         ei.created_at
       FROM engagement_intents ei
+      JOIN accounts a ON a.id = ei.account_id
       ${whereSql}
       ORDER BY ei.created_at DESC NULLS LAST
       LIMIT $${params.length - 1} OFFSET $${params.length}
@@ -170,6 +181,7 @@ router.get('/intents', async (req, res) => {
 });
 
 router.post('/intents', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   const pool = getPool();
   const body = req.body || {};
   const action = String(body.action_type || '').trim().toLowerCase();
@@ -196,6 +208,7 @@ router.post('/intents', async (req, res) => {
   }
 
   try {
+    await assertAccountAccess(pool, req.accessScope, accountId);
     const existing = await pool.query(
       `SELECT id FROM engagement_intents WHERE idempotency_key = $1 LIMIT 1`,
       [idempotencyKey]
@@ -260,6 +273,7 @@ router.post('/intents', async (req, res) => {
 });
 
 router.post('/intents/:intentId/dispatch', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   const pool = getPool();
   const intentId = String(req.params.intentId || '').trim();
   if (!intentId) {
@@ -301,6 +315,7 @@ router.post('/intents/:intentId/dispatch', async (req, res) => {
     }
 
     const row = intentRes.rows[0];
+    await assertAccountAccess(pool, req.accessScope, row.account_id);
     if (row.status === 'queued') {
       await client.query('COMMIT');
       return res.json({

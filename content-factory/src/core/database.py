@@ -83,6 +83,32 @@ async def init_db():
     logger.info("✅ Database initialized and verified")
 
 
+async def ensure_default_organization(session) -> None:
+    """Ensure the default organization row exists (matches infra/V028)."""
+    from sqlalchemy import text
+
+    slug = (settings.DEFAULT_ORGANIZATION_SLUG or "influence").strip()
+    await session.execute(
+        text(
+            """
+            INSERT INTO organizations (id, name, slug, plan, status, is_active, max_accounts, max_users)
+            VALUES (
+                '00000000-0000-4000-8000-000000000001'::uuid,
+                'Influence Platform',
+                :slug,
+                'scale',
+                'active',
+                true,
+                500,
+                50
+            )
+            ON CONFLICT (slug) DO NOTHING
+            """
+        ),
+        {"slug": slug},
+    )
+
+
 async def seed_first_admin():
     """Insert a single bootstrap admin into `users` if no admin row exists.
 
@@ -90,10 +116,12 @@ async def seed_first_admin():
     operator workflow can remove the legacy env-var login fallback without locking us out.
     """
     from sqlalchemy import select, func
+    from src.core.access_scope import DEFAULT_ORGANIZATION_ID
     from src.models.user import User
     from src.core.security import hash_password
 
     async with AsyncSessionLocal() as session:
+        await ensure_default_organization(session)
         admin_count = await session.execute(
             select(func.count(User.id)).where(User.role == "admin")
         )
@@ -116,11 +144,19 @@ async def seed_first_admin():
         existing = await session.execute(select(User).where(User.email == email))
         existing_user = existing.scalar_one_or_none()
         if existing_user:
+            changed = False
             if existing_user.role != "admin":
                 existing_user.role = "admin"
+                changed = True
+            if not existing_user.is_active:
                 existing_user.is_active = True
+                changed = True
+            if existing_user.organization_id is None:
+                existing_user.organization_id = DEFAULT_ORGANIZATION_ID
+                changed = True
+            if changed:
                 await session.commit()
-                logger.warning("Promoted existing user '%s' to admin during bootstrap.", email)
+                logger.warning("Updated bootstrap user '%s' during startup.", email)
             return
 
         admin = User(
@@ -128,6 +164,7 @@ async def seed_first_admin():
             hashed_password=hash_password(safe_pwd),
             role="admin",
             is_active=True,
+            organization_id=DEFAULT_ORGANIZATION_ID,
         )
         session.add(admin)
         await session.commit()

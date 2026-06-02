@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getPool } = require('../core/database');
 const { pushDelayed, getRedis } = require('../core/redis');
+const { buildAccountScope, assertAccountAccess, forbidViewerWrite } = require('../core/accessScope');
 
 const PUBLISH_QUEUE_COMMANDS = 'publish:commands';
 
@@ -14,15 +15,23 @@ router.get('/', async (req, res) => {
     const pool = getPool();
     const { status, limit = 100, offset = 0 } = req.query;
 
-    let whereClause = '';
-    const params = [];
-    let paramIndex = 1;
+    const scope = req.accessScope;
+    const { clause: accountClause, params: scopeParams, nextIndex: scopeNext } = buildAccountScope(
+      scope,
+      'a',
+      1,
+    );
+    const clauses = [accountClause];
+    const params = [...scopeParams];
+    let paramIndex = scopeNext;
 
     if (status) {
-      whereClause = `WHERE p.status = $${paramIndex}`;
+      clauses.push(`p.status = $${paramIndex}`);
       params.push(status);
       paramIndex++;
     }
+
+    const whereClause = `WHERE ${clauses.join(' AND ')}`;
 
     params.push(parseInt(limit, 10));
     params.push(parseInt(offset, 10));
@@ -65,10 +74,12 @@ router.get('/', async (req, res) => {
     // Get total count for pagination
     const countQuery = `
       SELECT COUNT(*) as total 
-      FROM publications p 
+      FROM publications p
+      JOIN accounts a ON p.account_id = a.id
       ${whereClause}
     `;
-    const countResult = await pool.query(countQuery, status ? [status] : []);
+    const countParams = params.slice(0, paramIndex - 1);
+    const countResult = await pool.query(countQuery, countParams);
 
     res.json({
       publications: result.rows,
@@ -91,24 +102,30 @@ router.get('/', async (req, res) => {
 router.get('/stats', async (req, res) => {
   try {
     const pool = getPool();
-    const result = await pool.query(`
+    const { clause, params } = buildAccountScope(req.accessScope, 'a', 1);
+    const result = await pool.query(
+      `
       SELECT 
         COUNT(*) as total,
-        COUNT(*) FILTER (WHERE status = 'pending') as pending,
-        COUNT(*) FILTER (WHERE status = 'publishing') as processing,
-        COUNT(*) FILTER (WHERE status = 'published') as published,
-        COUNT(*) FILTER (WHERE status IN ('failed', 'permanently_failed')) as failed,
-        COUNT(*) FILTER (WHERE status = 'retrying') as retrying,
-        COALESCE(SUM(retry_count), 0) as total_retries,
-        COUNT(*) FILTER (WHERE published_at >= CURRENT_DATE) as published_today,
-        COUNT(*) FILTER (WHERE status IN ('failed', 'permanently_failed') AND created_at >= CURRENT_DATE) as failed_today,
-        COUNT(*) FILTER (WHERE published_at >= NOW() - INTERVAL '7 days') as published_7d,
+        COUNT(*) FILTER (WHERE p.status = 'pending') as pending,
+        COUNT(*) FILTER (WHERE p.status = 'publishing') as processing,
+        COUNT(*) FILTER (WHERE p.status = 'published') as published,
+        COUNT(*) FILTER (WHERE p.status IN ('failed', 'permanently_failed')) as failed,
+        COUNT(*) FILTER (WHERE p.status = 'retrying') as retrying,
+        COALESCE(SUM(p.retry_count), 0) as total_retries,
+        COUNT(*) FILTER (WHERE p.published_at >= CURRENT_DATE) as published_today,
+        COUNT(*) FILTER (WHERE p.status IN ('failed', 'permanently_failed') AND p.created_at >= CURRENT_DATE) as failed_today,
+        COUNT(*) FILTER (WHERE p.published_at >= NOW() - INTERVAL '7 days') as published_7d,
         COUNT(*) FILTER (
-          WHERE status IN ('failed', 'permanently_failed')
-            AND updated_at >= NOW() - INTERVAL '7 days'
+          WHERE p.status IN ('failed', 'permanently_failed')
+            AND p.updated_at >= NOW() - INTERVAL '7 days'
         ) as failed_7d
-      FROM publications
-    `);
+      FROM publications p
+      JOIN accounts a ON p.account_id = a.id
+      WHERE ${clause}
+      `,
+      params,
+    );
 
     const stats = result.rows[0];
 
@@ -174,8 +191,12 @@ router.get('/:id/diagnostics', async (req, res) => {
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Publication not found' });
     }
+    await assertAccountAccess(pool, req.accessScope, result.rows[0].account_id);
     return res.json(result.rows[0]);
   } catch (error) {
+    if (error.statusCode === 403) {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error GET /publications/:id/diagnostics:', error);
     return res.status(500).json({ error: 'Internal Server Error' });
   }
@@ -186,6 +207,7 @@ router.get('/:id/diagnostics', async (req, res) => {
  * Manual operator retry for failed publication.
  */
 router.post('/:id/retry', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
   try {
     const pool = getPool();
     const { id } = req.params;
@@ -219,6 +241,7 @@ router.post('/:id/retry', async (req, res) => {
     }
 
     const pub = rowResult.rows[0];
+    await assertAccountAccess(pool, req.accessScope, pub.account_id);
     if (!['failed', 'permanently_failed', 'retrying'].includes(pub.status)) {
       return res.status(400).json({ error: `Publication is in status '${pub.status}' and cannot be retried.` });
     }

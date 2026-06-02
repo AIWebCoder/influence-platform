@@ -115,6 +115,8 @@ services:
       # UI cost estimate for multi_scene_single_video: credits per second of output (15s × 41 ≈ 615 Kie)
       SEEDANCE_ESTIMATE_CREDITS_PER_SECOND: ${SEEDANCE_ESTIMATE_CREDITS_PER_SECOND:-41}
       JWT_SECRET: ${JWT_SECRET:-changeme_in_production}
+      ACCESS_MODE: ${ACCESS_MODE:-scoped}
+      DEFAULT_ORGANIZATION_SLUG: ${DEFAULT_ORGANIZATION_SLUG:-influence}
       FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED: ${FEATURE_INSTAGRAM_REEL_PUBLISH_ENABLED:-true}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
@@ -156,6 +158,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ipuser}:${POSTGRES_PASSWORD:-ippassword}@pgbouncer:6432/${POSTGRES_DB:-influence_platform}
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:-changeme_in_production}
+      ACCESS_MODE: ${ACCESS_MODE:-scoped}
       DISTRIBUTION_API_USERNAME: ${DISTRIBUTION_API_USERNAME}
       DISTRIBUTION_API_PASSWORD: ${DISTRIBUTION_API_PASSWORD}
       PROXY_CREDENTIALS_KEY: ${PROXY_CREDENTIALS_KEY:-}

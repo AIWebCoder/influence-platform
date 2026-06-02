@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.access_scope import AccessScope, allowed_account_ids, get_access_scope
 from src.core.database import get_db
 
 router = APIRouter()
@@ -27,12 +28,28 @@ async def list_ready_queue(
     limit: int = Query(default=50, ge=1, le=200),
     skip: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
+    scope: AccessScope = Depends(get_access_scope),
 ):
     allowed = frozenset({"ready", "draft", "queued", "dispatched", "published", "failed"})
     statuses = [s.strip().lower() for s in status.split(",") if s.strip().lower() in allowed]
     if not statuses:
         statuses = ["ready"]
     status_sql = ", ".join(f"'{s}'" for s in statuses)
+    scope_clause = ""
+    query_params: dict = {"limit": limit, "skip": skip}
+    if not scope.is_fleet:
+        allowed = await allowed_account_ids(db, scope)
+        if not allowed:
+            return []
+        scope_clause = """
+            AND EXISTS (
+              SELECT 1 FROM publication_targets pt
+              JOIN accounts a ON a.id = pt.account_id
+              WHERE pt.publication_intent_id = pi.id
+                AND pt.account_id = ANY(CAST(:scope_account_ids AS uuid[]))
+            )
+        """
+        query_params["scope_account_ids"] = [str(a) for a in allowed]
 
     result = await db.execute(
         text(
@@ -53,11 +70,12 @@ async def list_ready_queue(
             FROM publication_intents pi
             LEFT JOIN generated_assets ga ON ga.id = pi.primary_asset_id
             WHERE pi.status IN ({status_sql})
+            {scope_clause}
             ORDER BY pi.created_at DESC NULLS LAST
             LIMIT :limit OFFSET :skip
             """
         ),
-        {"limit": limit, "skip": skip},
+        query_params,
     )
     rows: list[ReadyQueueItem] = []
     for row in result.mappings().all():

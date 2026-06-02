@@ -12,6 +12,7 @@ from src.core.config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 # In-memory store for refresh tokens (use Redis in production)
 refresh_tokens_store = {}
@@ -64,7 +65,12 @@ def validate_password_strength(password: str) -> tuple[bool, Optional[str]]:
 
 
 def create_access_token(
-    subject: Union[str, Any], role: str = "admin", expires_delta: timedelta = None
+    subject: Union[str, Any],
+    role: str = "admin",
+    expires_delta: timedelta = None,
+    *,
+    user_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
 ) -> str:
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
@@ -72,7 +78,16 @@ def create_access_token(
         expire = datetime.utcnow() + timedelta(
             minutes=settings.JWT_EXPIRE_MINUTES
         )
-    to_encode = {"exp": expire, "sub": str(subject), "role": role, "type": "access"}
+    to_encode = {
+        "exp": expire,
+        "sub": str(subject),
+        "role": role,
+        "type": "access",
+    }
+    if user_id:
+        to_encode["user_id"] = str(user_id)
+    if organization_id:
+        to_encode["organization_id"] = str(organization_id)
     encoded_jwt = jwt.encode(
         to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM
     )
@@ -141,6 +156,36 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
         role: str = payload.get("role", "viewer")
         if email is None:
             raise credentials_exception
-        return {"email": email, "role": role}
+        return {
+            "email": email,
+            "sub": email,
+            "role": role,
+            "user_id": payload.get("user_id"),
+            "organization_id": payload.get("organization_id"),
+        }
     except JWTError:
         raise credentials_exception
+
+
+async def get_optional_current_user(
+    token: Optional[str] = Depends(oauth2_scheme_optional),
+) -> Optional[dict]:
+    """Return decoded user claims when a Bearer token is present; otherwise None."""
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        if payload.get("type") != "access":
+            return None
+        email = payload.get("sub")
+        if email is None:
+            return None
+        return {
+            "email": email,
+            "sub": email,
+            "role": payload.get("role", "viewer"),
+            "user_id": payload.get("user_id"),
+            "organization_id": payload.get("organization_id"),
+        }
+    except JWTError:
+        return None
