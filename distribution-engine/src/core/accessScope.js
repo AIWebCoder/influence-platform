@@ -2,6 +2,19 @@ const { getPool } = require('./database');
 
 const DEFAULT_ORGANIZATION_ID = '00000000-0000-4000-8000-000000000001';
 
+const ROLE_ALIASES = {
+  operateur: 'operator',
+  'opérateur': 'operator',
+  lecteur: 'viewer',
+};
+
+function normalizeRole(role) {
+  const raw = String(role || 'viewer').trim().toLowerCase();
+  const mapped = ROLE_ALIASES[raw] || raw;
+  if (mapped === 'admin' || mapped === 'operator' || mapped === 'viewer') return mapped;
+  return 'viewer';
+}
+
 function accessMode() {
   const mode = (process.env.ACCESS_MODE || 'scoped').trim().toLowerCase();
   return mode === 'fleet' ? 'fleet' : 'scoped';
@@ -24,35 +37,17 @@ async function resolveUserRow(pool, claims) {
   return byEmail.rows[0] || null;
 }
 
-async function loadAccessScope(claims) {
-  const pool = getPool();
-  const row = await resolveUserRow(pool, claims);
-  const role = (claims.role || row?.role || 'viewer').toLowerCase();
+function scopeFromClaims(claims, row, personaIds) {
+  const role = normalizeRole(row?.role || claims.role);
+  const mode = accessMode();
   const organizationId = row?.organization_id
     ? String(row.organization_id)
     : claims.organization_id
       ? String(claims.organization_id)
       : DEFAULT_ORGANIZATION_ID;
   const userId = row?.id ? String(row.id) : claims.user_id ? String(claims.user_id) : null;
-  const mode = accessMode();
-
-  let personaIds = null;
-  if (mode === 'scoped' && role !== 'admin') {
-    const res = await pool.query(
-      `SELECT upa.persona_id::text
-       FROM user_persona_assignments upa
-       JOIN personas p ON p.id = upa.persona_id
-       WHERE upa.user_id = $1::uuid
-         AND (p.organization_id = $2::uuid OR p.organization_id IS NULL)`,
-      [userId, organizationId],
-    );
-    personaIds = res.rows.map((r) => r.persona_id);
-  }
-
   const isAdmin = role === 'admin';
   const isFleet = mode === 'fleet' || isAdmin;
-  const isViewer = role === 'viewer';
-
   return {
     userId,
     organizationId,
@@ -61,8 +56,41 @@ async function loadAccessScope(claims) {
     personaIds,
     isAdmin,
     isFleet,
-    isViewer,
+    isViewer: role === 'viewer',
   };
+}
+
+async function loadAccessScope(claims) {
+  const pool = getPool();
+  try {
+    const row = await resolveUserRow(pool, claims);
+    const role = normalizeRole(row?.role || claims.role);
+    const organizationId = row?.organization_id
+      ? String(row.organization_id)
+      : claims.organization_id
+        ? String(claims.organization_id)
+        : DEFAULT_ORGANIZATION_ID;
+    let userId = row?.id ? String(row.id) : claims.user_id ? String(claims.user_id) : null;
+    if (!userId && row?.id) userId = String(row.id);
+
+    let personaIds = null;
+    if (accessMode() === 'scoped' && role !== 'admin' && userId) {
+      const res = await pool.query(
+        `SELECT upa.persona_id::text
+         FROM user_persona_assignments upa
+         JOIN personas p ON p.id = upa.persona_id
+         WHERE upa.user_id = $1::uuid
+           AND (p.organization_id = $2::uuid OR p.organization_id IS NULL)`,
+        [userId, organizationId],
+      );
+      personaIds = res.rows.map((r) => r.persona_id);
+    }
+
+    return scopeFromClaims(claims, row, personaIds);
+  } catch (err) {
+    console.error('[accessScope] loadAccessScope failed:', err.message || err);
+    return scopeFromClaims(claims, null, []);
+  }
 }
 
 function allowsPersona(scope, personaId) {
@@ -173,6 +201,7 @@ function filterProxiesForScope(rows, scope) {
 module.exports = {
   DEFAULT_ORGANIZATION_ID,
   accessMode,
+  normalizeRole,
   loadAccessScope,
   allowsPersona,
   forbidViewerWrite,

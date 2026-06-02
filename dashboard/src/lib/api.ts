@@ -102,11 +102,25 @@ async function handleUnauthorizedError(error: any) {
     return Promise.reject(error);
   }
 
+  const { getSession, signOut } = await import('next-auth/react');
+  let session = await getSession();
+  let token = (session as { accessToken?: string } | null)?.accessToken;
+
+  // Session may still be hydrating right after login — retry once before signing out.
+  if (!token) {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    session = await getSession();
+    token = (session as { accessToken?: string } | null)?.accessToken;
+  }
+
+  if (!token) {
+    return Promise.reject(error);
+  }
+
   // Prevent multiple concurrent redirects when several requests fail together.
   if (!authRecoveryInProgress) {
     authRecoveryInProgress = true;
     try {
-      const { signOut } = await import('next-auth/react');
       await signOut({ callbackUrl: '/login' });
     } catch (_e) {
       window.location.href = '/login';

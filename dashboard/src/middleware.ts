@@ -17,5 +17,7 @@ export const config = {
     "/generation-studio(.*)",
     "/publications(.*)",
     "/emulators(.*)",
+    "/engagement(.*)",
+    "/publications(.*)",
   ],
 };

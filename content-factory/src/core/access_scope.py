@@ -144,7 +144,11 @@ async def resolve_access_scope(db: AsyncSession, current_user: dict) -> AccessSc
     if mode not in ("fleet", "scoped"):
         mode = "scoped"
 
-    role = (current_user.get("role") or user.role or "viewer").lower()
+    role_raw = (current_user.get("role") or user.role or "viewer").lower()
+    role_aliases = {"operateur": "operator", "opérateur": "operator", "lecteur": "viewer"}
+    role = role_aliases.get(role_raw, role_raw)
+    if role not in ("admin", "operator", "viewer"):
+        role = "viewer"
     persona_ids: Optional[tuple[uuid.UUID, ...]] = None
 
     if mode == "scoped" and role != "admin":

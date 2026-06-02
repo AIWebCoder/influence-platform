@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Bell, X, ShieldAlert, AlertTriangle, Info, Loader2 } from "lucide-react";
+import { useSession } from "next-auth/react";
 import { useLocale } from "@/components/i18n/LocaleProvider";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ interface Alert {
 
 export function AlertBell() {
   const { t } = useLocale();
+  const { status: sessionStatus } = useSession();
   const [unreadCount, setUnreadCount] = useState(0);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [isOpen, setIsOpen] = useState(false);
@@ -44,10 +46,11 @@ export function AlertBell() {
   }, []);
 
   useEffect(() => {
+    if (sessionStatus !== "authenticated") return;
     void refreshUnreadCount();
     const interval = setInterval(() => void refreshUnreadCount(), 60_000);
     return () => clearInterval(interval);
-  }, [refreshUnreadCount]);
+  }, [refreshUnreadCount, sessionStatus]);
 
   useEffect(() => {
     if (!isOpen) return;

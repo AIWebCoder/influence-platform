@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSession } from "next-auth/react";
 import { Activity, AlertTriangle, RefreshCw, ShieldAlert, Users, Workflow } from "lucide-react";
 import { api } from "@/lib/api";
 import { useLocale } from "@/components/i18n/LocaleProvider";
@@ -49,6 +50,7 @@ function severityBadge(
 
 export default function DashboardPage() {
   const { text, t } = useLocale();
+  const { status: sessionStatus } = useSession();
   const o = text.operations;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -86,13 +88,14 @@ export default function DashboardPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [o.loadError]);
 
   useEffect(() => {
+    if (sessionStatus !== "authenticated") return;
     void load();
     const timer = setInterval(() => void load(), 30000);
     return () => clearInterval(timer);
-  }, [load]);
+  }, [load, sessionStatus]);
 
   const active = useMemo(
     () => accounts.filter((a) => (a.status ?? "").toUpperCase() === "ACTIVE").length,
