@@ -1,8 +1,4 @@
 # Production server override (scm-101). Save as docker-compose.override.yml
-#
-# Why: keep host source in sync (git pull) but persist Linux .next across restarts.
-# After every dashboard code change: run scripts/rebuild-dashboard-prod.sh
-# (git pull alone does NOT update the compiled bundle in dashboard_next).
 
 services:
   dashboard:
@@ -17,6 +13,7 @@ services:
         exec npx next start -H 0.0.0.0 -p 3000
     environment:
       DASHBOARD_RUN_MODE: start
+      FORCE_DASHBOARD_REBUILD: ${FORCE_DASHBOARD_REBUILD:-0}
     volumes:
       - ./dashboard:/app
       - /app/node_modules
