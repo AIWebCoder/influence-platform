@@ -5,19 +5,25 @@
 set -e
 cd "$(dirname "$0")/.."
 
-echo "==> Git HEAD (expect d9f3973 or newer for generation-studio fix)"
+echo "==> Git HEAD"
 git log -1 --oneline
 
-if ! grep -q 'setJobId(null)' dashboard/src/app/generation-studio/page.tsx 2>/dev/null; then
-  echo "WARN: generation-studio fix not in working tree - run: git pull origin main"
+if ! grep -q 'jobParam = searchParams.get("job")' dashboard/src/app/generation-studio/page.tsx 2>/dev/null; then
+  echo "WARN: generation-studio URL fix missing — run: git pull origin main"
 fi
 
 echo "==> Stopping dashboard and clearing production .next volume"
 docker compose stop dashboard
 docker volume rm influence-platform_dashboard_next 2>/dev/null || true
 
-echo "==> Starting dashboard (override runs npm run build if BUILD_ID missing)"
+echo "==> Starting dashboard (must run npm run build in logs — not only Ready in 450ms)"
 docker compose up -d dashboard
+sleep 3
+docker compose logs --tail=30 dashboard
 
-echo "==> Follow logs until build succeeds and server is Ready"
-docker compose logs -f --tail=80 dashboard
+echo ""
+echo "If you only see 'Ready' without 'Creating an optimized production build', run:"
+echo "  docker compose stop dashboard"
+echo "  docker volume rm influence-platform_dashboard_next"
+echo "  FORCE_DASHBOARD_REBUILD=1 docker compose up -d dashboard"
+echo "  docker compose logs -f dashboard"

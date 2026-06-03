@@ -669,7 +669,6 @@ function GenerationStudioPageInner() {
   const [schedule, setSchedule] = useState<Date | undefined>(undefined);
   const [pipelineTargetAccountId, setPipelineTargetAccountId] = useState("");
   const [draftScenes, setDraftScenes] = useState<DraftScene[]>([]);
-  const [jobId, setJobId] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [launchLoading, setLaunchLoading] = useState(false);
@@ -695,14 +694,12 @@ function GenerationStudioPageInner() {
 
   const [dragSceneId, setDragSceneId] = useState<string | null>(null);
 
-  useEffect(() => {
-    const q = searchParams.get("job")?.trim() ?? "";
-    if (/^[0-9a-f-]{36}$/i.test(q)) {
-      setJobId(q);
-    } else {
-      setJobId(null);
-    }
-  }, [searchParams]);
+  // URL is the source of truth so sidebar navigation to /generation-studio clears the job immediately.
+  const jobParam = searchParams.get("job")?.trim() ?? "";
+  const jobId = useMemo(
+    () => (/^[0-9a-f-]{36}$/i.test(jobParam) ? jobParam : null),
+    [jobParam]
+  );
 
   useEffect(() => {
     if (executionMode === "ailiveai_single_video") {
@@ -873,7 +870,6 @@ function GenerationStudioPageInner() {
         execution_mode: executionMode,
       });
       setDraftScenes(plan);
-      setJobId(null);
       router.replace("/generation-studio", { scroll: false });
       toast.success(toastMsg.previewReady);
     } catch (e: unknown) {
@@ -905,7 +901,6 @@ function GenerationStudioPageInner() {
             : undefined,
         ...(executionMode === "ailiveai_single_video" ? { ailiveai_gender: ailiveaiGender } : {}),
       });
-      setJobId(res.job_id);
       addTrackedGenerationJobId(res.job_id);
       router.replace(`/generation-studio?job=${encodeURIComponent(res.job_id)}`, { scroll: false });
       toast.success(toastMsg.draftCreated);
@@ -973,7 +968,6 @@ function GenerationStudioPageInner() {
         target_accounts: pipelineTargetAccountId ? [pipelineTargetAccountId] : [],
       });
       if (res.job_id) {
-        setJobId(res.job_id);
         addTrackedGenerationJobId(res.job_id);
       }
       toast.success(toastMsg.simulateQueueSuccess);
