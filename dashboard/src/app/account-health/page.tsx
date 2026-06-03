@@ -132,10 +132,10 @@ export default function AccountHealthPage() {
 
   const fetchAccounts = useCallback(async () => {
     try {
-      const data = await api.distribution.getAccounts();
+      const data = (await api.distribution.getAccounts()) as AccountSummary[];
       setAccounts(data || []);
       if (data && data.length > 0) {
-        const fromUrl = accountFromUrl && data.some((a) => a.id === accountFromUrl);
+        const fromUrl = accountFromUrl && data.some((a: AccountSummary) => a.id === accountFromUrl);
         setSelectedId((prev) => {
           if (fromUrl) return accountFromUrl;
           if (prev) return prev;
