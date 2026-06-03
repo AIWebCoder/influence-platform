@@ -19,5 +19,6 @@ export const config = {
     "/emulators(.*)",
     "/engagement(.*)",
     "/publications(.*)",
+    "/alerts(.*)",
   ],
 };

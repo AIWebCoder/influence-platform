@@ -4,10 +4,34 @@ from sqlalchemy import text
 from typing import Optional
 
 from src.core.access_scope import AccessScope, alerts_scope_clause, allowed_account_ids, get_access_scope
+from src.core.alert_routing import resolve_alert_action
 from src.core.database import get_db
 from src.api.deps_scope import require_write_access
 
 router = APIRouter()
+
+
+def _serialize_alert_row(row) -> dict:
+    account_id = str(row.account_id) if row.account_id else None
+    action_url = getattr(row, "action_url", None)
+    action_label = getattr(row, "action_label", None)
+    url, label = resolve_alert_action(
+        message=row.message or "",
+        alert_type=row.type,
+        account_id=account_id,
+        action_url=action_url,
+        action_label=action_label,
+    )
+    return {
+        "id": str(row.id),
+        "account_id": account_id,
+        "type": row.type,
+        "message": row.message,
+        "is_read": row.is_read,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "action_url": url,
+        "action_label": label,
+    }
 
 
 @router.get("")
@@ -19,7 +43,10 @@ async def get_alerts(
     """Get all alerts, optionally filtered by read status."""
     accounts = await allowed_account_ids(db, scope)
     scope_sql, scope_params = alerts_scope_clause(scope, accounts)
-    query = f"SELECT id, account_id, type, message, is_read, created_at FROM alerts WHERE ({scope_sql})"
+    query = (
+        f"SELECT id, account_id, type, message, is_read, created_at, action_url, action_label "
+        f"FROM alerts WHERE ({scope_sql})"
+    )
     params = dict(scope_params)
 
     if is_read is not None:
@@ -30,17 +57,7 @@ async def get_alerts(
     result = await db.execute(text(query), params)
     rows = result.fetchall()
 
-    return [
-        {
-            "id": str(row.id),
-            "account_id": str(row.account_id) if row.account_id else None,
-            "type": row.type,
-            "message": row.message,
-            "is_read": row.is_read,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-        }
-        for row in rows
-    ]
+    return [_serialize_alert_row(row) for row in rows]
 
 
 @router.get("/unread/count")

@@ -1,4 +1,5 @@
 const { getPool } = require('../core/database');
+const { resolveAlertAction } = require('./alertActions');
 
 /**
  * Shared alerts table helpers (dedupe by message prefix, sync global/account alerts).
@@ -23,18 +24,20 @@ class AlertService {
       [type, prefixLike],
     );
 
+    const action = resolveAlertAction({ messagePrefix, message, type, accountId: null });
+
     if (existing.rows.length > 0) {
-      await pool.query(`UPDATE alerts SET message = $1, created_at = NOW() WHERE id = $2`, [
-        message,
-        existing.rows[0].id,
-      ]);
+      await pool.query(
+        `UPDATE alerts SET message = $1, action_url = $2, action_label = $3, created_at = NOW() WHERE id = $4`,
+        [message, action.action_url, action.action_label, existing.rows[0].id],
+      );
       return;
     }
 
     await pool.query(
-      `INSERT INTO alerts (id, type, message, is_read, created_at)
-       VALUES (gen_random_uuid(), $1, $2, false, NOW())`,
-      [type, message],
+      `INSERT INTO alerts (id, type, message, action_url, action_label, is_read, created_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, false, NOW())`,
+      [type, message, action.action_url, action.action_label],
     );
   }
 
@@ -56,28 +59,31 @@ class AlertService {
       [accountId, type, prefixLike],
     );
 
+    const action = resolveAlertAction({ messagePrefix, message, type, accountId });
+
     if (existing.rows.length > 0) {
-      await pool.query(`UPDATE alerts SET message = $1, created_at = NOW() WHERE id = $2`, [
-        message,
-        existing.rows[0].id,
-      ]);
+      await pool.query(
+        `UPDATE alerts SET message = $1, action_url = $2, action_label = $3, created_at = NOW() WHERE id = $4`,
+        [message, action.action_url, action.action_label, existing.rows[0].id],
+      );
       return;
     }
 
     await pool.query(
-      `INSERT INTO alerts (id, account_id, type, message, is_read, created_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, false, NOW())`,
-      [accountId, type, message],
+      `INSERT INTO alerts (id, account_id, type, message, action_url, action_label, is_read, created_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, false, NOW())`,
+      [accountId, type, message, action.action_url, action.action_label],
     );
   }
 
   /** Critical one-off alerts (ban, action block) — always insert. */
   async recordAlert(accountId, type, message) {
     const pool = getPool();
+    const action = resolveAlertAction({ message, type, accountId });
     await pool.query(
-      `INSERT INTO alerts (id, account_id, type, message, is_read, created_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, false, NOW())`,
-      [accountId, type, message],
+      `INSERT INTO alerts (id, account_id, type, message, action_url, action_label, is_read, created_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, false, NOW())`,
+      [accountId, type, message, action.action_url, action.action_label],
     );
   }
 }

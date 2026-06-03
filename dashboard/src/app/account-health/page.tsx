@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   ShieldCheck,
   Activity,
@@ -85,6 +86,8 @@ function getRisk(
 
 export default function AccountHealthPage() {
   const { text, t } = useLocale();
+  const searchParams = useSearchParams();
+  const accountFromUrl = searchParams.get("account");
   const ah = text.accountHealth;
 
   const riskLevels = useMemo(
@@ -131,16 +134,20 @@ export default function AccountHealthPage() {
     try {
       const data = await api.distribution.getAccounts();
       setAccounts(data || []);
-      // Auto-select first if none selected
-      if (data && data.length > 0 && !selectedId) {
-        setSelectedId(data[0].id);
+      if (data && data.length > 0) {
+        const fromUrl = accountFromUrl && data.some((a) => a.id === accountFromUrl);
+        setSelectedId((prev) => {
+          if (fromUrl) return accountFromUrl;
+          if (prev) return prev;
+          return data[0].id;
+        });
       }
     } catch (err) {
       console.error("Failed to fetch accounts:", err);
     } finally {
       setLoading(false);
     }
-  }, []); // Remove selectedId to prevent loop
+  }, [accountFromUrl]);
 
   const fetchDetails = useCallback(async (id: string) => {
     setDetailsLoading(true);

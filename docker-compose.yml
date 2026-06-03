@@ -274,9 +274,20 @@ services:
       pull: true
     container_name: ip_dashboard
     restart: unless-stopped
+    # dev (default): next dev. Production server: DASHBOARD_RUN_MODE=start in .env (+ npm run build once).
+    command:
+      - sh
+      - -c
+      - |
+        if [ "$${DASHBOARD_RUN_MODE:-dev}" = "start" ]; then
+          exec npm run start
+        else
+          exec npm run dev
+        fi
     ports:
       - "3000:3000"
     environment:
+      DASHBOARD_RUN_MODE: ${DASHBOARD_RUN_MODE:-dev}
       NEXT_PUBLIC_CONTENT_API_URL: ${NEXT_PUBLIC_CONTENT_API_URL:-http://localhost:8000}
       NEXT_PUBLIC_DISTRIBUTION_API_URL: ${NEXT_PUBLIC_DISTRIBUTION_API_URL:-http://localhost:3001}
       NEXT_PUBLIC_EMULATOR_CONTROLLER_URL: ${NEXT_PUBLIC_EMULATOR_CONTROLLER_URL:-http://localhost:9102}

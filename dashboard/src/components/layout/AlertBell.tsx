@@ -1,29 +1,27 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Bell, X, ShieldAlert, AlertTriangle, Info, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { Bell, X, Loader2 } from "lucide-react";
 import { useSession } from "next-auth/react";
 import { useLocale } from "@/components/i18n/LocaleProvider";
 import { api } from "@/lib/api";
+import type { PlatformAlert } from "@/lib/alerts";
+import { alertIcon, previewMessage } from "@/lib/alerts";
+import { AlertDetailSheet } from "@/components/alerts/AlertDetailSheet";
 import { Button } from "@/components/ui/button";
-
-interface Alert {
-  id: string;
-  account_id: string | null;
-  type: string;
-  message: string;
-  is_read: boolean;
-  created_at: string;
-}
 
 export function AlertBell() {
   const { t } = useLocale();
   const { status: sessionStatus } = useSession();
   const [unreadCount, setUnreadCount] = useState(0);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [alerts, setAlerts] = useState<PlatformAlert[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [hasBanAlert, setHasBanAlert] = useState(false);
   const [markingAll, setMarkingAll] = useState(false);
+  const [selectedAlert, setSelectedAlert] = useState<PlatformAlert | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [markingOne, setMarkingOne] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const refreshUnreadCount = useCallback(async () => {
@@ -37,8 +35,8 @@ export function AlertBell() {
 
   const loadAlerts = useCallback(async () => {
     try {
-      const data: Alert[] = await api.alerts.getAlerts();
-      setAlerts(data.slice(0, 20));
+      const data = (await api.alerts.getAlerts()) as PlatformAlert[];
+      setAlerts(data.slice(0, 8));
       setHasBanAlert(data.some((a) => a.type === "ban" && !a.is_read));
     } catch {
       setAlerts([]);
@@ -68,12 +66,15 @@ export function AlertBell() {
   }, []);
 
   const markAsRead = async (alertId: string) => {
+    setMarkingOne(true);
     try {
       await api.alerts.markAsRead(alertId);
       setAlerts((prev) => prev.map((a) => (a.id === alertId ? { ...a, is_read: true } : a)));
       setUnreadCount((prev) => Math.max(0, prev - 1));
-    } catch {
-      /* ignore */
+      setSelectedAlert((prev) => (prev?.id === alertId ? { ...prev, is_read: true } : prev));
+      setHasBanAlert(false);
+    } finally {
+      setMarkingOne(false);
     }
   };
 
@@ -84,22 +85,8 @@ export function AlertBell() {
       setAlerts((prev) => prev.map((a) => ({ ...a, is_read: true })));
       setUnreadCount(0);
       setHasBanAlert(false);
-    } catch {
-      /* ignore */
     } finally {
       setMarkingAll(false);
-    }
-  };
-
-  const getIcon = (type: string) => {
-    switch (type) {
-      case "ban":
-        return <ShieldAlert className="h-4 w-4 text-red-500 flex-shrink-0" />;
-      case "warning":
-      case "action_block":
-        return <AlertTriangle className="h-4 w-4 text-amber-500 flex-shrink-0" />;
-      default:
-        return <Info className="h-4 w-4 text-blue-500 flex-shrink-0" />;
     }
   };
 
@@ -112,6 +99,12 @@ export function AlertBell() {
     const diffH = Math.floor(diffMin / 60);
     if (diffH < 24) return t("alerts.hoursAgo", { count: diffH });
     return t("alerts.daysAgo", { count: Math.floor(diffH / 24) });
+  };
+
+  const openDetail = (alert: PlatformAlert) => {
+    setSelectedAlert(alert);
+    setSheetOpen(true);
+    setIsOpen(false);
   };
 
   const unreadInList = alerts.filter((a) => !a.is_read).length;
@@ -139,7 +132,7 @@ export function AlertBell() {
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-lg border bg-background shadow-xl">
+        <div className="absolute right-0 top-full z-50 mt-2 w-96 rounded-lg border bg-background shadow-xl">
           <div className="flex items-center justify-between gap-2 border-b px-4 py-2.5">
             <h3 className="text-sm font-semibold">{t("alerts.title")}</h3>
             <div className="flex items-center gap-1">
@@ -152,9 +145,7 @@ export function AlertBell() {
                   disabled={markingAll}
                   onClick={() => void markAllAsRead()}
                 >
-                  {markingAll ? (
-                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                  ) : null}
+                  {markingAll ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
                   {t("alerts.markAllRead")}
                 </Button>
               )}
@@ -175,40 +166,60 @@ export function AlertBell() {
                 {t("alerts.none")}
               </div>
             ) : (
-              alerts.map((alert) => (
-                <div
-                  key={alert.id}
-                  className={`flex items-start gap-3 border-b px-4 py-3 transition-colors last:border-0 ${
-                    alert.is_read ? "opacity-60" : "bg-secondary/20"
-                  }`}
-                >
-                  <div className="mt-0.5">{getIcon(alert.type)}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium uppercase">
-                        {alert.type}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground">
-                        {alert.created_at ? formatTime(alert.created_at) : ""}
-                      </span>
+              alerts.map((alert) => {
+                const Icon = alertIcon(alert.type);
+                return (
+                  <button
+                    key={alert.id}
+                    type="button"
+                    onClick={() => openDetail(alert)}
+                    className={`flex w-full items-start gap-3 border-b px-4 py-3 text-left transition-colors last:border-0 hover:bg-secondary/30 ${
+                      alert.is_read ? "opacity-60" : "bg-secondary/20"
+                    }`}
+                  >
+                    <Icon className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium uppercase">
+                          {alert.type}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {alert.created_at ? formatTime(alert.created_at) : ""}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-foreground/80 line-clamp-2">
+                        {previewMessage(alert.message, 90)}
+                      </p>
                     </div>
-                    <p className="mt-1 text-xs text-foreground/80 line-clamp-2">{alert.message}</p>
-                  </div>
-                  {!alert.is_read && (
-                    <button
-                      type="button"
-                      onClick={() => void markAsRead(alert.id)}
-                      className="mt-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/50"
-                    >
-                      {t("alerts.read")}
-                    </button>
-                  )}
-                </div>
-              ))
+                    {!alert.is_read ? (
+                      <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-blue-500" aria-hidden />
+                    ) : null}
+                  </button>
+                );
+              })
             )}
+          </div>
+
+          <div className="border-t px-4 py-2.5">
+            <Link
+              href="/alerts"
+              onClick={() => setIsOpen(false)}
+              className="block text-center text-xs font-medium text-blue-600 hover:underline dark:text-blue-400"
+            >
+              {t("alerts.viewAll")}
+            </Link>
           </div>
         </div>
       )}
+
+      <AlertDetailSheet
+        alert={selectedAlert}
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        onMarkRead={markAsRead}
+        markingRead={markingOne}
+        formatTime={formatTime}
+      />
     </div>
   );
 }
