@@ -696,9 +696,11 @@ function GenerationStudioPageInner() {
   const [dragSceneId, setDragSceneId] = useState<string | null>(null);
 
   useEffect(() => {
-    const q = searchParams.get("job");
-    if (q && /^[0-9a-f-]{36}$/i.test(q.trim())) {
-      setJobId(q.trim());
+    const q = searchParams.get("job")?.trim() ?? "";
+    if (/^[0-9a-f-]{36}$/i.test(q)) {
+      setJobId(q);
+    } else {
+      setJobId(null);
     }
   }, [searchParams]);
 
@@ -796,7 +798,7 @@ function GenerationStudioPageInner() {
   );
 
   const liveJobClip = useMemo(() => {
-    if (!job) return { url: null as string | null, note: "" as string };
+    if (!jobId || !job) return { url: null as string | null, note: "" as string };
     if (job.status === "completed") {
       if (job.output_url) return { url: job.output_url, note: "" };
       const v = generatedAssets.find((a) => a.asset_type === "video");
@@ -817,7 +819,7 @@ function GenerationStudioPageInner() {
       return { url: pv, note: live.scenePipelineNote };
     }
     return { url: pv, note: live.scenePreviewUntagged };
-  }, [job, generatedAssets, live]);
+  }, [jobId, job, generatedAssets, live]);
 
   useEffect(() => {
     setOpenSceneVideoId(null);
@@ -832,11 +834,11 @@ function GenerationStudioPageInner() {
   }, [job?.id, job?.input_payload?.ailiveai_gender]);
 
   const sortedScenes: Array<JobScene | DraftScene> = useMemo(() => {
-    if (job?.scenes?.length) {
+    if (jobId && job?.scenes?.length) {
       return [...job.scenes].sort((a, b) => a.scene_index - b.scene_index);
     }
     return [...draftScenes].sort((a, b) => a.scene_index - b.scene_index);
-  }, [job, draftScenes]);
+  }, [jobId, job, draftScenes]);
 
   const totalDurationSec = useMemo(
     () => sortedScenes.reduce((acc, s) => acc + (s.duration || 0), 0),
@@ -1728,7 +1730,7 @@ function GenerationStudioPageInner() {
             <CardHeader>
               <CardTitle className="text-base">{live.title}</CardTitle>
               <CardDescription>
-                {livePollActive || (job && job.status === "completed")
+                {livePollActive || (jobId && job && job.status === "completed")
                   ? jobIsCancelling
                     ? live.pollingStopping
                     : live.pollingActive
