@@ -478,6 +478,10 @@ export const api = {
       const response = await distributionClient.get(`/campaigns/${id}/history`);
       return response.data;
     },
+    deleteCampaign: async (id: string) => {
+      const response = await distributionClient.delete(`/campaigns/${id}`);
+      return response.data as { deleted: boolean; id: string };
+    },
   },
   content: {
     generateCaption: async (data: {

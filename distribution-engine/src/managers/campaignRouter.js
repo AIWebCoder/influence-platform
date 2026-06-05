@@ -133,4 +133,38 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
+/**
+ * DELETE /campaigns/:id
+ * Remove a campaign and cascade campaign_history rows.
+ */
+router.delete('/:id', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
+  const pool = getPool();
+  try {
+    const existing = await pool.query(
+      `SELECT target_account_id FROM campaigns WHERE id = $1 LIMIT 1`,
+      [req.params.id],
+    );
+    if (existing.rowCount === 0) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+    const targetAccountId = existing.rows[0].target_account_id;
+    if (targetAccountId) {
+      await assertAccountAccess(pool, req.accessScope, targetAccountId);
+    } else if (!req.accessScope.isFleet) {
+      return res.status(403).json({ error: 'Access denied for this campaign' });
+    }
+    const result = await pool.query(
+      `DELETE FROM campaigns WHERE id = $1 RETURNING id`,
+      [req.params.id],
+    );
+    res.json({ deleted: true, id: result.rows[0].id });
+  } catch (err) {
+    if (err.statusCode === 403) {
+      return res.status(403).json({ error: err.message });
+    }
+    res.status(500).json({ error: 'Failed to delete campaign', details: err.message });
+  }
+});
+
 module.exports = router;
