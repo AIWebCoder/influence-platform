@@ -50,8 +50,13 @@
     font-size: 14px;
     font-weight: 400;
     color: #6B7280;
-    max-width: 1 line;
+    max-width: 42rem;
+    line-height: 1.5;
     margin-top: 4px;
+  }
+
+  .ops-page-shell {
+    @apply flex-1 space-y-5 p-8 pt-6;
   }
 }
 

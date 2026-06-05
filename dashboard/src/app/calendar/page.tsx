@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { CalendarDays, ChevronLeft, ChevronRight, ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import { addDays, addWeeks, format, startOfWeek, subWeeks } from "date-fns";
 import { enUS, fr as frLocale } from "date-fns/locale";
 import toast from "react-hot-toast";
@@ -10,6 +10,7 @@ import toast from "react-hot-toast";
 import { api, formatContentApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useLocale } from "@/components/i18n/LocaleProvider";
+import { DashboardPageHeader } from "@/components/dashboard/DashboardPageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -38,8 +39,49 @@ type CalendarItem = {
   target_count?: number;
 };
 
+type EditorialCalendarCopy = {
+  statusDraft: string;
+  statusReady: string;
+  statusQueued: string;
+  statusPublished: string;
+  statusFailed: string;
+};
+
+function statusLabel(
+  status: string,
+  cal: EditorialCalendarCopy,
+): string {
+  switch (status.toLowerCase()) {
+    case "draft":
+      return cal.statusDraft;
+    case "ready":
+      return cal.statusReady;
+    case "queued":
+      return cal.statusQueued;
+    case "published":
+      return cal.statusPublished;
+    case "failed":
+      return cal.statusFailed;
+    default:
+      return status;
+  }
+}
+
+function statusVariant(status: string): "default" | "secondary" | "outline" | "destructive" {
+  switch (status.toLowerCase()) {
+    case "published":
+      return "secondary";
+    case "queued":
+      return "default";
+    case "failed":
+      return "destructive";
+    default:
+      return "outline";
+  }
+}
+
 export default function CalendarPage() {
-  const { locale, text } = useLocale();
+  const { locale, text, t } = useLocale();
   const cal = text.editorialCalendar;
   const dateLocale = locale === "fr" ? frLocale : enUS;
 
@@ -55,6 +97,16 @@ export default function CalendarPage() {
   const days = useMemo(
     () => Array.from({ length: 7 }, (_, i) => addDays(weekAnchor, i)),
     [weekAnchor],
+  );
+
+  const weekRangeLabel = useMemo(() => {
+    const end = addDays(weekAnchor, 6);
+    return `${format(weekAnchor, "d MMM", { locale: dateLocale })} – ${format(end, "d MMM yyyy", { locale: dateLocale })}`;
+  }, [weekAnchor, dateLocale]);
+
+  const scheduledThisWeek = useMemo(
+    () => items.filter((i) => i.scheduled_at).length,
+    [items],
   );
 
   const load = useCallback(async () => {
@@ -86,6 +138,12 @@ export default function CalendarPage() {
       const key = format(new Date(item.scheduled_at), "yyyy-MM-dd");
       if (!map[key]) map[key] = [];
       map[key].push(item);
+    }
+    for (const key of Object.keys(map)) {
+      map[key].sort(
+        (a, b) =>
+          new Date(a.scheduled_at!).getTime() - new Date(b.scheduled_at!).getTime(),
+      );
     }
     return map;
   }, [items, days]);
@@ -119,31 +177,50 @@ export default function CalendarPage() {
     }
   };
 
+  const weekNav = (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="hidden text-xs font-medium tabular-nums text-muted-foreground sm:inline">
+        {weekRangeLabel}
+      </span>
+      <Button variant="outline" size="icon" onClick={() => setWeekAnchor((w) => subWeeks(w, 1))}>
+        <ChevronLeft className="h-4 w-4" />
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => setWeekAnchor(startOfWeek(new Date(), { weekStartsOn: 1 }))}
+      >
+        {cal.thisWeek}
+      </Button>
+      <Button variant="outline" size="icon" onClick={() => setWeekAnchor((w) => addWeeks(w, 1))}>
+        <ChevronRight className="h-4 w-4" />
+      </Button>
+      <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+        <RefreshCw className={cn("h-4 w-4 sm:mr-1.5", loading && "animate-spin")} />
+        <span className="hidden sm:inline">{cal.refresh}</span>
+      </Button>
+    </div>
+  );
+
   return (
-    <div className="flex-1 space-y-6 p-8 pt-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <CalendarDays className="h-6 w-6 text-primary" />
-            {cal.title}
-          </h2>
-          <p className="text-sm text-muted-foreground">{cal.subtitle}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{cal.hint}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" onClick={() => setWeekAnchor((w) => subWeeks(w, 1))}>
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setWeekAnchor(startOfWeek(new Date(), { weekStartsOn: 1 }))}>
-            {cal.thisWeek}
-          </Button>
-          <Button variant="outline" size="icon" onClick={() => setWeekAnchor((w) => addWeeks(w, 1))}>
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
-          </Button>
-        </div>
+    <div className="ops-page-shell">
+      <DashboardPageHeader
+        title={cal.title}
+        subtitle={cal.subtitle}
+        actions={weekNav}
+      />
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <p>{cal.hint}</p>
+        <p className="tabular-nums">{cal.timezoneNote}</p>
+        {!loading && !error ? (
+          <p className="tabular-nums">
+            {t("editorialCalendar.weekSummary", {
+              scheduled: scheduledThisWeek,
+              unscheduled: unscheduled.length,
+            })}
+          </p>
+        ) : null}
       </div>
 
       {error ? (
@@ -158,46 +235,55 @@ export default function CalendarPage() {
         </div>
       ) : (
         <>
-          <div className="grid gap-4 md:grid-cols-7">
+          <div className="grid gap-3 md:grid-cols-7">
             {days.map((day) => {
               const key = format(day, "yyyy-MM-dd");
               const dayItems = byDay[key] || [];
+              const isToday = format(day, "yyyy-MM-dd") === format(new Date(), "yyyy-MM-dd");
               return (
-                <Card key={key} className="min-h-[160px]">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">
-                      {format(day, "EEE d", { locale: dateLocale })}
+                <Card
+                  key={key}
+                  className={cn("min-h-[168px]", isToday && "ring-1 ring-primary/30")}
+                >
+                  <CardHeader className="space-y-0 pb-2 pt-4">
+                    <CardTitle className="flex items-baseline justify-between text-sm font-semibold">
+                      <span>{format(day, "EEE", { locale: dateLocale })}</span>
+                      <span className={cn("tabular-nums", isToday ? "text-primary" : "text-muted-foreground")}>
+                        {format(day, "d")}
+                      </span>
                     </CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-2">
+                  <CardContent className="space-y-2 pb-4">
                     {dayItems.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">—</p>
+                      <p className="text-xs text-muted-foreground">{cal.emptyDay}</p>
                     ) : (
                       dayItems.map((item) => (
                         <button
                           key={item.id}
                           type="button"
                           onClick={() => openSchedule(item)}
-                          className="w-full rounded-md border p-2 text-left text-xs transition-colors hover:bg-muted/60"
+                          className="w-full rounded-md border border-border/80 p-2 text-left text-xs transition-colors hover:bg-muted/60"
                         >
                           <div className="mb-1 flex flex-wrap gap-1">
-                            <Badge variant="outline" className="text-[10px]">
-                              {item.status}
+                            <Badge variant={statusVariant(item.status)} className="text-[10px]">
+                              {statusLabel(item.status, cal)}
                             </Badge>
                             {item.content_type ? (
-                              <Badge variant="secondary" className="text-[10px]">
+                              <Badge variant="outline" className="text-[10px]">
                                 {item.content_type}
                               </Badge>
                             ) : null}
                           </div>
-                          <p className="line-clamp-2">{item.caption || item.niche || item.id.slice(0, 8)}</p>
+                          <p className="line-clamp-2 leading-snug">
+                            {item.caption || item.niche || item.id.slice(0, 8)}
+                          </p>
                           {item.scheduled_at ? (
                             <p className="mt-1 text-[10px] text-muted-foreground tabular-nums">
                               {format(new Date(item.scheduled_at), "HH:mm")}
                             </p>
                           ) : null}
                           {typeof item.target_count === "number" && item.target_count > 0 ? (
-                            <p className="mt-0.5 text-[10px] text-muted-foreground">
+                            <p className="mt-0.5 text-[10px] text-muted-foreground tabular-nums">
                               {cal.accounts}: {item.target_count}
                             </p>
                           ) : null}
@@ -212,13 +298,13 @@ export default function CalendarPage() {
 
           {unscheduled.length > 0 ? (
             <Card>
-              <CardHeader>
-                <CardTitle className="text-base">
+              <CardHeader className="pb-3">
+                <CardTitle className="section-header text-base font-semibold">
                   {cal.unscheduled} ({unscheduled.length})
                 </CardTitle>
-                <p className="text-sm text-muted-foreground">{cal.unscheduledHint}</p>
+                <p className="page-subtitle text-muted-foreground !mt-1">{cal.unscheduledHint}</p>
               </CardHeader>
-              <CardContent className="flex flex-wrap gap-2">
+              <CardContent className="flex flex-wrap gap-2 pt-0">
                 {unscheduled.map((item) => (
                   <Button key={item.id} variant="outline" size="sm" onClick={() => openSchedule(item)}>
                     {item.caption?.slice(0, 40) || item.niche || item.id.slice(0, 8)}
@@ -246,10 +332,14 @@ export default function CalendarPage() {
                 onChange={setEditWhen}
                 placeholder={cal.pickSlot}
               />
+              <p className="text-xs text-muted-foreground">{cal.timezoneNote}</p>
             </div>
             {editItem ? (
               <p className="text-xs text-muted-foreground">
-                {cal.status}: <Badge variant="outline">{editItem.status}</Badge>
+                {cal.status}:{" "}
+                <Badge variant={statusVariant(editItem.status)}>
+                  {statusLabel(editItem.status, cal)}
+                </Badge>
               </p>
             ) : null}
           </div>
