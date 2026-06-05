@@ -108,7 +108,7 @@ export function AppSidebar() {
       .filter(Boolean)
       .slice(0, 2)
       .map((part) => part[0]?.toUpperCase())
-      .join("") || "IP";
+      .join("") || "HE";
 
   const roleLabel =
     role === "admin"
@@ -158,34 +158,39 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon" variant="sidebar" side="left">
-      <SidebarHeader className="border-b border-sidebar-border px-2 py-3">
+      <SidebarHeader className="px-3 py-3.5 pb-3">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild className="h-auto min-h-12 py-2 group-data-[collapsible=icon]:!min-h-10">
-              <Link href="/" className="gap-3">
+            <SidebarMenuButton
+              size="lg"
+              asChild
+              className="h-auto min-h-14 px-0 py-2.5 hover:!bg-transparent group-data-[collapsible=icon]:!min-h-11 group-data-[collapsible=icon]:!justify-center group-data-[collapsible=icon]:!px-0"
+            >
+              <Link
+                href="/"
+                aria-label="Home"
+                className={cn(
+                  "flex w-full min-w-0 items-center",
+                  collapsed ? "justify-center" : "justify-start pl-0.5",
+                )}
+              >
                 <div
                   className={cn(
-                    "relative shrink-0 overflow-hidden rounded-md border",
-                    resolvedTheme === "dark"
-                      ? "border-sidebar-border/60 bg-transparent"
-                      : "border-sidebar-border/60 bg-sidebar-accent/40",
-                    collapsed ? "size-7" : "size-10 max-w-[10rem]",
+                    "relative shrink-0 overflow-hidden",
+                    collapsed ? "size-[34px]" : "h-12 w-full",
                   )}
                 >
                   <Image
                     key={logoSrc}
                     src={logoSrc}
-                    alt="Influence Platform"
+                    alt=""
                     fill
-                    className="object-contain object-center p-0.5"
-                    sizes={collapsed ? "36px" : "160px"}
+                    className={cn("object-contain", collapsed ? "object-center" : "object-left")}
+                    sizes={collapsed ? "34px" : "280px"}
                     unoptimized
                     priority
                   />
                 </div>
-                <span className="truncate font-semibold group-data-[collapsible=icon]:hidden">
-                  Influence Platform
-                </span>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>

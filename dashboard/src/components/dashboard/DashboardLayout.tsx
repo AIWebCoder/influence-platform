@@ -3,5 +3,5 @@
 import type { ReactNode } from "react";
 
 export function DashboardLayout({ children }: { children: ReactNode }) {
-  return <div className="flex-1 space-y-6 p-8 pt-6">{children}</div>;
+  return <div className="ops-page-shell">{children}</div>;
 }

@@ -136,10 +136,10 @@ export default function DashboardPage() {
   const refreshedAt = updatedAt ? new Date(updatedAt).toLocaleTimeString() : "-";
 
   return (
-    <div className="flex-1 space-y-6 p-8 pt-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{o.title}</h1>
-        <p className="text-sm text-muted-foreground mt-1">
+    <div className="ops-page-shell">
+      <div className="ops-page-header">
+        <h1 className="page-title text-foreground">{o.title}</h1>
+        <p className="page-subtitle text-muted-foreground">
           {t("operations.subtitle", { time: refreshedAt })}
         </p>
       </div>
@@ -182,13 +182,13 @@ export default function DashboardPage() {
         </Card>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <Card>
-          <CardContent className="pt-6">
+          <CardContent className="pt-5">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">{o.publishSuccess}</p>
-                <p className="text-2xl font-semibold mt-1">{successRate}%</p>
+                <p className="label text-muted-foreground">{o.publishSuccess}</p>
+                <p className="mt-1.5 text-[1.625rem] font-semibold tabular-nums tracking-tight">{successRate}%</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {t("operations.todayStats", {
                     published: stats.published_today,
@@ -209,11 +209,11 @@ export default function DashboardPage() {
         </Card>
 
         <Card>
-          <CardContent className="pt-6">
+          <CardContent className="pt-5">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">{o.queuePressure}</p>
-                <p className="text-2xl font-semibold mt-1">{queuePressure}</p>
+                <p className="label text-muted-foreground">{o.queuePressure}</p>
+                <p className="mt-1.5 text-[1.625rem] font-semibold tabular-nums tracking-tight">{queuePressure}</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {t("operations.pendingDelayed", {
                     pending: queue.queue.pending,
@@ -234,11 +234,11 @@ export default function DashboardPage() {
         </Card>
 
         <Card>
-          <CardContent className="pt-6">
+          <CardContent className="pt-5">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">{o.accountReadiness}</p>
-                <p className="text-2xl font-semibold mt-1">{readiness}%</p>
+                <p className="label text-muted-foreground">{o.accountReadiness}</p>
+                <p className="mt-1.5 text-[1.625rem] font-semibold tabular-nums tracking-tight">{readiness}%</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {t("operations.activeWarmingLowHealth", { active, warming, lowHealth })}
                 </p>
@@ -256,11 +256,11 @@ export default function DashboardPage() {
         </Card>
 
         <Card>
-          <CardContent className="pt-6">
+          <CardContent className="pt-5">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">{o.retryingRisk}</p>
-                <p className="text-2xl font-semibold mt-1">{stats.retrying}</p>
+                <p className="label text-muted-foreground">{o.retryingRisk}</p>
+                <p className="mt-1.5 text-[1.625rem] font-semibold tabular-nums tracking-tight">{stats.retrying}</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {t("operations.failedPublicationsCount", { count: stats.failed })}
                 </p>
@@ -279,8 +279,8 @@ export default function DashboardPage() {
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{o.actionQueue}</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="section-header text-base font-semibold">{o.actionQueue}</CardTitle>
         </CardHeader>
         <CardContent>
           <Table>

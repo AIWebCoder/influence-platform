@@ -17,8 +17,8 @@ const montserrat = Montserrat({
 })
 
 export const metadata: Metadata = {
-  title: "Influence Platform",
-  description: "Dashboard for Content Factory & Distribution Engine",
+  title: "Helm",
+  description: "Helm — social fleet operations dashboard",
   icons: {
     icon: [
       { url: "/favicon-16x16.png", type: "image/png", sizes: "16x16" },
