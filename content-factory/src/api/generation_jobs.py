@@ -7,7 +7,7 @@ from typing import Any, Optional
 from google.api_core.exceptions import GoogleAPIError, RetryError
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1113,11 +1113,17 @@ async def _build_publish_intent_response(db: AsyncSession, intent_id: str) -> Pu
 
 
 def _resolve_job_output_media_url(job: GenerationJob) -> str | None:
-    """Best public URL for browser preview (photo output_url or first scene image/video)."""
+    """Best public URL for browser preview (job output or first scene media)."""
+    exec_mode = str(getattr(job, "execution_mode", "") or "").strip()
     direct = str(job.output_url or "").strip()
     if direct and not direct.upper().startswith("ERROR"):
         return direct
     scenes = sorted(job.scenes or [], key=lambda x: x.scene_index)
+    if exec_mode in ("multi_scene_single_video", "ailiveai_single_video", "scene_based"):
+        for sc in scenes:
+            u = str(sc.video_url or "").strip()
+            if u and not u.upper().startswith("ERROR"):
+                return u
     for sc in scenes:
         for candidate in (sc.start_image_url, sc.end_image_url, sc.video_url):
             u = str(candidate or "").strip()
@@ -1143,22 +1149,30 @@ async def stream_job_output_media(job_id: str, db: AsyncSession = Depends(get_db
     media_url = _resolve_job_output_media_url(job)
     if not media_url:
         raise HTTPException(status_code=404, detail="No output media for this job")
+    timeout = httpx.Timeout(300.0, connect=30.0)
     try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            upstream = await client.get(media_url)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            async with client.stream("GET", media_url) as upstream:
+                if upstream.status_code >= 400:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Upstream media URL returned HTTP {upstream.status_code}",
+                    )
+                content_type = upstream.headers.get("content-type") or "application/octet-stream"
+                content_length = upstream.headers.get("content-length")
+
+                async def body() -> Any:
+                    async for chunk in upstream.aiter_bytes():
+                        yield chunk
+
+                headers: dict[str, str] = {"Cache-Control": "private, max-age=3600"}
+                if content_length:
+                    headers["Content-Length"] = content_length
+                return StreamingResponse(body(), media_type=content_type, headers=headers)
+    except HTTPException:
+        raise
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch output media: {e}") from e
-    if upstream.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Upstream media URL returned HTTP {upstream.status_code}",
-        )
-    content_type = upstream.headers.get("content-type") or "application/octet-stream"
-    return Response(
-        content=upstream.content,
-        media_type=content_type,
-        headers={"Cache-Control": "private, max-age=3600"},
-    )
 
 
 @router.get("/{job_id}/assets", response_model=list[GeneratedAssetOut])

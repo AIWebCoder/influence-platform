@@ -7,7 +7,6 @@ import { api, formatContentApiError } from "@/lib/api";
 import { summarizeJobPipelineErrors } from "@/lib/generation-errors";
 import { SCENE_BASED_EXECUTION_UI_ENABLED } from "@/lib/generation-studio-config";
 import {
-  inferMediaKind,
   jobOutputMediaProxyUrl,
   KIE_IMAGE_PROPS,
 } from "@/lib/media-url";
@@ -652,20 +651,12 @@ function GenerationStudioPageInner() {
 
   const liveJobClip = useMemo(() => {
     if (!jobId || !job) return { url: null as string | null, note: "" as string, mediaKind: "video" as const };
-    const photoPreviewUrl =
-      isPhotoMode && (job.output_url || job.status === "completed")
-        ? jobOutputMediaProxyUrl(jobId)
-        : null;
+    const proxiedOutputUrl =
+      jobId && job.output_url ? jobOutputMediaProxyUrl(jobId) : null;
+    const completedMediaKind = isPhotoMode ? ("image" as const) : ("video" as const);
     if (job.status === "completed") {
-      if (photoPreviewUrl) {
-        return { url: photoPreviewUrl, note: "", mediaKind: "image" as const };
-      }
-      if (job.output_url) {
-        return {
-          url: job.output_url,
-          note: "",
-          mediaKind: inferMediaKind(job.output_url, isPhotoMode),
-        };
+      if (proxiedOutputUrl) {
+        return { url: proxiedOutputUrl, note: "", mediaKind: completedMediaKind };
       }
       if (isPhotoMode) {
         const img = generatedAssets.find((a) => a.asset_type === "image");
@@ -676,17 +667,14 @@ function GenerationStudioPageInner() {
         };
       }
       const v = generatedAssets.find((a) => a.asset_type === "video");
-      return { url: v?.public_url ?? null, note: "", mediaKind: "video" as const };
-    }
-    if (photoPreviewUrl) {
-      return { url: photoPreviewUrl, note: live.outputStaleNote, mediaKind: "image" as const };
-    }
-    if (job.output_url) {
       return {
-        url: job.output_url,
-        note: live.outputStaleNote,
-        mediaKind: inferMediaKind(job.output_url, isPhotoMode),
+        url: v ? jobOutputMediaProxyUrl(jobId) : null,
+        note: "",
+        mediaKind: "video" as const,
       };
+    }
+    if (proxiedOutputUrl) {
+      return { url: proxiedOutputUrl, note: live.outputStaleNote, mediaKind: completedMediaKind };
     }
     const scenes = [...(job.scenes || [])].sort((a, b) => a.scene_index - b.scene_index);
     const first = scenes[0] as JobScene | undefined;
