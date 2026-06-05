@@ -253,6 +253,14 @@ export const api = {
       const response = await distributionClient.post(`/accounts/${id}/proxy/rotate`);
       return response.data;
     },
+    releaseAccountProxy: async (id: string) => {
+      const response = await distributionClient.post(`/accounts/${id}/proxy/release`);
+      return response.data as {
+        success: boolean;
+        account_id: string;
+        account: Record<string, unknown>;
+      };
+    },
     deleteAccount: async (id: string) => {
       const response = await distributionClient.delete(`/accounts/${id}`);
       return response.data as { success: boolean; message?: string };
@@ -288,6 +296,7 @@ export const api = {
         account_id: string;
         account_username: string;
         content_id: string | null;
+        generation_job_id?: string | null;
         content_type: string | null;
         content_niche: string | null;
         content_caption: string | null;
@@ -753,6 +762,14 @@ export const api = {
         dispatched_targets: number;
       };
     },
+    getPublishIntent: async (intentId: string) => {
+      const response = await contentClient.get(`/publication-intents/${intentId}`);
+      return response.data as {
+        intent_id: string;
+        status: string;
+        targets: Array<{ account_id: string; platform: string; status: string }>;
+      };
+    },
     /** Create publish intent from a completed job and dispatch to Instagram (queue / ops shortcut). */
     dispatchCompletedJob: async (
       jobId: string,
@@ -809,7 +826,8 @@ export const api = {
       return contentClient.post(`/publication-intents/${intent.intent_id}/dispatch`).then((r) => r.data);
     },
     create: async (data: {
-      execution_mode?: "scene_based" | "multi_scene_single_video" | "ailiveai_single_video";
+      execution_mode?: "scene_based" | "multi_scene_single_video" | "ailiveai_single_video" | "single_image";
+      output_medium?: "photo" | "video";
       content_type: string;
       mode: string;
       niche: string;
@@ -927,7 +945,7 @@ export const api = {
     /** Dev/demo: completed job on /queue without Kie tokens (requires GENERATION_ALLOW_QUEUE_SIMULATION). */
     simulateQueueEntry: async (data: {
       job_id?: string;
-      execution_mode?: 'scene_based' | 'multi_scene_single_video' | 'ailiveai_single_video';
+      execution_mode?: 'scene_based' | 'multi_scene_single_video' | 'ailiveai_single_video' | 'single_image';
       content_type?: string;
       mode?: string;
       niche?: string;
@@ -955,7 +973,7 @@ export const api = {
       niche: string;
       topic: string;
       scene_count?: number;
-      execution_mode?: 'scene_based' | 'multi_scene_single_video' | 'ailiveai_single_video';
+      execution_mode?: 'scene_based' | 'multi_scene_single_video' | 'ailiveai_single_video' | 'single_image';
     }) => {
       const response = await contentClientLongTimeout.post('/generation-jobs/preview-scenes', data);
       return response.data as Array<{

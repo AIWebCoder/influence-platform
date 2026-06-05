@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
   BookOpen,
@@ -12,18 +14,27 @@ import {
   Loader2,
   RefreshCw,
   RotateCw,
-  Search,
   TrendingUp,
   XCircle,
   Zap,
 } from "lucide-react";
-import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
+
+import { PublicationDetailSheet } from "@/components/publications/PublicationDetailSheet";
 import { useLocale } from "@/components/i18n/LocaleProvider";
 import type { TranslationTree } from "@/lib/i18n";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api";
+import {
+  publicationFromDiagnostics,
+  type Publication,
+  type PublicationDiagnostics,
+  type PublicationStatus,
+} from "@/lib/publication-types";
+import { cn } from "@/lib/utils";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -32,44 +43,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-type PublicationStatus =
-  | "published"
-  | "failed"
-  | "permanently_failed"
-  | "retrying"
-  | "pending"
-  | "publishing";
-
 type PubText = TranslationTree["publications"];
-
-interface Publication {
-  id: string;
-  content_id: string | null;
-  publication_target_id?: string | null;
-  status: PublicationStatus;
-  post_url: string | null;
-  published_at: string | null;
-  error_message: string | null;
-  retry_count: number;
-  attempt?: number;
-  failure_type: string | null;
-  last_retry_at: string | null;
-  next_retry_at?: string | null;
-  max_retries: number;
-  engagement_score: number | null;
-  created_at: string;
-  updated_at: string;
-  account_username: string;
-  account_platform: string;
-  content_caption: string | null;
-  content_type: string | null;
-  content_niche: string | null;
-}
 
 interface PubStats {
   total: number;
@@ -94,28 +70,6 @@ interface QueueStats {
     retrying: number;
     total_retries: number;
   };
-}
-
-interface PublicationDiagnostics {
-  id: string;
-  status: string;
-  error_message: string | null;
-  failure_type: string | null;
-  retry_count: number;
-  max_retries: number;
-  attempt: number;
-  last_retry_at: string | null;
-  next_retry_at: string | null;
-  created_at: string;
-  updated_at: string;
-  published_at: string | null;
-  post_url: string | null;
-  account_id: string;
-  account_username: string;
-  content_id: string | null;
-  content_type: string | null;
-  content_niche: string | null;
-  content_caption: string | null;
 }
 
 function formatDate(dateStr: string | null, locale: string, dash: string) {
@@ -178,26 +132,52 @@ function StatCard({
   );
 }
 
+const VALID_PUBLICATION_FILTERS = new Set([
+  "published",
+  "failed",
+  "retrying",
+  "pending",
+  "permanently_failed",
+]);
+
 export default function PublicationsPage() {
   const { locale, text, t } = useLocale();
   const pub = text.publications;
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const urlStatus = searchParams.get("status")?.trim() ?? "";
+  const focusId = searchParams.get("id")?.trim() ?? "";
+  const initialFilter = VALID_PUBLICATION_FILTERS.has(urlStatus) ? urlStatus : undefined;
+
   const [publications, setPublications] = useState<Publication[]>([]);
   const [stats, setStats] = useState<PubStats | null>(null);
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
-  const [activeFilter, setActiveFilter] = useState<string | undefined>(undefined);
+  const [activeFilter, setActiveFilter] = useState<string | undefined>(initialFilter);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
   const [retryingId, setRetryingId] = useState<string | null>(null);
-  const [diagLoadingId, setDiagLoadingId] = useState<string | null>(null);
-  const [diag, setDiag] = useState<PublicationDiagnostics | null>(null);
-  const [diagError, setDiagError] = useState<string | null>(null);
+  const [scopeNotice, setScopeNotice] = useState<string | null>(null);
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedPublication, setSelectedPublication] = useState<Publication | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<PublicationDiagnostics | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
+  /** Prevents ?id= URL effect from re-opening the sheet right after the user closes it. */
+  const urlOpenSuppressedRef = useRef(false);
 
   const LIMIT = 20;
   const totalPages = Math.ceil(total / LIMIT);
   const currentPage = Math.floor(offset / LIMIT) + 1;
   const activeFilterTab = activeFilter ?? "all";
+
+  const formatDateForRow = useCallback(
+    (dateStr: string | null) => formatDate(dateStr, locale, pub.dash),
+    [locale, pub.dash],
+  );
 
   const filterOptions = useMemo(
     () => [
@@ -209,6 +189,48 @@ export default function PublicationsPage() {
       { label: pub.filterPermFailed, value: "permanently_failed" },
     ],
     [pub],
+  );
+
+  const updateUrlId = useCallback(
+    (id: string | null) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (id) params.set("id", id);
+      else params.delete("id");
+      const q = params.toString();
+      router.replace(q ? `/publications?${q}` : "/publications", { scroll: false });
+    },
+    [router, searchParams],
+  );
+
+  const loadDiagnostics = useCallback(
+    async (publicationId: string) => {
+      setDiagnosticsLoading(true);
+      setDiagnosticsError(null);
+      try {
+        const data = await api.distribution.getPublicationDiagnostics(publicationId);
+        setDiagnostics(data);
+        setSelectedPublication((prev) => prev ?? publicationFromDiagnostics(data));
+      } catch (error: unknown) {
+        const err = error as { response?: { data?: { error?: string } } };
+        setDiagnosticsError(err?.response?.data?.error || pub.diagFailed);
+        setDiagnostics(null);
+      } finally {
+        setDiagnosticsLoading(false);
+      }
+    },
+    [pub.diagFailed],
+  );
+
+  const openPublication = useCallback(
+    async (item: Publication) => {
+      urlOpenSuppressedRef.current = false;
+      setSelectedId(item.id);
+      setSelectedPublication(item);
+      setSheetOpen(true);
+      updateUrlId(item.id);
+      await loadDiagnostics(item.id);
+    },
+    [loadDiagnostics, updateUrlId],
   );
 
   const fetchData = useCallback(async () => {
@@ -232,9 +254,18 @@ export default function PublicationsPage() {
       if (pubsData.status === "fulfilled") {
         setPublications(pubsData.value.publications || []);
         setTotal(pubsData.value.pagination?.total || 0);
+        setScopeNotice(
+          typeof pubsData.value.scope_notice === "string" ? pubsData.value.scope_notice : null,
+        );
       }
       if (statsData.status === "fulfilled") {
         setStats(statsData.value);
+        if (
+          typeof statsData.value.scope_notice === "string" &&
+          statsData.value.scope_notice
+        ) {
+          setScopeNotice(statsData.value.scope_notice);
+        }
       }
       if (queueData.status === "fulfilled") {
         setQueueStats(queueData.value);
@@ -253,43 +284,76 @@ export default function PublicationsPage() {
   }, [fetchData]);
 
   useEffect(() => {
+    const next = VALID_PUBLICATION_FILTERS.has(urlStatus) ? urlStatus : undefined;
+    setActiveFilter(next);
+    setOffset(0);
+  }, [urlStatus]);
+
+  useEffect(() => {
     setOffset(0);
   }, [activeFilter]);
 
-  const canRetry = useMemo(
-    () => (item: Publication) => {
-      if (!["failed", "permanently_failed", "retrying"].includes(item.status)) return false;
-      if (item.publication_target_id) return true;
-      return Number(item.retry_count || 0) < Number(item.max_retries || 3);
-    },
-    [],
+  useEffect(() => {
+    if (!focusId) {
+      urlOpenSuppressedRef.current = false;
+      return;
+    }
+    if (urlOpenSuppressedRef.current) return;
+    if (selectedId === focusId && sheetOpen) return;
+
+    const found = publications.find((p) => p.id === focusId);
+    if (found) {
+      void openPublication(found);
+      return;
+    }
+
+    if (loading) return;
+
+    let cancelled = false;
+    (async () => {
+      setSelectedId(focusId);
+      setSheetOpen(true);
+      setDiagnostics(null);
+      setSelectedPublication(null);
+      await loadDiagnostics(focusId);
+      if (cancelled) return;
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [focusId, publications, loading, openPublication, loadDiagnostics, selectedId, sheetOpen]);
+
+  const notOnCurrentPage = Boolean(
+    selectedId && publications.length > 0 && !publications.some((p) => p.id === selectedId),
   );
+
+  const handleSheetOpenChange = (open: boolean) => {
+    if (!open) {
+      urlOpenSuppressedRef.current = true;
+      setSheetOpen(false);
+      setSelectedId(null);
+      setSelectedPublication(null);
+      setDiagnostics(null);
+      setDiagnosticsError(null);
+      updateUrlId(null);
+      return;
+    }
+    urlOpenSuppressedRef.current = false;
+    setSheetOpen(true);
+  };
 
   const handleRetry = async (publicationId: string) => {
     setRetryingId(publicationId);
     try {
       await api.distribution.retryPublication(publicationId);
       await fetchData();
+      await loadDiagnostics(publicationId);
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } } };
       setFetchError(err?.response?.data?.error || pub.retryFailed);
     } finally {
       setRetryingId(null);
-    }
-  };
-
-  const handleViewDiagnostics = async (publicationId: string) => {
-    setDiagLoadingId(publicationId);
-    setDiagError(null);
-    try {
-      const data = await api.distribution.getPublicationDiagnostics(publicationId);
-      setDiag(data);
-    } catch (error: unknown) {
-      const err = error as { response?: { data?: { error?: string } } };
-      setDiagError(err?.response?.data?.error || pub.diagFailed);
-      setDiag(null);
-    } finally {
-      setDiagLoadingId(null);
     }
   };
 
@@ -317,6 +381,21 @@ export default function PublicationsPage() {
         </Alert>
       ) : null}
 
+      {scopeNotice === "NO_PERSONA_ASSIGNMENTS" ? (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>{pub.scopeNoPersonasTitle}</AlertTitle>
+          <AlertDescription className="space-y-2">
+            <p>{pub.scopeNoPersonasBody}</p>
+            <p className="text-sm">
+              <Link href="/users" className="font-medium underline underline-offset-4">
+                {pub.scopeNoPersonasUsersLink}
+              </Link>
+            </p>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
         <StatCard
           title={pub.published}
@@ -324,12 +403,18 @@ export default function PublicationsPage() {
           icon={CheckCircle2}
           sub={stats ? t("publications.today", { count: stats.published_today }) : undefined}
         />
-        <StatCard
-          title={pub.failed}
-          value={stats?.failed ?? pub.dash}
-          icon={XCircle}
-          sub={stats ? t("publications.today", { count: stats.failed_today }) : undefined}
-        />
+        <button
+          type="button"
+          className="text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={() => setActiveFilter("failed")}
+        >
+          <StatCard
+            title={pub.failed}
+            value={stats?.failed ?? pub.dash}
+            icon={XCircle}
+            sub={stats ? t("publications.today", { count: stats.failed_today }) : undefined}
+          />
+        </button>
         <StatCard
           title={pub.retrying}
           value={stats?.retrying ?? pub.dash}
@@ -385,9 +470,11 @@ export default function PublicationsPage() {
               <Inbox className="h-8 w-8 mx-auto mb-2" />
               <p className="font-medium">{pub.noPublications}</p>
               <p className="text-sm">
-                {activeFilter
-                  ? t("publications.noStatusPublications", { status: activeFilter })
-                  : pub.emptyHint}
+                {activeFilter === "failed"
+                  ? pub.failedEmptyHint
+                  : activeFilter
+                    ? t("publications.noStatusPublications", { status: activeFilter })
+                    : pub.emptyHint}
               </p>
             </div>
           ) : (
@@ -408,8 +495,17 @@ export default function PublicationsPage() {
                   {publications.map((item) => {
                     const meta = statusMeta(item.status, pub);
                     const Icon = meta.icon;
+                    const isSelected = selectedId === item.id && sheetOpen;
                     return (
-                      <TableRow key={item.id}>
+                      <TableRow
+                        key={item.id}
+                        className={cn(
+                          "cursor-pointer",
+                          isSelected && "bg-muted/60 hover:bg-muted/60",
+                        )}
+                        aria-selected={isSelected}
+                        onClick={() => void openPublication(item)}
+                      >
                         <TableCell>
                           <div className="font-medium">@{item.account_username}</div>
                           <div className="text-xs text-muted-foreground">{item.account_platform}</div>
@@ -437,7 +533,7 @@ export default function PublicationsPage() {
                           {item.next_retry_at ? (
                             <p className="text-xs text-muted-foreground">
                               {t("publications.nextRetry", {
-                                date: formatDate(item.next_retry_at, locale, pub.dash),
+                                date: formatDateForRow(item.next_retry_at),
                               })}
                             </p>
                           ) : null}
@@ -459,24 +555,20 @@ export default function PublicationsPage() {
                           )}
                         </TableCell>
                         <TableCell>
-                          {formatDate(item.published_at || item.created_at, locale, pub.dash)}
+                          {formatDateForRow(item.published_at || item.created_at)}
                         </TableCell>
-                        <TableCell className="text-right space-x-2">
+                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => handleViewDiagnostics(item.id)}
-                            disabled={diagLoadingId === item.id}
+                            onClick={() => void openPublication(item)}
+                            disabled={diagnosticsLoading && selectedId === item.id}
                           >
-                            {diagLoadingId === item.id ? pub.loading : pub.details}
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => handleRetry(item.id)}
-                            disabled={!canRetry(item) || retryingId === item.id}
-                          >
-                            {retryingId === item.id ? pub.retryingAction : pub.retry}
+                            {diagnosticsLoading && selectedId === item.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              pub.details
+                            )}
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -523,60 +615,18 @@ export default function PublicationsPage() {
         </CardContent>
       </Card>
 
-      {diagError ? (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>{pub.diagErrorTitle}</AlertTitle>
-          <AlertDescription>{diagError}</AlertDescription>
-        </Alert>
-      ) : null}
-
-      {diag ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <Search className="h-4 w-4" />
-              {pub.diagnostics}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-xs text-muted-foreground break-all">{diag.id}</p>
-            <Separator />
-            <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
-              <p>
-                {pub.status}: <span className="font-medium">{diag.status}</span>
-              </p>
-              <p>
-                {pub.retries}: <span className="font-medium">{diag.retry_count}</span>
-              </p>
-              <p>
-                max: <span className="font-medium">{diag.max_retries}</span>
-              </p>
-              <p>
-                attempt: <span className="font-medium">{diag.attempt}</span>
-              </p>
-              <p>
-                last:{" "}
-                <span className="font-medium">
-                  {formatDate(diag.last_retry_at, locale, pub.dash)}
-                </span>
-              </p>
-              <p>
-                next:{" "}
-                <span className="font-medium">
-                  {formatDate(diag.next_retry_at, locale, pub.dash)}
-                </span>
-              </p>
-              <p>
-                failure_type: <span className="font-medium">{diag.failure_type || pub.dash}</span>
-              </p>
-              <p>
-                error: <span className="font-medium">{diag.error_message || pub.dash}</span>
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
+      <PublicationDetailSheet
+        publication={selectedPublication}
+        diagnostics={diagnostics}
+        open={sheetOpen}
+        onOpenChange={handleSheetOpenChange}
+        loading={diagnosticsLoading}
+        error={diagnosticsError}
+        notOnCurrentPage={notOnCurrentPage}
+        onRetry={handleRetry}
+        retrying={retryingId === selectedId}
+        formatDate={formatDateForRow}
+      />
     </div>
   );
 }
