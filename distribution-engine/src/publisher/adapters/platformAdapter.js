@@ -40,6 +40,28 @@ async function resolveHttpClient(accountId) {
   }
 }
 
+async function createFeedVideoContainer({ igUserId, videoUrl, caption, accessToken, httpClient }) {
+  const client = httpClient || axios;
+  const url = `${GRAPH_BASE}/${encodeURIComponent(igUserId)}/media`;
+  const params = new URLSearchParams();
+  params.set('media_type', 'VIDEO');
+  params.set('video_url', String(videoUrl));
+  params.set('caption', caption);
+  params.set('access_token', accessToken);
+
+  const response = await client.post(url, params.toString(), {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    timeout: 30_000,
+  });
+  const containerId = response?.data?.id;
+  if (!containerId) {
+    throw new Error(
+      `Instagram createFeedVideoContainer failed: missing container id (${JSON.stringify(response?.data || {})})`,
+    );
+  }
+  return containerId;
+}
+
 async function createReelContainer({ igUserId, videoUrl, caption, accessToken, httpClient }) {
   const client = httpClient || axios;
   const url = `${GRAPH_BASE}/${encodeURIComponent(igUserId)}/media`;
@@ -84,11 +106,26 @@ async function createContainer(args) {
   return createReelContainer(args);
 }
 
+function isVideoAsset(asset) {
+  const mime = String(asset?.mime_type || '').trim().toLowerCase();
+  if (mime.startsWith('video/')) return true;
+  const url = String(asset?.public_url || '').trim().toLowerCase().split('?')[0];
+  return /\.(mp4|webm|mov|m4v)(\?|$)/.test(url);
+}
+
 function isPhotoPublish({ contentType, asset }) {
+  if (isVideoAsset(asset)) return false;
   const ct = String(contentType || '').trim().toLowerCase();
   if (ct === 'post') return true;
   const mime = String(asset?.mime_type || '').trim().toLowerCase();
   return mime.startsWith('image/');
+}
+
+function resolvePublishKind({ contentType, asset }) {
+  if (isPhotoPublish({ contentType, asset })) return 'photo';
+  const ct = String(contentType || '').trim().toLowerCase();
+  if (ct === 'reel') return 'reel';
+  return 'feed_video';
 }
 
 async function waitForContainer({ containerId, accessToken, httpClient }) {
@@ -154,7 +191,7 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
   const mediaUrl = String(asset?.public_url || '').trim();
   if (!mediaUrl) return { success: false, error: 'Missing asset.public_url for Instagram publish' };
 
-  const photoPublish = isPhotoPublish({ contentType, asset });
+  const publishKind = resolvePublishKind({ contentType, asset });
   let currentStage = 'fetch_token';
   let containerId = null;
   const started = Date.now();
@@ -166,7 +203,7 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
     ig_user_id: igUserId,
     persona_proxy_enabled: ProxyHttpClient.USE_PERSONA_PROXY_FOR_GRAPH,
     content_type: contentType || null,
-    publish_kind: photoPublish ? 'photo' : 'reel',
+    publish_kind: publishKind,
     media_url_preview: mediaUrl.length > 220 ? `${mediaUrl.slice(0, 220)}…` : mediaUrl,
   });
 
@@ -175,7 +212,7 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
     const accessToken = await getValidToken(accountId);
     currentStage = 'create_container';
     const fullCaption = normalizeCaption(caption, hashtags);
-    if (photoPublish) {
+    if (publishKind === 'photo') {
       containerId = await createImageContainer({
         igUserId,
         imageUrl: mediaUrl,
@@ -183,8 +220,16 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
         accessToken,
         httpClient,
       });
-    } else {
+    } else if (publishKind === 'reel') {
       containerId = await createReelContainer({
+        igUserId,
+        videoUrl: mediaUrl,
+        caption: fullCaption,
+        accessToken,
+        httpClient,
+      });
+    } else {
+      containerId = await createFeedVideoContainer({
         igUserId,
         videoUrl: mediaUrl,
         caption: fullCaption,
@@ -251,4 +296,4 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
   }
 }
 
-module.exports = { publish, isPhotoPublish };
+module.exports = { publish, isPhotoPublish, isVideoAsset, resolvePublishKind };
