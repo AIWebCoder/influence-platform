@@ -62,7 +62,7 @@ class ContentService:
         if not packet:
             packet = ContentPacket(
                 type=str(payload.get("content_type") or payload.get("type") or "reel"),
-                status="ready",
+                status="pending",
                 metadata_json={"generation_job_id": job_id},
             )
             self.db.add(packet)
@@ -85,7 +85,8 @@ class ContentService:
                 packet.scheduled_at = datetime.fromisoformat(str(scheduled_raw).replace("Z", "+00:00"))
             except ValueError:
                 pass
-        packet.status = "ready"
+        # content_packets.status CHECK allows pending|queued|publishing|published|failed|cancelled only.
+        packet.status = "pending"
         meta = dict(packet.metadata_json or {})
         meta["generation_job_id"] = job_id
         meta["output_url"] = job.output_url
