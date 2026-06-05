@@ -179,14 +179,39 @@ type GeneratedAsset = {
 
 const NICHE_OPTIONS = ["fitness", "food", "travel", "business", "lifestyle"] as const;
 
-function topicPlaceholderForNiche(
-  niche: string,
-  tp: Record<(typeof NICHE_OPTIONS)[number], string> & { egPrefix: string }
-): string {
+type NicheRow = {
+  id: string;
+  name: string;
+  topic_examples?: string[];
+};
+
+type TopicPlaceholderMap = Record<(typeof NICHE_OPTIONS)[number], string> & { egPrefix: string };
+
+function fallbackTopicPool(niche: string, tp: TopicPlaceholderMap): string[] {
   const key = NICHE_OPTIONS.includes(niche as (typeof NICHE_OPTIONS)[number])
     ? (niche as (typeof NICHE_OPTIONS)[number])
     : "lifestyle";
-  return tp[key];
+  const raw = tp[key].replace(new RegExp(`^${tp.egPrefix}`, "i"), "").trim();
+  return raw ? [raw] : [];
+}
+
+function stripTopicPlaceholderPrefix(text: string, egPrefix: string): string {
+  const escaped = egPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const stripped = text.replace(new RegExp(`^${escaped}`, "i"), "").trim();
+  return stripped || text.trim();
+}
+
+const SPARKLES_INTRO_SESSION_KEY = "influence-gs-sparkles-intro";
+
+function topicPoolForNiche(niche: string, dbNiches: NicheRow[], tp: TopicPlaceholderMap): string[] {
+  const row = dbNiches.find((n) => n.name === niche);
+  const fromDb = (row?.topic_examples ?? [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  if (fromDb.length > 0) {
+    return fromDb;
+  }
+  return fallbackTopicPool(niche, tp);
 }
 
 function statusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
@@ -394,6 +419,13 @@ function GenerationStudioPageInner() {
   const [niche, setNiche] = useState<string>("fitness");
   const [templateId, setTemplateId] = useState<string>("");
   const [topic, setTopic] = useState("");
+  const [aiTopics, setAiTopics] = useState<string[]>([]);
+  const [aiTopicsLoaded, setAiTopicsLoaded] = useState(false);
+  const [aiTopicsIndex, setAiTopicsIndex] = useState(0);
+  const [aiTopicsExhausted, setAiTopicsExhausted] = useState(false);
+  const [isLoadingTopics, setIsLoadingTopics] = useState(false);
+  const [sparklesPulse, setSparklesPulse] = useState(false);
+  const [sparklesIntroPending, setSparklesIntroPending] = useState(true);
   const [schedule, setSchedule] = useState<Date | undefined>(undefined);
   const [pipelineTargetAccountId, setPipelineTargetAccountId] = useState("");
   const [draftScenes, setDraftScenes] = useState<DraftScene[]>([]);
@@ -501,7 +533,7 @@ function GenerationStudioPageInner() {
     () => ({
       launchGeneration: isPhotoMode ? ctrl.launchGenerationPhoto : ctrl.launchGeneration,
       description: isPhotoMode ? ctrl.descriptionPhoto : ctrl.description,
-      sectionFormat: isPhotoMode ? ctrl.sectionFormatPhoto : ctrl.sectionFormat,
+      sectionPreview: isPhotoMode ? ctrl.sectionPreviewPhoto : ctrl.sectionPreview,
       publicationLocked: isPhotoMode ? wf.publicationLockedPhoto : wf.publicationLocked,
       publicationLockedDetail: isPhotoMode
         ? wf.publicationLockedDetailPhoto
@@ -515,7 +547,7 @@ function GenerationStudioPageInner() {
     [isPhotoMode, ctrl, wf, live]
   );
 
-  const { data: dbNiches = [] } = useSWR<Array<{ id: string; name: string }>>(
+  const { data: dbNiches = [] } = useSWR<NicheRow[]>(
     "content-niches",
     () => api.content.getNiches(),
     { revalidateOnFocus: false }
@@ -547,6 +579,32 @@ function GenerationStudioPageInner() {
   useEffect(() => {
     setTemplateId("");
   }, [niche]);
+
+  const resetAiTopicCache = useCallback(() => {
+    setAiTopics([]);
+    setAiTopicsLoaded(false);
+    setAiTopicsIndex(0);
+    setAiTopicsExhausted(false);
+  }, []);
+
+  useEffect(() => {
+    resetAiTopicCache();
+  }, [niche, contentType, executionMode, resetAiTopicCache]);
+
+  const handleNicheChange = useCallback(
+    (value: string) => {
+      if (value !== niche && topic.trim()) {
+        toast(toastMsg.nicheChangeTopicHint);
+      }
+      setNiche(value);
+    },
+    [niche, topic, toastMsg.nicheChangeTopicHint]
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setSparklesIntroPending(sessionStorage.getItem(SPARKLES_INTRO_SESSION_KEY) !== "1");
+  }, []);
 
   const { data: accountChoices = [] } = useSWR<Array<{ id: string; username: string }>>(
     "distribution-accounts",
@@ -1066,15 +1124,179 @@ function GenerationStudioPageInner() {
   const logs = job?.logs ?? [];
   const maxDur = Math.max(1, ...sortedScenes.map((s) => s.duration || 1));
 
-  const topicPlaceholder = useMemo(
-    () => topicPlaceholderForNiche(niche, gs.topicPlaceholders),
-    [niche, gs.topicPlaceholders]
+  const topicPool = useMemo(
+    () => topicPoolForNiche(niche, dbNiches, gs.topicPlaceholders),
+    [niche, dbNiches, gs.topicPlaceholders]
   );
 
-  const topicSuggestion = useMemo(
-    () => topicPlaceholder.replace(new RegExp(`^${gs.topicPlaceholders.egPrefix}`, "i"), "").trim(),
+  const topicPlaceholder = useMemo(() => {
+    if (topicPool.length === 0) {
+      return gs.topicPlaceholders.lifestyle;
+    }
+    const item = topicPool[0];
+    return `${gs.topicPlaceholders.egPrefix}${item}`;
+  }, [topicPool, gs.topicPlaceholders]);
+
+  const placeholderTopicText = useMemo(
+    () => stripTopicPlaceholderPrefix(topicPlaceholder, gs.topicPlaceholders.egPrefix),
     [topicPlaceholder, gs.topicPlaceholders.egPrefix]
   );
+
+  const configSummaryLine = useMemo(() => {
+    const topicBit = topic.trim()
+      ? topic.trim().length > 40
+        ? `${topic.trim().slice(0, 40)}…`
+        : topic.trim()
+      : ctrl.configSummaryNoTopic;
+    const medium = outputMedium === "photo" ? ctrl.outputPhoto : ctrl.outputVideo;
+    const formatLabel =
+      contentType === "reel"
+        ? gs.publish.reel
+        : contentType === "story"
+          ? gs.publish.story
+          : gs.publish.post;
+    const parts = [niche, medium, formatLabel];
+    if (outputMedium === "video" && executionMode !== "ailiveai_single_video") {
+      parts.push(mode === "faceless" ? ctrl.faceless : ctrl.onCamera);
+    }
+    if (
+      outputMedium === "video" &&
+      (executionMode === "multi_scene_single_video" || executionMode === "ailiveai_single_video")
+    ) {
+      parts.push(t("generationStudio.controls.durSeconds", { n: videoDuration }));
+    }
+    return `${topicBit} · ${parts.join(" · ")}`;
+  }, [
+    topic,
+    ctrl.configSummaryNoTopic,
+    ctrl.outputPhoto,
+    ctrl.outputVideo,
+    ctrl.faceless,
+    ctrl.onCamera,
+    outputMedium,
+    contentType,
+    gs.publish.reel,
+    gs.publish.story,
+    gs.publish.post,
+    niche,
+    executionMode,
+    mode,
+    videoDuration,
+    t,
+  ]);
+
+  const sparklesTooltipText = useMemo(() => {
+    if (sparklesIntroPending) return ctrl.sparklesTooltipIntro;
+    if (aiTopicsExhausted) return ctrl.sparklesTooltipExhausted;
+    if (aiTopicsLoaded) return ctrl.sparklesTooltipLoaded;
+    return ctrl.sparklesTooltipIntro;
+  }, [
+    sparklesIntroPending,
+    aiTopicsExhausted,
+    aiTopicsLoaded,
+    ctrl.sparklesTooltipIntro,
+    ctrl.sparklesTooltipLoaded,
+    ctrl.sparklesTooltipExhausted,
+  ]);
+
+  const sparklesAriaLabel = useMemo(() => {
+    if (aiTopicsExhausted) return ctrl.sparklesAriaExhausted;
+    if (aiTopicsLoaded && aiTopics.length > 0) {
+      return t("generationStudio.controls.sparklesAriaCycle", {
+        index: aiTopicsIndex + 1,
+        total: aiTopics.length,
+      });
+    }
+    return ctrl.sparklesAriaInitial;
+  }, [
+    aiTopicsExhausted,
+    aiTopicsLoaded,
+    aiTopics.length,
+    aiTopicsIndex,
+    ctrl.sparklesAriaExhausted,
+    ctrl.sparklesAriaInitial,
+    t,
+  ]);
+
+  const fetchAiTopicSuggestions = useCallback(async (): Promise<boolean> => {
+    setIsLoadingTopics(true);
+    try {
+      const res = await api.generationJobs.suggestTopics({
+        niche,
+        content_type: contentType,
+        execution_mode: executionMode,
+        locale,
+        count: 5,
+      });
+      const topics = (res.topics ?? []).map((item) => String(item || "").trim()).filter(Boolean).slice(0, 5);
+      if (topics.length === 0) {
+        toast.error(toastMsg.topicSuggestionsEmpty);
+        setAiTopicsLoaded(false);
+        setAiTopics([]);
+        return false;
+      }
+      setAiTopics(topics);
+      setAiTopicsLoaded(true);
+      setAiTopicsIndex(0);
+      setAiTopicsExhausted(false);
+      return true;
+    } catch (e: unknown) {
+      toast.error(parseApiError(e, toastMsg.topicSuggestionsError));
+      setAiTopicsLoaded(false);
+      setAiTopics([]);
+      return false;
+    } finally {
+      setIsLoadingTopics(false);
+    }
+  }, [
+    niche,
+    contentType,
+    executionMode,
+    locale,
+    toastMsg.topicSuggestionsEmpty,
+    toastMsg.topicSuggestionsError,
+    parseApiError,
+  ]);
+
+  const handleSparklesTopicClick = useCallback(async () => {
+    if (isLoadingTopics) return;
+
+    if (!aiTopicsLoaded || aiTopics.length === 0) {
+      const inputEmpty = !topic.trim();
+      if (inputEmpty && placeholderTopicText) {
+        setTopic(placeholderTopicText);
+      } else if (!inputEmpty) {
+        setSparklesPulse(true);
+        window.setTimeout(() => setSparklesPulse(false), 650);
+      }
+      await fetchAiTopicSuggestions();
+      return;
+    }
+
+    const suggestion = aiTopics[aiTopicsIndex];
+    if (suggestion) {
+      setTopic(suggestion);
+    }
+    const nextIndex = (aiTopicsIndex + 1) % aiTopics.length;
+    if (nextIndex === 0 && aiTopicsIndex === aiTopics.length - 1) {
+      setAiTopicsExhausted(true);
+    }
+    setAiTopicsIndex(nextIndex);
+  }, [
+    aiTopics,
+    aiTopicsIndex,
+    aiTopicsLoaded,
+    fetchAiTopicSuggestions,
+    isLoadingTopics,
+    placeholderTopicText,
+    topic,
+  ]);
+
+  const markSparklesIntroSeen = useCallback(() => {
+    if (typeof window === "undefined" || !sparklesIntroPending) return;
+    sessionStorage.setItem(SPARKLES_INTRO_SESSION_KEY, "1");
+    setSparklesIntroPending(false);
+  }, [sparklesIntroPending]);
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -1145,11 +1367,27 @@ function GenerationStudioPageInner() {
             <CardHeader className="shrink-0 pb-3">
               <CardTitle className="text-base">{ctrl.title}</CardTitle>
               <CardDescription>{studioMediaCopy.description}</CardDescription>
+              <p className="text-xs leading-snug text-muted-foreground">{configSummaryLine}</p>
             </CardHeader>
             <CardContent className="flex min-h-0 flex-1 flex-col gap-0 p-0">
               <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 pb-4">
                 <section className="space-y-3">
-                  <ControlSectionTitle>{ctrl.sectionCreate}</ControlSectionTitle>
+                  <ControlSectionTitle>{ctrl.sectionBrief}</ControlSectionTitle>
+                  <div className="space-y-2">
+                    <Label>{ctrl.niche}</Label>
+                    <Select value={niche} onValueChange={handleNicheChange}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {nicheOptions.map((n) => (
+                          <SelectItem key={n} value={n}>
+                            {n}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <div className="space-y-2">
                     <div className="flex items-center gap-1.5">
                       <Label htmlFor="gs-topic">{ctrl.topic}</Label>
@@ -1164,22 +1402,50 @@ function GenerationStudioPageInner() {
                         className="pr-10"
                         aria-describedby="topic-suggestion-hint"
                       />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute right-0.5 top-1/2 h-8 w-8 shrink-0 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                        title={t("generationStudio.controls.useSuggestion", { suggestion: topicSuggestion })}
-                        aria-label={ctrl.fillTopicSuggestion}
-                        onClick={() => setTopic(topicSuggestion)}
-                      >
-                        <Sparkles className="h-4 w-4" />
-                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="absolute right-0.5 top-1/2 h-8 w-8 shrink-0 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            aria-label={sparklesAriaLabel}
+                            disabled={isLoadingTopics}
+                            onPointerEnter={markSparklesIntroSeen}
+                            onFocus={markSparklesIntroSeen}
+                            onClick={() => void handleSparklesTopicClick()}
+                          >
+                            {isLoadingTopics ? (
+                              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                            ) : (
+                              <Sparkles
+                                className={cn("h-4 w-4", sparklesPulse && "animate-pulse text-primary")}
+                                aria-hidden
+                              />
+                            )}
+                            {aiTopicsExhausted && !isLoadingTopics ? (
+                              <span
+                                className="pointer-events-none absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-muted text-[8px] leading-none text-muted-foreground ring-1 ring-border"
+                                aria-hidden
+                              >
+                                ↻
+                              </span>
+                            ) : null}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs text-xs">
+                          {sparklesTooltipText}
+                        </TooltipContent>
+                      </Tooltip>
                     </div>
                     <p id="topic-suggestion-hint" className="sr-only">
                       {ctrl.topicHintSr}
                     </p>
                   </div>
+                </section>
+
+                <section className="space-y-3">
+                  <ControlSectionTitle>{studioMediaCopy.sectionPreview}</ControlSectionTitle>
                   <div className="space-y-2">
                     <Label>{ctrl.outputMedium}</Label>
                     <Select
@@ -1196,22 +1462,61 @@ function GenerationStudioPageInner() {
                       </SelectContent>
                     </Select>
                   </div>
-                  {outputMedium === "video" ? (
-                  <div className="space-y-2">
-                    <Label>{ctrl.executionMode}</Label>
-                    <Select value={executionMode} onValueChange={(v) => setExecutionMode(v as ExecutionMode)}>
+                  <div className="min-w-0 space-y-2">
+                    <Label>{ctrl.contentType}</Label>
+                    <Select
+                      value={contentType}
+                      onValueChange={(v) => setContentType(v as ContentType)}
+                      disabled={outputMedium === "photo"}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="multi_scene_single_video">{ctrl.execMultiSeedance}</SelectItem>
-                        <SelectItem value="ailiveai_single_video">{ctrl.execAiliveai}</SelectItem>
-                        {SCENE_BASED_EXECUTION_UI_ENABLED ? (
-                          <SelectItem value="scene_based">{ctrl.execSceneKie}</SelectItem>
+                        <SelectItem value="post">{gs.publish.post}</SelectItem>
+                        {outputMedium === "video" ? (
+                          <>
+                            <SelectItem value="reel">{gs.publish.reel}</SelectItem>
+                            <SelectItem value="story">{gs.publish.story}</SelectItem>
+                          </>
                         ) : null}
                       </SelectContent>
                     </Select>
                   </div>
+                  {outputMedium === "video" && executionMode !== "ailiveai_single_video" ? (
+                    <div className="min-w-0 space-y-2">
+                      <Label>{ctrl.presence}</Label>
+                      <Select value={mode} onValueChange={(v) => setMode(v as Mode)}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="persona">{ctrl.onCamera}</SelectItem>
+                          <SelectItem value="faceless">{ctrl.faceless}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
+                </section>
+
+                <section className="space-y-3">
+                  <ControlSectionTitle>{ctrl.sectionProduction}</ControlSectionTitle>
+                  {outputMedium === "video" ? (
+                    <div className="space-y-2">
+                      <Label>{ctrl.executionMode}</Label>
+                      <Select value={executionMode} onValueChange={(v) => setExecutionMode(v as ExecutionMode)}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="multi_scene_single_video">{ctrl.execMultiSeedance}</SelectItem>
+                          <SelectItem value="ailiveai_single_video">{ctrl.execAiliveai}</SelectItem>
+                          {SCENE_BASED_EXECUTION_UI_ENABLED ? (
+                            <SelectItem value="scene_based">{ctrl.execSceneKie}</SelectItem>
+                          ) : null}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   ) : (
                     <p className="text-sm text-muted-foreground">{ctrl.execSingleImage}</p>
                   )}
@@ -1275,62 +1580,6 @@ function GenerationStudioPageInner() {
                       </Select>
                     </div>
                   ) : null}
-                </section>
-
-                <section className="space-y-3">
-                  <ControlSectionTitle>{studioMediaCopy.sectionFormat}</ControlSectionTitle>
-                  <div className={cn("grid gap-3", outputMedium === "photo" || executionMode === "ailiveai_single_video" ? "grid-cols-1" : "grid-cols-2")}>
-                    <div className="space-y-2">
-                      <Label>{ctrl.contentType}</Label>
-                      <Select
-                        value={contentType}
-                        onValueChange={(v) => setContentType(v as ContentType)}
-                        disabled={outputMedium === "photo"}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="post">{gs.publish.post}</SelectItem>
-                          {outputMedium === "video" ? (
-                            <>
-                              <SelectItem value="reel">{gs.publish.reel}</SelectItem>
-                              <SelectItem value="story">{gs.publish.story}</SelectItem>
-                            </>
-                          ) : null}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    {outputMedium === "video" && executionMode !== "ailiveai_single_video" ? (
-                      <div className="space-y-2">
-                        <Label>{ctrl.presence}</Label>
-                        <Select value={mode} onValueChange={(v) => setMode(v as Mode)}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="persona">{ctrl.onCamera}</SelectItem>
-                            <SelectItem value="faceless">{ctrl.faceless}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{ctrl.niche}</Label>
-                    <Select value={niche} onValueChange={setNiche}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {nicheOptions.map((n) => (
-                          <SelectItem key={n} value={n}>
-                            {n}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
                 </section>
 
                 <section className="space-y-2">

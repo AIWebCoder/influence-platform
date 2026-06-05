@@ -16,6 +16,7 @@ class NicheBase(BaseModel):
     description: Optional[str] = None
     hashtags: list[str] = []
     posting_times: list[int] = []
+    topic_examples: list[str] = Field(default_factory=list, max_length=20)
 
 
 class NicheCreate(NicheBase):
@@ -27,6 +28,7 @@ class NicheUpdate(BaseModel):
     description: Optional[str] = None
     hashtags: Optional[list[str]] = None
     posting_times: Optional[list[int]] = None
+    topic_examples: Optional[list[str]] = None
 
 
 class NicheResponse(NicheBase):
@@ -60,6 +62,7 @@ async def create_niche(body: NicheCreate, db: AsyncSession = Depends(get_db)):
         description=body.description,
         hashtags=body.hashtags,
         posting_times=body.posting_times,
+        topic_examples=body.topic_examples,
     )
 
 

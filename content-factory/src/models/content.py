@@ -15,6 +15,7 @@ class Niche(Base):
     description = Column(Text)
     hashtags = Column(JSONB, default=list)
     posting_times = Column(JSONB, default=list)
+    topic_examples = Column(JSONB, default=list)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
     templates = relationship("Template", back_populates="niche")

@@ -508,6 +508,7 @@ export const api = {
           description?: string | null;
           hashtags: string[];
           posting_times: number[];
+          topic_examples?: string[];
         }>;
       }
       return [];
@@ -986,6 +987,16 @@ export const api = {
         duration: number;
         role?: string;
       }>;
+    },
+    suggestTopics: async (data: {
+      niche: string;
+      content_type?: string;
+      execution_mode?: 'scene_based' | 'multi_scene_single_video' | 'ailiveai_single_video' | 'single_image';
+      locale?: string;
+      count?: number;
+    }) => {
+      const response = await contentClientLongTimeout.post('/generation-jobs/topic-suggestions', data);
+      return response.data as { topics: string[] };
     },
     retryStep: async (jobId: string, step_name: string) => {
       const response = await contentClient.post(`/generation-jobs/${jobId}/retry-step`, { step_name });

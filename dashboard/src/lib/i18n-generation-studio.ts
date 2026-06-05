@@ -25,7 +25,7 @@ export const generationStudioI18n = {
         publish: "Publier",
       },
       stepHints: {
-        configure: "Sujet, format et options de génération",
+        configure: "Niche, sujet, format et options de production",
         generate: "Lancement et suivi de la génération vidéo",
         generatePhoto: "Lancement et suivi de la génération photo",
         review: "Aperçu de la vidéo et du script",
@@ -163,6 +163,10 @@ export const generationStudioI18n = {
       title: "Configuration",
       description: "Définissez le contenu avant de générer la vidéo.",
       descriptionPhoto: "Définissez le contenu avant de générer la photo.",
+      sectionBrief: "Brief",
+      sectionPreview: "Aperçu du rendu",
+      sectionPreviewPhoto: "Aperçu du rendu",
+      sectionProduction: "Production",
       sectionCreate: "Contenu",
       sectionFormat: "Format vidéo",
       sectionFormatPhoto: "Format photo",
@@ -205,9 +209,15 @@ export const generationStudioI18n = {
       aliveaiGenderDisabled:
         "Choisissez Bolt comme moteur de génération pour activer ce champ.",
       topic: "Sujet",
-      useSuggestion: "Utiliser la suggestion : {suggestion}",
-      fillTopicSuggestion: "Remplir le sujet avec l'exemple de la niche",
-      topicHintSr: "Le bouton étincelles insère l'exemple pour la niche sélectionnée.",
+      configSummaryNoTopic: "Sans sujet",
+      sparklesTooltipIntro: "1er clic : exemple · clics suivants : idées IA",
+      sparklesTooltipLoaded: "Idées chargées — cliquez pour cycler",
+      sparklesTooltipExhausted: "Toutes les idées vues · cliquez pour recommencer",
+      sparklesAriaInitial: "Insérer un exemple et charger les suggestions IA",
+      sparklesAriaCycle: "Suggestion IA {index} sur {total} — cliquer pour suivante",
+      sparklesAriaExhausted: "Toutes les suggestions vues — cliquer pour recommencer",
+      topicHintSr:
+        "Le bouton étincelles insère un exemple au premier clic, charge cinq idées IA, puis les fait défiler à chaque clic suivant.",
       accounts: "Comptes",
       schedule: "Planification",
       previewScenes: "Aperçu du storyboard",
@@ -335,6 +345,8 @@ export const generationStudioI18n = {
     },
     toasts: {
       topicRequired: "Ajoutez un sujet pour l'exécution.",
+      nicheChangeTopicHint:
+        "Niche modifiée — placeholder et idées IA mis à jour. Vérifiez que le sujet correspond encore.",
       previewReady: "Aperçu de scènes prêt (non enregistré comme job).",
       previewError: "Aperçu échoué. Vérifiez les clés API texte sur Content Factory.",
       topicAccountsRequired: "Sujet et au moins un compte requis.",
@@ -366,6 +378,8 @@ export const generationStudioI18n = {
       jobAbandoned: "Job abandonné.",
       abandonError: "Impossible d'abandonner le job.",
       abandonRunningError: "Le job tourne encore — annulez-le d'abord.",
+      topicSuggestionsEmpty: "Aucune suggestion reçue du modèle.",
+      topicSuggestionsError: "Impossible de charger les idées IA.",
     },
   },
   en: {
@@ -393,7 +407,7 @@ export const generationStudioI18n = {
         publish: "Publish",
       },
       stepHints: {
-        configure: "Topic, format, and generation options",
+        configure: "Niche, topic, format, and production options",
         generate: "Launch and track video generation",
         generatePhoto: "Launch and track photo generation",
         review: "Preview the video and script",
@@ -531,6 +545,10 @@ export const generationStudioI18n = {
       title: "Setup",
       description: "Define your content before generating the video.",
       descriptionPhoto: "Define your content before generating the photo.",
+      sectionBrief: "Brief",
+      sectionPreview: "Output preview",
+      sectionPreviewPhoto: "Output preview",
+      sectionProduction: "Production",
       sectionCreate: "Content",
       sectionFormat: "Video format",
       sectionFormatPhoto: "Photo format",
@@ -573,9 +591,15 @@ export const generationStudioI18n = {
       aliveaiGenderDisabled:
         "Choose Bolt as the generation engine to enable this field.",
       topic: "Topic",
-      useSuggestion: "Use suggestion: {suggestion}",
-      fillTopicSuggestion: "Fill topic with placeholder suggestion",
-      topicHintSr: "Sparkles button inserts the example topic for the selected niche.",
+      configSummaryNoTopic: "No topic yet",
+      sparklesTooltipIntro: "First click: example · next clicks: AI ideas",
+      sparklesTooltipLoaded: "Ideas loaded — click to cycle",
+      sparklesTooltipExhausted: "All ideas seen · click to start over",
+      sparklesAriaInitial: "Insert an example and load AI suggestions",
+      sparklesAriaCycle: "AI suggestion {index} of {total} — click for next",
+      sparklesAriaExhausted: "All suggestions seen — click to start over",
+      topicHintSr:
+        "The sparkles button inserts an example on first click, loads five AI ideas, then cycles them on each later click.",
       accounts: "Accounts",
       schedule: "Schedule",
       previewScenes: "Preview storyboard",
@@ -702,6 +726,8 @@ export const generationStudioI18n = {
     },
     toasts: {
       topicRequired: "Add a topic for the run.",
+      nicheChangeTopicHint:
+        "Niche changed — placeholder and AI ideas updated. Check that your topic still fits.",
       previewReady: "Scene preview ready (not saved as a job).",
       previewError: "Preview failed. Check text provider API keys on Content Factory.",
       topicAccountsRequired: "Topic and at least one account are required.",
@@ -733,6 +759,8 @@ export const generationStudioI18n = {
       jobAbandoned: "Job abandoned.",
       abandonError: "Could not abandon job.",
       abandonRunningError: "Job is still running — cancel it first.",
+      topicSuggestionsEmpty: "No suggestions returned from the model.",
+      topicSuggestionsError: "Could not load AI topic ideas.",
     },
   },
 } as const;

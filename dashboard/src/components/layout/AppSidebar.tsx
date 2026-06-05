@@ -62,12 +62,18 @@ type NavItem = {
   href: string;
   icon: React.ElementType;
   comingSoon?: boolean;
+  secondary?: boolean;
 };
 
 type NavGroup = {
   label: string;
   items: NavItem[];
 };
+
+const SECONDARY_NAV_HREFS = new Set(["/proxies", "/emulators"]);
+
+const NAV_MENU_BUTTON_CLASS =
+  "sidebar-nav-menu-button h-auto min-h-11 gap-2 px-3 py-2.5 !overflow-visible hover:!bg-transparent data-[active=true]:!shadow-none";
 
 function navItemTitle(item: NavItem, comingSoonHint: string) {
   if (item.comingSoon) {
@@ -126,7 +132,7 @@ export function AppSidebar() {
       items: [
         { name: text.nav.personas, href: "/personas", icon: ShieldCheck },
         { name: text.nav.accounts, href: "/accounts", icon: Users },
-        { name: text.nav.proxies, href: "/proxies", icon: Network },
+        { name: text.nav.proxies, href: "/proxies", icon: Network, secondary: true },
         { name: text.nav.generationStudio, href: "/generation-studio", icon: Clapperboard },
         { name: text.nav.templates, href: "/templates", icon: FileText },
         { name: text.nav.calendar, href: "/calendar", icon: CalendarDays },
@@ -134,7 +140,7 @@ export function AppSidebar() {
         { name: text.nav.publications, href: "/publications", icon: BookOpen },
         { name: text.nav.engagement, href: "/engagement", icon: MessageCircle },
         { name: text.nav.campaigns, href: "/campaigns", icon: Activity },
-        ...(isAdmin ? [{ name: text.nav.emulators, href: "/emulators", icon: Smartphone }] : []),
+        ...(isAdmin ? [{ name: text.nav.emulators, href: "/emulators", icon: Smartphone, secondary: true }] : []),
       ],
     },
     {
@@ -186,15 +192,16 @@ export function AppSidebar() {
         </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarContent className="gap-0 px-0">
+      <SidebarContent className="sidebar-nav-scroll gap-0 px-0">
         {navGroups.map((group, gi) => (
           <SidebarGroup key={group.label} className={cn(gi > 0 && "border-t border-sidebar-border pt-2")}>
-            <SidebarGroupLabel className="px-4">{group.label}</SidebarGroupLabel>
+            <SidebarGroupLabel className="sidebar-nav-group-label px-4">{group.label}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {group.items.map((item) => {
                   const isActive = pathname === item.href;
                   const isDisabled = Boolean(item.comingSoon);
+                  const isSecondary = item.secondary ?? SECONDARY_NAV_HREFS.has(item.href);
                   const tip = navItemTitle(item, comingSoonHint);
                   return (
                     <SidebarMenuItem key={item.href}>
@@ -202,7 +209,7 @@ export function AppSidebar() {
                         asChild
                         isActive={isActive && !isDisabled}
                         tooltip={tip}
-                        className="h-auto min-h-10 gap-2 px-3 py-2"
+                        className={NAV_MENU_BUTTON_CLASS}
                         aria-disabled={isDisabled}
                       >
                         <Link
@@ -212,12 +219,15 @@ export function AppSidebar() {
                           className={cn(isDisabled && "cursor-not-allowed opacity-60")}
                         >
                           <item.icon className="size-4 shrink-0" />
-                          <div className="grid min-w-0 flex-1 gap-0.5 text-left group-data-[collapsible=icon]:hidden">
-                            <span className="truncate font-medium leading-none">{item.name}</span>
-                            <span className="truncate text-xs text-sidebar-foreground/65 leading-tight">
-                              {item.comingSoon ? text.sidebar.comingSoonHint : group.label}
-                            </span>
-                          </div>
+                          <span
+                            className={cn(
+                              "min-w-0 flex-1 truncate font-medium leading-normal group-data-[collapsible=icon]:hidden",
+                              isActive && !isDisabled && "font-semibold",
+                              !isActive && isSecondary && "sidebar-nav-label-secondary",
+                            )}
+                          >
+                            {item.name}
+                          </span>
                         </Link>
                       </SidebarMenuButton>
                     </SidebarMenuItem>

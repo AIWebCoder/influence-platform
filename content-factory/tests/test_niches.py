@@ -33,14 +33,17 @@ async def test_create_and_delete_niche(ac: AsyncClient):
             "description": "Phase 2 test niche",
             "hashtags": ["#phase2"],
             "posting_times": [9, 18],
+            "topic_examples": ["example topic one", "example topic two"],
         },
     )
     assert create.status_code == 201
     niche_id = create.json()["id"]
+    assert create.json()["topic_examples"] == ["example topic one", "example topic two"]
 
     get_one = await ac.get(f"/niches/{niche_id}")
     assert get_one.status_code == 200
     assert get_one.json()["name"] == name
+    assert get_one.json()["topic_examples"] == ["example topic one", "example topic two"]
 
     delete = await ac.delete(f"/niches/{niche_id}")
     assert delete.status_code == 204
