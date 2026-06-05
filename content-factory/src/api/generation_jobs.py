@@ -31,6 +31,10 @@ router = APIRouter()
 publish_router = APIRouter()
 logger = logging.getLogger(__name__)
 
+VALID_EXECUTION_MODES = frozenset(
+    {"scene_based", "multi_scene_single_video", "ailiveai_single_video", "single_image"}
+)
+
 
 class PreviewScenesBody(BaseModel):
     content_type: str = "reel"
@@ -126,7 +130,7 @@ async def preview_scenes(body: PreviewScenesBody, request: Request):
     model_svc = AnthropicService() if use_anthropic else GeminiService()
     exec_mode = (body.execution_mode or "").strip()
     ailive_scene = exec_mode == "ailiveai_single_video"
-    if exec_mode == "ailiveai_single_video":
+    if exec_mode in ("ailiveai_single_video", "multi_scene_single_video", "single_image"):
         n = 1
     elif body.scene_count is not None:
         n = int(body.scene_count)
@@ -285,7 +289,7 @@ async def simulate_queue_entry(body: SimulateQueueBody, db: AsyncSession = Depen
                 )
             job = await svc.complete_as_simulated_queue_entry(job, video_url=video_url)
         else:
-            if body.execution_mode not in ("scene_based", "multi_scene_single_video", "ailiveai_single_video"):
+            if body.execution_mode not in VALID_EXECUTION_MODES:
                 raise HTTPException(status_code=400, detail="Invalid execution_mode")
             payload = body.model_dump(exclude={"job_id"}, exclude_none=True)
             raw_targets = payload.pop("target_accounts", []) or []
@@ -320,7 +324,11 @@ async def simulate_queue_entry(body: SimulateQueueBody, db: AsyncSession = Depen
 class GenerationJobCreateRequest(BaseModel):
     execution_mode: str = Field(
         default="scene_based",
-        description="scene_based | multi_scene_single_video | ailiveai_single_video",
+        description="scene_based | multi_scene_single_video | ailiveai_single_video | single_image",
+    )
+    output_medium: Optional[str] = Field(
+        default=None,
+        description="photo | video — informational; single_image jobs imply photo output.",
     )
     content_type: str = Field(default="reel", description="post | reel | story")
     mode: str = Field(default="faceless", description="persona | faceless")
@@ -628,12 +636,12 @@ def _compute_cost_estimate(job) -> dict[str, Any]:
             "resolution": "720p",
             "generate_audio": False,
             "estimate_note": (
-                f"One Seedance call (multi-scene narrative still = one {d}s output). "
+                f"One Seedance call ({d}s output). "
                 f"Estimate uses {per_sec:g} credits/s output duration; align SEEDANCE_ESTIMATE_CREDITS_PER_SECOND with Kie.ai."
             ),
             "breakdown": [
                 {
-                    "line": f"Seedance 2.0 — 720p, no audio (single {d}s video; scene count does not multiply cost)",
+                    "line": f"Seedance 2.0 — 720p, no audio (single {d}s video)",
                     "units": d,
                     "unit_credits": per_sec,
                     "subtotal": sub,
@@ -662,6 +670,24 @@ def _compute_cost_estimate(job) -> dict[str, Any]:
                     "units": d,
                     "unit_credits": per_sec,
                     "subtotal": sub,
+                },
+            ],
+        }
+
+    if execution_mode == "single_image":
+        img_c = float(settings.GENERATION_CREDITS_PER_IMAGE)
+        return {
+            "total_credits": round(img_c, 2),
+            "currency": "credits",
+            "model": "kie-image",
+            "provider": "api.kie.ai",
+            "estimate_note": "One Kie.ai image for Instagram feed photo.",
+            "breakdown": [
+                {
+                    "line": "Single feed photo (1 image)",
+                    "units": 1,
+                    "unit_credits": img_c,
+                    "subtotal": round(img_c, 2),
                 },
             ],
         }
@@ -1000,7 +1026,7 @@ async def create_generation_job(
     current_user: Optional[dict] = Depends(get_optional_current_user),
 ):
     try:
-        if body.execution_mode not in ("scene_based", "multi_scene_single_video", "ailiveai_single_video"):
+        if body.execution_mode not in VALID_EXECUTION_MODES:
             raise HTTPException(status_code=400, detail="Invalid execution_mode")
         body_effective = body
         if body.execution_mode == "ailiveai_single_video":
@@ -1014,6 +1040,12 @@ async def create_generation_job(
         payload = body_effective.model_dump(exclude_none=True)
         if body.execution_mode == "ailiveai_single_video":
             payload["mode"] = "persona"
+        if body.execution_mode == "multi_scene_single_video":
+            payload["scene_count"] = 1
+        if body.execution_mode == "single_image":
+            payload["scene_count"] = 1
+            payload["output_medium"] = "photo"
+            payload.setdefault("content_type", "post")
         raw_targets = payload.get("target_accounts") or []
         payload["target_accounts"] = (
             await _resolve_target_accounts(db, raw_targets) if raw_targets else []
@@ -1361,6 +1393,15 @@ async def create_publish_intent(job_id: str, body: PublishIntentCreateRequest, d
     return await _build_publish_intent_response(db, intent_id)
 
 
+@publish_router.get("/publication-intents/{intent_id}", response_model=PublishIntentCreateResponse)
+async def get_publish_intent(intent_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        iid = str(uuid.UUID(intent_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid intent id")
+    return await _build_publish_intent_response(db, iid)
+
+
 @publish_router.post("/publication-intents/{intent_id}/dispatch", response_model=PublishIntentDispatchResponse)
 async def dispatch_intent(intent_id: str, db: AsyncSession = Depends(get_db)):
     try:
@@ -1424,7 +1465,7 @@ async def launch_generation_job(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid job id")
     svc = GenerationJobService(db)
-    job = await svc.get_job(jid, with_children=False)
+    job = await svc.get_job(jid, with_children=True)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status in ("cancelling", "cancelled"):
@@ -1432,7 +1473,9 @@ async def launch_generation_job(
     if job.status not in ("draft", "ready"):
         raise HTTPException(status_code=400, detail="Job must be in draft or ready to launch")
     job.status = "running"
-    job.progress = max(job.progress or 0, 1)
+    from src.services.generation_progress import sync_job_progress
+
+    sync_job_progress(job)
     svc.touch(job)
     await db.commit()
     await db.refresh(job)

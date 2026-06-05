@@ -78,8 +78,8 @@ class GenerationJobService:
         res = await self.db.execute(stmt)
         return list(res.scalars().all())
 
-    # Intent statuses that mean publish was started or finished (hide from waiting list).
-    _PUBLISHED_INTENT_STATUSES = ("queued", "published", "partial_failed")
+    # Intent statuses that mean publish was started, finished, or failed (hide from waiting list).
+    _PUBLISHED_INTENT_STATUSES = ("queued", "published", "partial_failed", "failed")
 
     def _ready_to_publish_where_sql(self) -> str:
         published = ", ".join(f"'{s}'" for s in self._PUBLISHED_INTENT_STATUSES)

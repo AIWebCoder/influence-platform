@@ -19,11 +19,15 @@ import {
 import toast from "react-hot-toast";
 
 import { api, formatContentApiError } from "@/lib/api";
+import { canAbandonGenerationJob } from "@/lib/generation-job-actions";
+import { resolveJobProgressPresentation } from "@/lib/generation-job-progress";
 import { cn } from "@/lib/utils";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useLocale } from "@/components/i18n/LocaleProvider";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -56,14 +60,52 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const PIPELINE_TARGET_ACCOUNT_STORAGE_KEY = "generation-studio-pipeline-target-account-id";
 const QUEUE_PAGE_SIZE = 20;
+const ACTIVE_QUEUE_STATUSES = "draft,ready,pending,running,cancelling";
+
+type QueueTab = "ready" | "in_progress";
+
+function queueStatusLabel(
+  status: string,
+  labels: {
+    statusDraft: string;
+    statusReady: string;
+    statusPending: string;
+    statusRunning: string;
+    statusCancelling: string;
+  }
+): string {
+  switch (status) {
+    case "draft":
+      return labels.statusDraft;
+    case "ready":
+      return labels.statusReady;
+    case "pending":
+      return labels.statusPending;
+    case "running":
+      return labels.statusRunning;
+    case "cancelling":
+      return labels.statusCancelling;
+    default:
+      return status;
+  }
+}
+
+function statusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
+  if (status === "running" || status === "pending") return "secondary";
+  if (status === "failed") return "destructive";
+  if (status === "draft" || status === "ready") return "outline";
+  return "outline";
+}
 
 type PipelineJob = {
   id: string;
   status: string;
   progress: number;
+  execution_mode?: string;
   caption?: string | null;
   topic?: string | null;
   content_type?: string | null;
@@ -132,6 +174,27 @@ function jobAccountLabel(job: PipelineJob, accountUsernameById: Map<string, stri
 export default function PipelineWaitingListPage() {
   const { locale, text, t } = useLocale();
   const q = text.readyQueue;
+  const gsLive = text.generationStudio.liveJob;
+  const queueProgressLabels = {
+    phaseDraft: gsLive.phaseDraft,
+    phaseReady: gsLive.phaseReady,
+    phaseStarting: gsLive.phaseStarting,
+    phaseSceneGen: gsLive.phaseSceneGen,
+    phaseImages: gsLive.phaseImages,
+    phaseVideo: gsLive.phaseVideo,
+    phaseVideoMotion: gsLive.phaseVideoMotion,
+    phaseVideoBolt: gsLive.phaseVideoBolt,
+    phaseAssembly: gsLive.phaseAssembly,
+    phaseFinalizing: gsLive.phaseFinalizing,
+    phaseDone: gsLive.phaseDone,
+    phaseFailed: gsLive.phaseFailed,
+    phaseCancelled: gsLive.phaseCancelled,
+    phaseCancelling: gsLive.phaseCancelling,
+    scenesProgress: t("generationStudio.liveJob.scenesProgress"),
+    providerWait: gsLive.providerWait,
+    estimatedHint: gsLive.estimatedHint,
+    elapsed: gsLive.elapsed,
+  };
   const acc = text.generationStudio.accounts;
   const pub = text.generationStudio.publish;
   const [items, setItems] = useState<PipelineJob[]>([]);
@@ -148,7 +211,29 @@ export default function PipelineWaitingListPage() {
   const [captionGenLoading, setCaptionGenLoading] = useState(false);
   const [implicitAccountId, setImplicitAccountId] = useState("");
   const [accountFilter, setAccountFilter] = useState("all");
+  const [queueTab, setQueueTab] = useState<QueueTab>("ready");
+  const [abandonTarget, setAbandonTarget] = useState<PipelineJob | null>(null);
   const persistAccountsRef = useRef(false);
+
+  const {
+    data: activeJobs = [],
+    isLoading: activeLoading,
+    mutate: mutateActive,
+  } = useSWR<PipelineJob[]>(
+    "queue-active-jobs",
+    async () => {
+      const rows = await api.generationJobs.list({
+        status: ACTIVE_QUEUE_STATUSES,
+        limit: 50,
+      });
+      return rows as PipelineJob[];
+    },
+    {
+      refreshInterval: (latest) =>
+        latest?.some((j) => ["running", "pending", "cancelling"].includes(j.status)) ? 3000 : 0,
+      revalidateOnFocus: true,
+    }
+  );
 
   const { data: accountChoices = [] } = useSWR<Array<{ id: string; username: string }>>(
     "distribution-accounts-queue-publish",
@@ -340,6 +425,7 @@ export default function PipelineWaitingListPage() {
       toast.success(t("readyQueue.publishSuccess", { count: out?.dispatched_targets ?? 0 }));
       setPublishJob(null);
       await load();
+      await mutateActive();
     } catch (e: unknown) {
       const msg =
         e && typeof e === "object" && "response" in e
@@ -353,14 +439,17 @@ export default function PipelineWaitingListPage() {
     }
   };
 
-  const handleDelete = async (job: PipelineJob) => {
-    if (!confirm(q.deleteConfirm)) return;
+  const confirmAbandon = async () => {
+    if (!abandonTarget) return;
+    const job = abandonTarget;
     setBusyId(job.id);
     try {
       await api.generationJobs.delete(job.id);
       toast.success(q.deleted);
+      setAbandonTarget(null);
       const nextPage = items.length === 1 && page > 0 ? page - 1 : page;
       await load({ page: nextPage });
+      await mutateActive();
     } catch (e: unknown) {
       const msg =
         e && typeof e === "object" && "response" in e
@@ -383,14 +472,9 @@ export default function PipelineWaitingListPage() {
             {q.title}
           </h1>
           <p className="max-w-2xl text-sm text-muted-foreground">{q.subtitle}</p>
-          {!loading && total > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              {t("readyQueue.showingRange", { from: rangeFrom, to: rangeTo, total })}
-            </p>
-          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {accountFilters.length > 1 ? (
+          {queueTab === "ready" && accountFilters.length > 1 ? (
             <div className="flex items-center gap-2">
               <Label className="sr-only">{q.filterByAccount}</Label>
               <Select
@@ -424,6 +508,7 @@ export default function PipelineWaitingListPage() {
             onClick={() => {
               setLoading(true);
               void load();
+              void mutateActive();
             }}
             disabled={loading}
             aria-label="Refresh"
@@ -445,32 +530,175 @@ export default function PipelineWaitingListPage() {
         </Alert>
       ) : null}
 
-      {loading && items.length === 0 ? (
-        <div className="flex justify-center py-16">
-          <Loader2 className="size-8 animate-spin text-muted-foreground" />
-        </div>
-      ) : items.length === 0 ? (
-        <Card>
-          <CardContent className="py-12 text-center text-muted-foreground">
-            <p>{q.empty}</p>
-            <Button className="mt-4" asChild>
-              <Link href="/generation-studio" target="_blank" rel="noopener noreferrer">
-                {q.openStudio}
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-      ) : items.length === 0 && accountFilter !== "all" ? (
-        <Card>
-          <CardContent className="py-12 text-center text-muted-foreground">
-            <p>{q.filterEmpty}</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          <div className="grid gap-4">
-          <TooltipProvider delayDuration={300}>
-          {items.map((job) => {
+      <Tabs
+        value={queueTab}
+        onValueChange={(value) => setQueueTab(value as QueueTab)}
+        className="space-y-4"
+      >
+        <TabsList className="h-auto w-full flex-wrap justify-start gap-1 sm:w-auto">
+          <TabsTrigger value="ready" className="gap-2">
+            {q.tabReady}
+            {!loading ? (
+              <Badge variant="secondary" className="h-5 min-w-5 px-1.5 font-mono text-xs">
+                {total}
+              </Badge>
+            ) : null}
+          </TabsTrigger>
+          <TabsTrigger value="in_progress" className="gap-2">
+            {q.tabInProgress}
+            {!activeLoading ? (
+              <Badge variant="secondary" className="h-5 min-w-5 px-1.5 font-mono text-xs">
+                {activeJobs.length}
+              </Badge>
+            ) : null}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="in_progress" className="mt-0 space-y-3">
+            <p className="text-sm text-muted-foreground">{q.sectionInProgressHint}</p>
+            {activeLoading && activeJobs.length === 0 ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="size-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : activeJobs.length === 0 ? (
+              <Card>
+                <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                  <p>{q.inProgressEmpty}</p>
+                  <Button className="mt-4" size="sm" asChild>
+                    <Link href="/generation-studio">{q.openStudio}</Link>
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-3">
+                {activeJobs.map((job) => {
+                  const label =
+                    job.queue_display_title ||
+                    job.caption ||
+                    job.topic ||
+                    job.id.slice(0, 8);
+                  const accountLabel = jobAccountLabel(job, accountUsernameById);
+                  const showProgress = ["running", "pending", "cancelling"].includes(job.status);
+                  const progressView = showProgress
+                    ? resolveJobProgressPresentation(
+                        {
+                          status: job.status,
+                          progress: job.progress,
+                          execution_mode: job.execution_mode,
+                        },
+                        queueProgressLabels,
+                        locale
+                      )
+                    : null;
+                  return (
+                    <Card key={`active-${job.id}`}>
+                      <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0 space-y-2">
+                          <CardTitle className="text-base font-semibold leading-snug">{label}</CardTitle>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant={statusBadgeVariant(job.status)}>
+                              {queueStatusLabel(job.status, q)}
+                            </Badge>
+                            {accountLabel ? (
+                              <Badge variant="outline" className="font-normal">
+                                @{accountLabel}
+                              </Badge>
+                            ) : null}
+                            {job.niche ? (
+                              <Badge variant="outline" className="font-normal capitalize">
+                                {job.niche}
+                              </Badge>
+                            ) : null}
+                            <span className="text-xs text-muted-foreground">
+                              {formatWhen(job.updated_at, locale)}
+                            </span>
+                          </div>
+                          {progressView && progressView.barMode !== "none" ? (
+                            <div className="max-w-md space-y-1">
+                              <p className="text-xs font-medium text-foreground">{progressView.phaseLabel}</p>
+                              {progressView.barMode === "indeterminate" ? (
+                                <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                                  <div className="absolute inset-y-0 left-0 w-1/3 animate-[progress-indeterminate_1.4s_ease-in-out_infinite] rounded-full bg-primary" />
+                                </div>
+                              ) : (
+                                <Progress
+                                  value={progressView.barValue}
+                                  className="h-1.5 transition-all duration-500 ease-out"
+                                />
+                              )}
+                              {progressView.detailLine ? (
+                                <p className="text-[11px] text-muted-foreground">{progressView.detailLine}</p>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 flex-wrap items-center gap-2">
+                          <Button variant="outline" size="sm" asChild>
+                            <Link href={`/generation-studio?job=${encodeURIComponent(job.id)}`}>
+                              <ExternalLink className="mr-1.5 size-4" />
+                              {q.viewInStudio}
+                            </Link>
+                          </Button>
+                          {canAbandonGenerationJob(job.status) ? (
+                            <TooltipProvider delayDuration={300}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="border-destructive/50 text-destructive hover:bg-destructive/10"
+                                    disabled={busyId === job.id}
+                                    onClick={() => setAbandonTarget(job)}
+                                    aria-label={q.abandon}
+                                  >
+                                    {busyId === job.id ? (
+                                      <Loader2 className="size-4 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="size-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>{q.abandon}</TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          ) : null}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+        </TabsContent>
+
+        <TabsContent value="ready" className="mt-0 space-y-3">
+            {!loading && total > 0 ? (
+              <p className="text-xs text-muted-foreground">
+                {t("readyQueue.showingRange", { from: rangeFrom, to: rangeTo, total })}
+              </p>
+            ) : null}
+            {loading && items.length === 0 ? (
+              <div className="flex justify-center py-16">
+                <Loader2 className="size-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : items.length === 0 && accountFilter !== "all" ? (
+              <Card>
+                <CardContent className="py-12 text-center text-muted-foreground">
+                  <p>{q.filterEmpty}</p>
+                </CardContent>
+              </Card>
+            ) : items.length === 0 ? (
+              <Card>
+                <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                  <p>{q.empty}</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid gap-4">
+                  <TooltipProvider delayDuration={300}>
+                    {items.map((job) => {
             const busy = busyId === job.id;
             const preview = job.preview_url || job.output_url;
             const label =
@@ -587,8 +815,8 @@ export default function PipelineWaitingListPage() {
                                   size="icon"
                                   className="size-8"
                                   disabled={busy}
-                                  onClick={() => void handleDelete(job)}
-                                  aria-label={q.delete}
+                                  onClick={() => setAbandonTarget(job)}
+                                  aria-label={q.abandon}
                                 >
                                   {busy ? (
                                     <Loader2 className="size-4 animate-spin" />
@@ -597,7 +825,7 @@ export default function PipelineWaitingListPage() {
                                   )}
                                 </Button>
                               </TooltipTrigger>
-                              <TooltipContent>{q.delete}</TooltipContent>
+                              <TooltipContent>{q.abandon}</TooltipContent>
                             </Tooltip>
                           </div>
                           <Badge variant="secondary">{q.readyBadge}</Badge>
@@ -612,45 +840,47 @@ export default function PipelineWaitingListPage() {
           </TooltipProvider>
           </div>
 
-          {totalPages > 1 ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-              <p className="text-sm text-muted-foreground">
-                {t("readyQueue.pageOf", { page: page + 1, pages: totalPages })}
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={page <= 0 || loading}
-                  aria-label={q.previousPage}
-                  onClick={() => {
-                    setLoading(true);
-                    void load({ page: page - 1 });
-                  }}
-                >
-                  <ChevronLeft className="size-4" />
-                  {q.previousPage}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={page + 1 >= totalPages || loading}
-                  aria-label={q.nextPage}
-                  onClick={() => {
-                    setLoading(true);
-                    void load({ page: page + 1 });
-                  }}
-                >
-                  {q.nextPage}
-                  <ChevronRight className="size-4" />
-                </Button>
+                {totalPages > 1 ? (
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+                    <p className="text-sm text-muted-foreground">
+                      {t("readyQueue.pageOf", { page: page + 1, pages: totalPages })}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={page <= 0 || loading}
+                        aria-label={q.previousPage}
+                        onClick={() => {
+                          setLoading(true);
+                          void load({ page: page - 1 });
+                        }}
+                      >
+                        <ChevronLeft className="size-4" />
+                        {q.previousPage}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={page + 1 >= totalPages || loading}
+                        aria-label={q.nextPage}
+                        onClick={() => {
+                          setLoading(true);
+                          void load({ page: page + 1 });
+                        }}
+                      >
+                        {q.nextPage}
+                        <ChevronRight className="size-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
-            </div>
-          ) : null}
-        </div>
-      )}
+            )}
+        </TabsContent>
+      </Tabs>
 
       <Dialog
         open={publishJob !== null}
@@ -771,6 +1001,19 @@ export default function PipelineWaitingListPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={abandonTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && busyId !== abandonTarget?.id) setAbandonTarget(null);
+        }}
+        title={q.abandonDialogTitle}
+        description={q.abandonConfirm}
+        deleteLabel={q.delete}
+        cancelLabel={q.cancel}
+        onConfirm={confirmAbandon}
+        loading={busyId !== null && busyId === abandonTarget?.id}
+      />
     </div>
   );
 }

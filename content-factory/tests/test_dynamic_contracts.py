@@ -1,7 +1,7 @@
 from starlette.requests import Request
 
 from src.api.generation_jobs import PreviewScenesBody, _build_fallback_preview_plan, _trace_id_from_request
-from src.services.generation_orchestrator import _capped_scene_count
+from src.services.generation_orchestrator import _capped_scene_count, _draft_scene_count
 
 
 def _request_with_headers(headers: dict[str, str]) -> Request:
@@ -34,3 +34,10 @@ def test_scene_count_not_capped_when_demo_caps_disabled():
     payload = {"scene_count": 8}
     # This checks the helper contract only; runtime config decides cap behavior.
     assert _capped_scene_count(payload) >= 1
+
+
+def test_draft_scene_count_is_one_for_motion_and_bolt():
+    assert _draft_scene_count("multi_scene_single_video", {"scene_count": 7}) == 1
+    assert _draft_scene_count("ailiveai_single_video", {"scene_count": 7}) == 1
+    assert _draft_scene_count("single_image", {"scene_count": 7}) == 1
+    assert _draft_scene_count("scene_based", {"scene_count": 7}) == 7

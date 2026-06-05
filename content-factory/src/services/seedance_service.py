@@ -1,7 +1,10 @@
 ﻿import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, Optional
+
+OnPollProgress = Callable[[int, int], Awaitable[None]]
 
 import httpx
 
@@ -77,6 +80,7 @@ class SeedanceService:
         duration: int = 5,
         aspect_ratio: str = "9:16",
         trace: Optional[dict[str, Any]] = None,
+        on_poll: Optional[OnPollProgress] = None,
     ) -> dict[str, Any]:
         tb = trace or {}
         if not self.api_key:
@@ -171,6 +175,8 @@ class SeedanceService:
                         status_code=poll_resp.status_code,
                         body_preview=poll_body,
                     )
+                    if on_poll is not None:
+                        await on_poll(attempt + 1, max_polls)
                     last_poll = {
                         "attempt": attempt + 1,
                         "http_status": poll_resp.status_code,

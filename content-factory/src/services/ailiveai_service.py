@@ -1,7 +1,10 @@
 """AliveAI image-to-video: POST /prompts/image-to-video, GET /prompts/{promptId}."""
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, Optional
+
+OnPollProgress = Callable[[int, int], Awaitable[None]]
 
 import httpx
 
@@ -409,6 +412,7 @@ class AiliveaiService:
         video_frame_rate: Optional[str] = None,
         motion_strength: Optional[int] = None,
         trace: Optional[dict[str, Any]] = None,
+        on_poll: Optional[OnPollProgress] = None,
     ) -> dict[str, Any]:
         _ = aspect_ratio
         tb = trace or {}
@@ -600,6 +604,8 @@ class AiliveaiService:
                         status_code=poll_resp.status_code,
                         body_preview=poll_body,
                     )
+                    if on_poll is not None:
+                        await on_poll(attempt + 1, max_polls)
                     if poll_resp.status_code >= 400:
                         continue
                     try:

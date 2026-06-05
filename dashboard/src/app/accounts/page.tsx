@@ -419,8 +419,37 @@ export default function AccountsPage() {
       await api.distribution.rotateAccountProxy(editAccount.id);
       setSuccess(text.accounts.assignProxySuccess);
       await loadAccounts();
+      const refreshed = (await api.distribution.getAccounts()) as AccountRow[];
+      const updated = refreshed.find((a) => a.id === editAccount.id);
+      if (updated) setEditAccount(updated);
     } catch (err: unknown) {
       setError(formatContentApiError(err, text.accounts.assignProxyError));
+    } finally {
+      setProxyAssigning(false);
+    }
+  };
+
+  const handleReleaseProxy = async () => {
+    if (!editAccount) return;
+    setProxyAssigning(true);
+    setError(null);
+    try {
+      const result = await api.distribution.releaseAccountProxy(editAccount.id);
+      setSuccess(text.accounts.releaseProxySuccess);
+      await loadAccounts();
+      const account = result.account as AccountRow | undefined;
+      if (account?.id) {
+        setEditAccount(account);
+      } else {
+        const refreshed = (await api.distribution.getAccounts()) as AccountRow[];
+        const updated = refreshed.find((a) => a.id === editAccount.id);
+        if (updated) setEditAccount(updated);
+      }
+      const proxies = (await api.distribution.getProxies()) as ProxyRow[];
+      setAvailableProxies(proxies.filter((p) => p.is_active && !p.assigned_account_id));
+      setEditProxyId("");
+    } catch (err: unknown) {
+      setError(formatContentApiError(err, text.accounts.releaseProxyError));
     } finally {
       setProxyAssigning(false);
     }
@@ -753,16 +782,28 @@ export default function AccountsPage() {
                       {text.accounts.assignProxy}
                     </Button>
                   ) : (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={proxyAssigning || availableProxies.length === 0}
-                      onClick={handleRotateProxy}
-                    >
-                      {proxyAssigning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      {text.accounts.rotateProxy}
-                    </Button>
+                    <>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={proxyAssigning}
+                        onClick={handleReleaseProxy}
+                      >
+                        {proxyAssigning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        {text.accounts.releaseProxy}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={proxyAssigning || availableProxies.length === 0}
+                        onClick={handleRotateProxy}
+                      >
+                        {proxyAssigning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        {text.accounts.rotateProxy}
+                      </Button>
+                    </>
                   )}
                 </div>
               </div>

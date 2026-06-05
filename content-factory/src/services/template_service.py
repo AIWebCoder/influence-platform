@@ -1,7 +1,7 @@
 import uuid
 from typing import Any, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.content import Template
@@ -67,7 +67,8 @@ class TemplateService:
     ) -> List[Template]:
         query = select(Template)
         if niche_id is not None:
-            query = query.where(Template.niche_id == niche_id)
+            # Niche-specific templates plus global templates (niche_id unset).
+            query = query.where(or_(Template.niche_id == niche_id, Template.niche_id.is_(None)))
         if active_only:
             query = query.where(Template.is_active.is_(True))
         query = query.order_by(Template.name.asc()).offset(skip).limit(limit)

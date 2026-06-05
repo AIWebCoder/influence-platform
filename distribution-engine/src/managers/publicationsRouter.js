@@ -2,7 +2,12 @@ const express = require('express');
 const router = express.Router();
 const { getPool } = require('../core/database');
 const { pushDelayed, getRedis } = require('../core/redis');
-const { buildAccountScope, assertAccountAccess, forbidViewerWrite } = require('../core/accessScope');
+const {
+  buildAccountScope,
+  assertAccountAccess,
+  forbidViewerWrite,
+  getPublicationScopeNotice,
+} = require('../core/accessScope');
 
 const PUBLISH_QUEUE_COMMANDS = 'publish:commands';
 
@@ -26,9 +31,13 @@ router.get('/', async (req, res) => {
     let paramIndex = scopeNext;
 
     if (status) {
-      clauses.push(`p.status = $${paramIndex}`);
-      params.push(status);
-      paramIndex++;
+      if (status === 'failed') {
+        clauses.push(`p.status IN ('failed', 'permanently_failed')`);
+      } else {
+        clauses.push(`p.status = $${paramIndex}`);
+        params.push(status);
+        paramIndex++;
+      }
     }
 
     const whereClause = `WHERE ${clauses.join(' AND ')}`;
@@ -41,6 +50,7 @@ router.get('/', async (req, res) => {
         p.id, 
         p.content_packet_id as content_id,
         p.publication_target_id::text as publication_target_id,
+        pi_src.generation_job_id::text as generation_job_id,
         p.status,
         p.instagram_post_id as post_url, 
         p.published_at,
@@ -81,6 +91,7 @@ router.get('/', async (req, res) => {
     const countParams = params.slice(0, paramIndex - 1);
     const countResult = await pool.query(countQuery, countParams);
 
+    const scopeNotice = getPublicationScopeNotice(req.accessScope);
     res.json({
       publications: result.rows,
       pagination: {
@@ -88,6 +99,7 @@ router.get('/', async (req, res) => {
         limit: parseInt(limit, 10),
         offset: parseInt(offset, 10),
       },
+      scope_notice: scopeNotice,
     });
   } catch (error) {
     console.error('Error GET /publications:', error);
@@ -141,6 +153,7 @@ router.get('/stats', async (req, res) => {
       failed_today: parseInt(stats.failed_today, 10),
       published_7d: parseInt(stats.published_7d, 10),
       failed_7d: parseInt(stats.failed_7d, 10),
+      scope_notice: getPublicationScopeNotice(req.accessScope),
     });
   } catch (error) {
     console.error('Error GET /publications/stats:', error);
@@ -175,6 +188,7 @@ router.get('/:id/diagnostics', async (req, res) => {
         p.account_id::text,
         a.username AS account_username,
         COALESCE(cp.id::text, pt_src.publication_intent_id::text) AS content_id,
+        pi_src.generation_job_id::text AS generation_job_id,
         COALESCE(cp.type, pi_src.content_type) AS content_type,
         cp.niche AS content_niche,
         COALESCE(cp.caption, pi_src.caption) AS content_caption

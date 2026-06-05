@@ -161,6 +161,14 @@ function buildPersonaScope(scope, alias = 'p', startIndex = 1) {
   return { clause: parts.join(' AND '), params, nextIndex: i };
 }
 
+function getPublicationScopeNotice(scope) {
+  if (!scope || scope.isFleet) return null;
+  if (!scope.personaIds || scope.personaIds.length === 0) {
+    return 'NO_PERSONA_ASSIGNMENTS';
+  }
+  return null;
+}
+
 function buildAccountScope(scope, alias = 'a', startIndex = 1) {
   const params = [];
   let i = startIndex;
@@ -209,6 +217,7 @@ module.exports = {
   assertAccountAccess,
   buildPersonaScope,
   buildAccountScope,
+  getPublicationScopeNotice,
   redactProxyRow,
   filterProxiesForScope,
 };

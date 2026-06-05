@@ -27,6 +27,7 @@ from src.models.generation_job import GenerationJob, GenerationScene, Generation
 from src.services.anthropic_service import AnthropicService
 from src.services.gemini_service import GeminiService
 from src.services.generation_job_service import PIPELINE_STEPS, GenerationJobService, default_step_control
+from src.services.generation_progress import provider_poll_step_progress, sync_job_progress
 from src.services.kie_service import KieService
 from src.services.seedance_service import SeedanceService
 from src.services.ailiveai_service import AiliveaiService, _blocking_optionals_from_persona
@@ -371,12 +372,8 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
     use_anthropic = _prefer_anthropic()
     text_svc = AnthropicService() if use_anthropic else GeminiService()
     exec_mode = str(getattr(job, "execution_mode", "") or "").strip()
-    if exec_mode == "ailiveai_single_video":
-        raw_scene_count = 1
-        scene_count = 1
-    else:
-        raw_scene_count = max(1, int(payload.get("scene_count") or 7))
-        scene_count = _capped_scene_count(payload)
+    raw_scene_count = max(1, int(payload.get("scene_count") or 7))
+    scene_count = _draft_scene_count(exec_mode, payload)
     if settings.GENERATION_DEMO_MODE and scene_count < raw_scene_count:
         emit(
             "demo_scene_count_capped",
@@ -460,6 +457,8 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
     if template_tags:
         hashtags = list(dict.fromkeys([*hashtags, *[str(t) for t in template_tags]]))[:30]
     merged["hashtags"] = hashtags
+    if exec_mode == "multi_scene_single_video":
+        merged["scene_count"] = 1
     job.input_payload = merged
 
     for row in plan:
@@ -482,12 +481,14 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
     ctrl0 = default_step_control()
     ctrl0["scene_generation"] = "completed"
     job.step_control = ctrl0
-    job.progress = 5
-    draft_msg = (
-        "Draft persona, scene, and caption generated. Launch to run media pipeline."
-        if ailive_topic_scene
-        else "Draft scenes and caption generated. Launch to run media pipeline."
-    )
+    job.progress = 0
+    sync_job_progress(job)
+    if ailive_topic_scene:
+        draft_msg = "Draft persona, scene, and caption generated. Launch to run media pipeline."
+    elif exec_mode == "multi_scene_single_video":
+        draft_msg = "Draft video prompt and caption generated. Launch to run media pipeline."
+    else:
+        draft_msg = "Draft scenes and caption generated. Launch to run media pipeline."
     await svc.append_log(job, draft_msg)
     svc.touch(job)
     await db.flush()
@@ -556,6 +557,59 @@ async def _emit_job_pipeline_summary(
     )
 
 
+def _generation_media_delivered(job: GenerationJob) -> bool:
+    """True when the media step finished and a public output URL was stored on the job."""
+    if not str(job.output_url or "").strip():
+        return False
+    exec_mode = str(getattr(job, "execution_mode", "") or "").strip()
+    if exec_mode == "single_image":
+        for step in job.steps or []:
+            if step.step_name == "image_generation" and step.status == "completed":
+                return True
+        return False
+    for step in job.steps or []:
+        if step.step_name == "video_generation" and step.status == "completed":
+            return True
+    return False
+
+
+def _generation_video_delivered(job: GenerationJob) -> bool:
+    return _generation_media_delivered(job)
+
+
+async def _finalize_job_after_generation(
+    db: AsyncSession,
+    svc: GenerationJobService,
+    job: GenerationJob,
+) -> None:
+    """Non-blocking bookkeeping after media succeeded; must not fail the job."""
+    gid = str(job.id)
+    try:
+        await _register_generated_assets(db, job)
+    except Exception as e:
+        await svc.append_log(job, f"Asset registration skipped: {e}", "warning")
+        emit(
+            "post_generation_asset_register_failed",
+            job_id=gid,
+            step="pipeline",
+            error=str(e),
+            level="warning",
+        )
+    try:
+        from src.services.content_service import ContentService
+
+        await ContentService(db).upsert_from_generation_job(job)
+    except Exception as e:
+        await svc.append_log(job, f"Calendar sync skipped: {e}", "warning")
+        emit(
+            "post_generation_calendar_sync_failed",
+            job_id=gid,
+            step="pipeline",
+            error=str(e),
+            level="warning",
+        )
+
+
 async def _run_generation_job_pipeline_inner(job_id: uuid.UUID) -> None:
     t0 = time.perf_counter()
     async with AsyncSessionLocal() as db:
@@ -580,22 +634,36 @@ async def _run_generation_job_pipeline_inner(job_id: uuid.UUID) -> None:
             await db.rollback()
             async with AsyncSessionLocal() as db2:
                 svc = GenerationJobService(db2)
-                job = await svc.get_job(job_id, with_children=False)
+                job = await svc.get_job(job_id, with_children=True)
                 if job and job.status != "cancelled":
-                    job.status = "failed"
-                    await svc.append_log(job, f"Job error: {e}", "error")
-                    svc.touch(job)
-                    topic = None
-                    if isinstance(job.input_payload, dict):
-                        topic = str(job.input_payload.get("topic") or "").strip() or None
-                    await db2.commit()
-                    try:
-                        from src.services.alert_service import notify_generation_job_failed
+                    if _generation_video_delivered(job):
+                        job.status = "completed"
+                        job.progress = 100
+                        await svc.append_log(
+                            job,
+                            f"Video generated successfully. Post-processing issue (job still completed): {e}",
+                            "warning",
+                        )
+                        svc.touch(job)
+                        await db2.commit()
+                        await _emit_job_pipeline_summary(svc, job_id, wall_ms, "completed")
+                    else:
+                        job.status = "failed"
+                        await svc.append_log(job, f"Job error: {e}", "error")
+                        svc.touch(job)
+                        topic = None
+                        if isinstance(job.input_payload, dict):
+                            topic = str(job.input_payload.get("topic") or "").strip() or None
+                        await db2.commit()
+                        try:
+                            from src.services.alert_service import notify_generation_job_failed
 
-                        await notify_generation_job_failed(db2, str(job_id), str(e), topic)
-                    except Exception as alert_exc:
-                        logger.warning("generation job alert failed: %s", alert_exc)
-                await _emit_job_pipeline_summary(svc, job_id, wall_ms, "failed", error=str(e))
+                            await notify_generation_job_failed(db2, str(job_id), str(e), topic)
+                        except Exception as alert_exc:
+                            logger.warning("generation job alert failed: %s", alert_exc)
+                        await _emit_job_pipeline_summary(svc, job_id, wall_ms, "failed", error=str(e))
+                else:
+                    await _emit_job_pipeline_summary(svc, job_id, wall_ms, "failed", error=str(e))
 
 
 async def run_generation_job_pipeline(job_id: uuid.UUID) -> None:
@@ -723,6 +791,7 @@ async def _execute_pipeline(db, job_id: uuid.UUID) -> Optional[str]:
             md = dict(step.step_metadata or {})
             md["execution_started_at"] = datetime.now(timezone.utc).isoformat()
             step.step_metadata = md
+        sync_job_progress(job)
         svc.touch(job)
         await svc.append_log(job, f"Step started: {step_name}")
         await db.commit()
@@ -733,7 +802,9 @@ async def _execute_pipeline(db, job_id: uuid.UUID) -> Optional[str]:
             if step_name == "scene_generation":
                 await _step_scene_generation(db, svc, job, step)
             elif step_name == "image_generation":
-                if execution_mode in ("multi_scene_single_video", "ailiveai_single_video"):
+                if execution_mode == "single_image":
+                    await _step_single_image_generation(db, svc, job, step)
+                elif execution_mode in ("multi_scene_single_video", "ailiveai_single_video"):
                     step.step_metadata = {
                         "skipped": True,
                         "execution_mode": execution_mode,
@@ -744,18 +815,26 @@ async def _execute_pipeline(db, job_id: uuid.UUID) -> Optional[str]:
                 else:
                     await _step_image_generation(db, svc, job, step)
             elif step_name == "video_generation":
-                if execution_mode == "multi_scene_single_video":
+                if execution_mode == "single_image":
+                    step.step_metadata = {
+                        "skipped": True,
+                        "execution_mode": execution_mode,
+                        "reason": "photo_output_no_video",
+                    }
+                elif execution_mode == "multi_scene_single_video":
                     await _step_multi_scene_single_video(db, svc, job, step)
                 elif execution_mode == "ailiveai_single_video":
                     await _step_ailiveai_single_video(db, svc, job, step)
                 else:
                     await _step_video_generation(db, svc, job, step)
             elif step_name == "assembly":
-                if execution_mode in ("multi_scene_single_video", "ailiveai_single_video"):
+                if execution_mode in ("multi_scene_single_video", "ailiveai_single_video", "single_image"):
                     step.step_metadata = {
                         "skipped": True,
                         "execution_mode": execution_mode,
-                        "reason": "single_video_no_assembly_required",
+                        "reason": "single_video_no_assembly_required"
+                        if execution_mode != "single_image"
+                        else "photo_output_no_assembly",
                     }
                 else:
                     await _step_assembly(db, svc, job, step)
@@ -800,6 +879,7 @@ async def _execute_pipeline(db, job_id: uuid.UUID) -> Optional[str]:
         step.status = "completed"
         step.progress = 100
         _set_job_step_control(job, {step_name: "completed"})
+        sync_job_progress(job)
         svc.touch(job)
         await svc.append_log(job, f"Step completed: {step_name}")
         await db.commit()
@@ -812,6 +892,17 @@ async def _execute_pipeline(db, job_id: uuid.UUID) -> Optional[str]:
 
     await db.refresh(job, attribute_names=["scenes", "steps"])
     scenes_final = sorted(job.scenes or [], key=lambda x: x.scene_index)
+    if execution_mode == "single_image" and not job.output_url:
+        for s in scenes_final:
+            if _kie_url_ok(s.start_image_url):
+                job.output_url = s.start_image_url
+                emit(
+                    "output_url_set_from_photo",
+                    job_id=str(job_id),
+                    step="pipeline",
+                    scene_index=s.scene_index,
+                )
+                break
     v_final = sum(1 for s in scenes_final if s.video_url)
     if len(scenes_final) > 0 and v_final >= 1 and v_final < len(scenes_final):
         emit(
@@ -837,10 +928,7 @@ async def _execute_pipeline(db, job_id: uuid.UUID) -> Optional[str]:
             level="warning",
         )
 
-    await _register_generated_assets(db, job)
-    from src.services.content_service import ContentService
-
-    await ContentService(db).upsert_from_generation_job(job)
+    await _finalize_job_after_generation(db, svc, job)
     job.status = "completed"
     job.progress = 100
     svc.touch(job)
@@ -858,7 +946,7 @@ async def _step_scene_generation(db, svc: GenerationJobService, job: GenerationJ
         )
         if res.scalars().first():
             step.progress = 100
-            job.progress = max(job.progress or 0, 15)
+            sync_job_progress(job)
             cr = await db.execute(
                 select(func.count())
                 .select_from(GenerationScene)
@@ -916,12 +1004,8 @@ async def _step_scene_generation(db, svc: GenerationJobService, job: GenerationJ
     use_anthropic = _prefer_anthropic()
     text_svc = AnthropicService() if use_anthropic else GeminiService()
     exec_mode = str(getattr(job, "execution_mode", "") or "").strip()
-    if exec_mode == "ailiveai_single_video":
-        raw_scene_count = 1
-        scene_count = 1
-    else:
-        raw_scene_count = max(1, int(payload.get("scene_count") or 7))
-        scene_count = _capped_scene_count(payload)
+    raw_scene_count = max(1, int(payload.get("scene_count") or 7))
+    scene_count = _draft_scene_count(exec_mode, payload)
     if settings.GENERATION_DEMO_MODE and scene_count < raw_scene_count:
         emit(
             "demo_scene_count_capped",
@@ -1026,7 +1110,7 @@ async def _step_scene_generation(db, svc: GenerationJobService, job: GenerationJ
     await db.flush()
     await db.refresh(job, attribute_names=["scenes"])
     step.progress = 100
-    job.progress = 15
+    sync_job_progress(job)
     emit(
         "scene_generation_done",
         job_id=gid,
@@ -1050,6 +1134,14 @@ def _capped_scene_count(payload: dict[str, Any]) -> int:
     if settings.GENERATION_DEMO_MODE and settings.GENERATION_ENABLE_DEMO_CAPS:
         return min(raw, max(1, int(settings.GENERATION_DEMO_MAX_SCENES)))
     return raw
+
+
+def _draft_scene_count(exec_mode: str, payload: dict[str, Any]) -> int:
+    """Motion, Bolt, and Photo use one scene; Aura uses multi-scene storyboards."""
+    mode = str(exec_mode or "").strip()
+    if mode in ("ailiveai_single_video", "multi_scene_single_video", "single_image"):
+        return 1
+    return _capped_scene_count(payload)
 
 
 def _scene_eligible_for_video(sc: GenerationScene) -> bool:
@@ -1143,6 +1235,11 @@ async def _register_generated_assets(db: AsyncSession, job: GenerationJob) -> No
 
 def build_multi_scene_prompt(scenes: list[GenerationScene], total_duration: int) -> str:
     ordered = sorted(scenes, key=lambda x: x.scene_index)
+    if len(ordered) == 1:
+        prompt = (ordered[0].prompt or "").strip()
+        if prompt:
+            return prompt
+        return f"Cinematic short video, approximately {int(total_duration)} seconds."
     chunks = ["Create a continuous cinematic video.", "", "Narrative progression:", ""]
     for i, sc in enumerate(ordered, start=1):
         chunks.append(f"{i}. {(sc.prompt or '').strip()}")
@@ -1187,6 +1284,96 @@ async def _kie_generate_video_with_retry(
         )
         r = await kie.generate_video(prompt, duration=duration, trace=trace)
     return r
+
+
+async def _step_single_image_generation(
+    db, svc: GenerationJobService, job: GenerationJob, step: GenerationStep
+) -> None:
+    """One Kie image for Instagram feed photo; sets scene + job output_url."""
+    gid = str(job.id)
+    res = await db.execute(
+        select(GenerationScene)
+        .where(GenerationScene.job_id == job.id)
+        .order_by(GenerationScene.scene_index)
+        .limit(1)
+    )
+    sc = res.scalars().first()
+    if not sc:
+        raise RuntimeError("No scene to render for photo job")
+
+    if not settings.KIE_API_KEY or settings.KIE_API_KEY in ("",):
+        raise RuntimeError("KIE_API_KEY not configured")
+
+    kie = KieService()
+    payload = job.input_payload or {}
+    ctype = payload.get("content_type") or payload.get("type") or "post"
+    aspect = "1:1" if ctype == "post" else ("2:3" if ctype in ("reel", "story") else "1:1")
+    sid = str(sc.id)
+    t0 = time.perf_counter()
+    sc.status = "running"
+    sc.error_message = None
+    await db.commit()
+    emit(
+        "image_generation_start",
+        job_id=gid,
+        step="image_generation",
+        scene_id=sid,
+        scene_index=sc.scene_index,
+        output_medium="photo",
+    )
+    try:
+        prompt = f"{sc.prompt} — high-quality Instagram photo, {ctype}, sharp detail, natural lighting."
+        trace = {"job_id": gid, "scene_id": sid, "step": "image_generation", "scene_index": sc.scene_index}
+        await _abort_if_job_or_step_cancelling(db, svc, job, step, "image_generation", scene_index=sc.scene_index)
+        image_url = await kie.generate_image(prompt, aspect_ratio=aspect, trace=trace)
+        if image_url == "ERROR: INSUFFICIENT_CREDITS":
+            raise RuntimeError("Kie.ai Credits Insufficient. Please top up.")
+        if not _kie_url_ok(image_url):
+            raise RuntimeError("Image API returned no usable URL for photo output")
+        sc.start_image_url = image_url
+        sc.status = "completed"
+        job.output_url = image_url
+        step.step_metadata = {
+            "output_medium": "photo",
+            "scenes_completed": 1,
+            "scenes_total": 1,
+        }
+        step.progress = 100
+        sync_job_progress(job)
+        emit(
+            "image_generation_result",
+            job_id=gid,
+            step="image_generation",
+            scene_id=sid,
+            scene_index=sc.scene_index,
+            success=True,
+            output_medium="photo",
+            duration_ms=int((time.perf_counter() - t0) * 1000),
+        )
+    except GenerationPipelineCancelled:
+        raise
+    except StepCancelled:
+        raise
+    except Exception as e:
+        sc.status = "failed"
+        sc.error_message = str(e)
+        await svc.append_log(job, f"Photo generation failed: {e}", "error")
+        emit(
+            "image_generation_result",
+            job_id=gid,
+            step="image_generation",
+            scene_id=sid,
+            scene_index=sc.scene_index,
+            success=False,
+            output_medium="photo",
+            error=str(e),
+            duration_ms=int((time.perf_counter() - t0) * 1000),
+            level="error",
+        )
+        raise
+    finally:
+        svc.touch(job)
+        await db.commit()
 
 
 async def _step_image_generation(db, svc: GenerationJobService, job: GenerationJob, step: GenerationStep) -> None:
@@ -1333,7 +1520,7 @@ async def _step_image_generation(db, svc: GenerationJobService, job: GenerationJ
         "scenes_total": len(scenes),
     }
     step.progress = 100
-    job.progress = 40
+    sync_job_progress(job)
     if ok == 0 and partial_n == 0:
         raise RuntimeError("All scenes failed image generation")
     if partial_n and settings.GENERATION_FAIL_ON_PARTIAL_IMAGES:
@@ -1480,6 +1667,7 @@ async def _step_video_generation(db, svc: GenerationJobService, job: GenerationJ
             md["video_scenes_completed"] = done_count
             md["video_scenes_total"] = n
             step.step_metadata = md
+            sync_job_progress(job)
             svc.touch(job)
             await db.commit()
     except Exception:
@@ -1604,7 +1792,7 @@ async def _step_video_generation(db, svc: GenerationJobService, job: GenerationJ
         "avg_poll_attempts_success": avg_poll,
     }
     step.progress = 100
-    job.progress = 65
+    sync_job_progress(job)
     emit(
         "video_step_summary",
         job_id=gid,
@@ -1652,6 +1840,27 @@ async def _step_video_generation(db, svc: GenerationJobService, job: GenerationJ
         )
 
 
+def _provider_poll_progress_hook(
+    db: AsyncSession,
+    svc: GenerationJobService,
+    job: GenerationJob,
+    step: GenerationStep,
+) -> Any:
+    async def on_poll(poll_index: int, max_polls: int) -> None:
+        step.progress = provider_poll_step_progress(poll_index, max_polls)
+        md = dict(step.step_metadata or {})
+        md["provider_poll_attempt"] = poll_index
+        md["provider_poll_max"] = max_polls
+        md["progress_source"] = "provider_poll"
+        md["phase"] = "provider_generating"
+        step.step_metadata = md
+        sync_job_progress(job)
+        svc.touch(job)
+        await db.commit()
+
+    return on_poll
+
+
 async def _step_multi_scene_single_video(db, svc: GenerationJobService, job: GenerationJob, step: GenerationStep) -> None:
     gid = str(job.id)
     res = await db.execute(
@@ -1689,7 +1898,7 @@ async def _step_multi_scene_single_video(db, svc: GenerationJobService, job: Gen
     seedance = SeedanceService()
     t0 = time.perf_counter()
     max_attempts = 3
-    step.progress = 5
+    step.progress = 8
     md0 = dict(step.step_metadata or {})
     md0.update(
         {
@@ -1700,12 +1909,12 @@ async def _step_multi_scene_single_video(db, svc: GenerationJobService, job: Gen
         }
     )
     step.step_metadata = md0
+    sync_job_progress(job)
     svc.touch(job)
     await db.commit()
+    poll_hook = _provider_poll_progress_hook(db, svc, job, step)
     result: dict[str, Any] = {"video_url": None, "status": "failed", "error": "not_attempted"}
     for attempt in range(max_attempts):
-        # Coarse progress: one provider job (no per-scene granularity in this mode).
-        step.progress = min(92, 10 + int(82 * attempt / max_attempts))
         md = dict(step.step_metadata or {})
         md["seedance_attempt"] = attempt + 1
         md["phase"] = "seedance_generating"
@@ -1728,6 +1937,7 @@ async def _step_multi_scene_single_video(db, svc: GenerationJobService, job: Gen
             duration=selected_duration,
             aspect_ratio=aspect,
             trace={"job_id": gid, "step": "video_generation"},
+            on_poll=poll_hook,
         )
         if result.get("status") == "success" and result.get("video_url"):
             break
@@ -1801,7 +2011,7 @@ async def _step_multi_scene_single_video(db, svc: GenerationJobService, job: Gen
         "aspect_ratio": aspect,
     }
     step.progress = 100
-    job.progress = 65
+    sync_job_progress(job)
     svc.touch(job)
     await db.commit()
 
@@ -1880,7 +2090,7 @@ async def _step_ailiveai_single_video(db, svc: GenerationJobService, job: Genera
     ailiveai = AiliveaiService()
     t0 = time.perf_counter()
     max_attempts = 3
-    step.progress = 5
+    step.progress = 8
     md0 = dict(step.step_metadata or {})
     md0.update(
         {
@@ -1891,11 +2101,12 @@ async def _step_ailiveai_single_video(db, svc: GenerationJobService, job: Genera
         }
     )
     step.step_metadata = md0
+    sync_job_progress(job)
     svc.touch(job)
     await db.commit()
+    poll_hook = _provider_poll_progress_hook(db, svc, job, step)
     result: dict[str, Any] = {"video_url": None, "status": "failed", "error": "not_attempted"}
     for attempt in range(max_attempts):
-        step.progress = min(92, 10 + int(82 * attempt / max_attempts))
         md = dict(step.step_metadata or {})
         md["ailiveai_attempt"] = attempt + 1
         md["phase"] = "ailiveai_generating"
@@ -1934,6 +2145,7 @@ async def _step_ailiveai_single_video(db, svc: GenerationJobService, job: Genera
             video_frame_rate=video_frame_rate_opt,
             motion_strength=motion_strength_opt,
             trace={"job_id": gid, "step": "video_generation"},
+            on_poll=poll_hook,
         )
         if result.get("status") == "completed" and result.get("video_url"):
             break
@@ -2016,7 +2228,7 @@ async def _step_ailiveai_single_video(db, svc: GenerationJobService, job: Genera
         "aspect_ratio": aspect,
     }
     step.progress = 100
-    job.progress = 65
+    sync_job_progress(job)
     svc.touch(job)
     await db.commit()
 
@@ -2082,7 +2294,7 @@ async def _step_assembly(db, svc: GenerationJobService, job: GenerationJob, step
         }
         step.step_metadata = meta
         step.progress = 100
-        job.progress = 85
+        sync_job_progress(job)
         emit(
             "assembly_result",
             job_id=gid,
@@ -2108,7 +2320,7 @@ async def _step_assembly(db, svc: GenerationJobService, job: GenerationJob, step
             meta["concat_success"] = False
             step.step_metadata = meta
             step.progress = 100
-            job.progress = 85
+            sync_job_progress(job)
             emit(
                 "assembly_fallback_to_single_clip",
                 job_id=gid,
@@ -2362,7 +2574,7 @@ async def _step_distribution(db, svc: GenerationJobService, job: GenerationJob, 
             "note": "Use Generation Studio publish-intents; see docs/runbooks/publish-instagram.md",
         }
         step.progress = 100
-        job.progress = max(job.progress or 0, 100)
+        sync_job_progress(job)
         emit(
             "distribution_skipped_legacy_queue",
             job_id=gid,
@@ -2445,7 +2657,7 @@ async def _step_distribution(db, svc: GenerationJobService, job: GenerationJob, 
     await push_to_queue(qn, json.dumps(export))
     step.step_metadata = {"queue": qn, "enqueue": summary}
     step.progress = 100
-    job.progress = 100
+    sync_job_progress(job)
     emit(
         "distribution_enqueued",
         job_id=gid,
