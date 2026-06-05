@@ -383,3 +383,41 @@ class GeminiService:
         except Exception as e:
             logger.error(f"Error calling Gemini API: {str(e)}")
             raise
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception(_is_gemini_retryable),
+        reraise=True,
+    )
+    async def generate_topic_suggestions(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        count: int = 5,
+    ) -> list[str]:
+        from src.services.topic_suggestion_service import normalize_topic_examples
+
+        content_text = ""
+        try:
+            response = await self.model.generate_content_async(
+                f"{system_prompt}\n\n{user_prompt}",
+                generation_config={"temperature": 0.85, "max_output_tokens": 800},
+            )
+            content_text = (response.text or "").strip()
+            if content_text.startswith("```json"):
+                content_text = content_text[7:-3].strip()
+            elif content_text.startswith("```"):
+                content_text = content_text[3:-3].strip()
+            parsed = json.loads(content_text)
+            topics = normalize_topic_examples(parsed.get("topics") if isinstance(parsed, dict) else [])
+            if not topics:
+                raise ContentGenerationError("Invalid topic suggestions payload from AI model")
+            return topics[:count]
+        except json.JSONDecodeError as e:
+            logger.error("Failed to parse Gemini topic suggestions as JSON: %s", content_text)
+            raise ContentGenerationError("Invalid response format from AI model") from e
+        except Exception as e:
+            logger.error("Error calling Gemini API for topic suggestions: %s", e)
+            raise

@@ -17,6 +17,7 @@ CREATE TABLE niches (
     description TEXT,
     hashtags JSONB DEFAULT '[]',
     posting_times JSONB DEFAULT '[]',
+    topic_examples JSONB NOT NULL DEFAULT '[]',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -270,12 +271,12 @@ END $$;
 -- SEED DATA — Niches de base
 -- ─────────────────────────────────────────
 
-INSERT INTO niches (name, description, hashtags, posting_times) VALUES
-('fitness', 'Sport, musculation, bien-être', '["#fitness", "#workout", "#gym", "#motivation", "#health"]', '[8, 12, 18]'),
-('food', 'Cuisine, recettes, restaurants', '["#food", "#foodie", "#recipe", "#cooking", "#yummy"]', '[11, 13, 19]'),
-('travel', 'Voyage, aventure, tourisme', '["#travel", "#wanderlust", "#explore", "#adventure", "#vacation"]', '[9, 15, 20]'),
-('business', 'Entrepreneuriat, mindset, success', '["#business", "#entrepreneur", "#success", "#mindset", "#motivation"]', '[7, 12, 17]'),
-('lifestyle', 'Mode de vie, luxe, quotidien', '["#lifestyle", "#daily", "#inspiration", "#living", "#goals"]', '[10, 14, 20]');
+INSERT INTO niches (name, description, hashtags, posting_times, topic_examples) VALUES
+('fitness', 'Sport, musculation, bien-être', '["#fitness", "#workout", "#gym", "#motivation", "#health"]', '[8, 12, 18]', '["routine mobilité matinale pour télétravailleurs", "entraînement HIIT 15 minutes sans matériel", "erreurs de squat à éviter en salle"]'),
+('food', 'Cuisine, recettes, restaurants', '["#food", "#foodie", "#recipe", "#cooking", "#yummy"]', '[11, 13, 19]', '["meal prep protéiné en moins de 30 minutes", "petit-déjeuner équilibré pour semaine chargée", "recette pasta légère façon restaurant"]'),
+('travel', 'Voyage, aventure, tourisme', '["#travel", "#wanderlust", "#explore", "#adventure", "#vacation"]', '[9, 15, 20]', '["long week-end à Lisbonne petit budget", "itinerary 48h à Barcelone sans voiture", "astuces pour voyager léger en cabine seule"]'),
+('business', 'Entrepreneuriat, mindset, success', '["#business", "#entrepreneur", "#success", "#mindset", "#motivation"]', '[7, 12, 17]', '["premiers recrutements marketing pour une startup B2B", "comment structurer une offre en 3 paliers", "rituel hebdo de priorisation pour fondateur solo"]'),
+('lifestyle', 'Mode de vie, luxe, quotidien', '["#lifestyle", "#daily", "#inspiration", "#living", "#goals"]', '[10, 14, 20]', '["habitudes simples pour des matins plus calmes", "reset du dimanche soir pour une semaine sereine", "mini-routine skincare réaliste après le travail"]');
 
 -- ─────────────────────────────────────────
 -- UPDATED_AT triggers

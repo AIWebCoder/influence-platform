@@ -239,6 +239,58 @@ async def preview_scenes(body: PreviewScenesBody, request: Request):
     return plan
 
 
+class TopicSuggestionsBody(BaseModel):
+    niche: str
+    content_type: str = "post"
+    execution_mode: Optional[str] = Field(
+        default=None,
+        description="single_image | multi_scene_single_video | ailiveai_single_video | scene_based",
+    )
+    locale: str = "fr"
+    count: int = Field(default=5, ge=1, le=10)
+
+
+class TopicSuggestionsResponse(BaseModel):
+    topics: list[str]
+
+
+@router.post("/topic-suggestions", response_model=TopicSuggestionsResponse)
+async def topic_suggestions(body: TopicSuggestionsBody, db: AsyncSession = Depends(get_db)):
+    """Return fresh LLM topic ideas for Generation Studio (does not persist)."""
+    from src.services.niche_service import NicheService
+    from src.services.topic_suggestion_service import (
+        fallback_topic_suggestions,
+        generate_topic_suggestions,
+        normalize_topic_examples,
+    )
+
+    exec_mode = (body.execution_mode or "multi_scene_single_video").strip()
+    if exec_mode not in VALID_EXECUTION_MODES:
+        exec_mode = "multi_scene_single_video"
+
+    niche_svc = NicheService(db)
+    niche_row = await niche_svc.get_by_name(str(body.niche or "").strip().lower())
+    db_examples = normalize_topic_examples(getattr(niche_row, "topic_examples", None) if niche_row else None)
+
+    try:
+        topics = await generate_topic_suggestions(
+            niche=body.niche,
+            content_type=body.content_type,
+            execution_mode=exec_mode,
+            locale=body.locale,
+            count=body.count,
+        )
+    except Exception as e:
+        logger.warning("topic_suggestions LLM failed, using static pool: %s", e)
+        topics = fallback_topic_suggestions(
+            body.niche,
+            count=body.count,
+            db_examples=db_examples,
+        )
+
+    return TopicSuggestionsResponse(topics=topics)
+
+
 class SimulateQueueBody(BaseModel):
     job_id: Optional[str] = Field(
         default=None,
