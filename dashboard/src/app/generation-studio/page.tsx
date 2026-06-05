@@ -6,6 +6,11 @@ import useSWR from "swr";
 import { api, formatContentApiError } from "@/lib/api";
 import { summarizeJobPipelineErrors } from "@/lib/generation-errors";
 import { SCENE_BASED_EXECUTION_UI_ENABLED } from "@/lib/generation-studio-config";
+import {
+  inferMediaKind,
+  jobOutputMediaProxyUrl,
+  KIE_IMAGE_PROPS,
+} from "@/lib/media-url";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { GenerationStudioPublishPanel } from "@/components/generation/GenerationStudioPublishPanel";
@@ -647,23 +652,41 @@ function GenerationStudioPageInner() {
 
   const liveJobClip = useMemo(() => {
     if (!jobId || !job) return { url: null as string | null, note: "" as string, mediaKind: "video" as const };
+    const photoPreviewUrl =
+      isPhotoMode && (job.output_url || job.status === "completed")
+        ? jobOutputMediaProxyUrl(jobId)
+        : null;
     if (job.status === "completed") {
+      if (photoPreviewUrl) {
+        return { url: photoPreviewUrl, note: "", mediaKind: "image" as const };
+      }
       if (job.output_url) {
         return {
           url: job.output_url,
           note: "",
-          mediaKind: isPhotoMode ? ("image" as const) : ("video" as const),
+          mediaKind: inferMediaKind(job.output_url, isPhotoMode),
         };
       }
       if (isPhotoMode) {
         const img = generatedAssets.find((a) => a.asset_type === "image");
-        return { url: img?.public_url ?? null, note: "", mediaKind: "image" as const };
+        return {
+          url: img ? jobOutputMediaProxyUrl(jobId) : null,
+          note: "",
+          mediaKind: "image" as const,
+        };
       }
       const v = generatedAssets.find((a) => a.asset_type === "video");
       return { url: v?.public_url ?? null, note: "", mediaKind: "video" as const };
     }
+    if (photoPreviewUrl) {
+      return { url: photoPreviewUrl, note: live.outputStaleNote, mediaKind: "image" as const };
+    }
     if (job.output_url) {
-      return { url: job.output_url, note: live.outputStaleNote, mediaKind: isPhotoMode ? ("image" as const) : ("video" as const) };
+      return {
+        url: job.output_url,
+        note: live.outputStaleNote,
+        mediaKind: inferMediaKind(job.output_url, isPhotoMode),
+      };
     }
     const scenes = [...(job.scenes || [])].sort((a, b) => a.scene_index - b.scene_index);
     const first = scenes[0] as JobScene | undefined;
@@ -1665,6 +1688,7 @@ function GenerationStudioPageInner() {
                                         "max-h-[360px] w-auto max-w-full object-contain",
                                         isVerticalVideo ? "aspect-[9/16]" : "aspect-video max-h-[280px]"
                                       )}
+                                      {...KIE_IMAGE_PROPS}
                                     />
                                   </button>
                                 ) : (
@@ -1851,6 +1875,7 @@ function GenerationStudioPageInner() {
                             src={liveJobClip.url}
                             alt=""
                             className="aspect-square max-h-[320px] w-full object-contain"
+                            {...KIE_IMAGE_PROPS}
                           />
                         ) : (
                           <video
@@ -2131,6 +2156,7 @@ function GenerationStudioPageInner() {
                 src={imageLightboxSrc}
                 alt=""
                 className="h-auto max-h-[min(88vh,900px)] w-auto max-w-full object-contain"
+                {...KIE_IMAGE_PROPS}
               />
             </div>
           ) : null}

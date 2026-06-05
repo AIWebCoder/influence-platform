@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { api, formatContentApiError } from "@/lib/api";
+import { jobOutputMediaProxyUrl, KIE_IMAGE_PROPS } from "@/lib/media-url";
 import { PublicationStatusCard } from "@/components/generation/PublicationStatusCard";
 import type { StudioPublishActivity } from "@/lib/generation-studio-workflow";
 import {
@@ -298,6 +299,11 @@ export function GenerationStudioPublishPanel({
     () => assets.find((a) => a.id === selectedAssetId) ?? null,
     [assets, selectedAssetId]
   );
+  const selectedPhotoPreviewUrl = useMemo(() => {
+    if (!selectedAsset || selectedAsset.asset_type === "video") return null;
+    if (preferPhotoAsset) return jobOutputMediaProxyUrl(jobId);
+    return selectedAsset.public_url;
+  }, [selectedAsset, preferPhotoAsset, jobId]);
 
   const accountSummary = useMemo(() => {
     if (selectedAccounts.length === 0) return acc.selectTargets;
@@ -738,9 +744,10 @@ export function GenerationStudioPublishPanel({
                 ) : (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={selectedAsset.public_url}
+                    src={selectedPhotoPreviewUrl ?? selectedAsset.public_url}
                     alt=""
                     className="aspect-video w-full object-contain"
+                    {...KIE_IMAGE_PROPS}
                   />
                 )
               ) : (
@@ -769,7 +776,12 @@ export function GenerationStudioPublishPanel({
                         <video src={asset.public_url} className="h-full w-full object-cover" muted playsInline />
                       ) : (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={asset.public_url} alt="" className="h-full w-full object-cover" />
+                        <img
+                          src={preferPhotoAsset ? jobOutputMediaProxyUrl(jobId) : asset.public_url}
+                          alt=""
+                          className="h-full w-full object-cover"
+                          {...KIE_IMAGE_PROPS}
+                        />
                       )}
                     </button>
                   );

@@ -368,6 +368,7 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
 
     gid = str(job.id)
     gtrace = {"job_id": gid, "step": "populate_draft"}
+    draft_t0 = time.monotonic()
     emit("draft_populate_start", job_id=gid, step="populate_draft")
     use_anthropic = _prefer_anthropic()
     text_svc = AnthropicService() if use_anthropic else GeminiService()
@@ -497,6 +498,10 @@ async def populate_draft_scenes(db, job: GenerationJob) -> None:
         job_id=gid,
         step="populate_draft",
         scene_rows=len(plan),
+        execution_mode=exec_mode,
+        scene_count=scene_count,
+        text_provider="anthropic" if use_anthropic else "gemini",
+        duration_ms=(time.monotonic() - draft_t0) * 1000,
     )
 
 
