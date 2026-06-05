@@ -192,7 +192,7 @@ export function AppSidebar() {
         </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarContent className="sidebar-nav-scroll gap-0 px-0">
+      <SidebarContent className="gap-0 px-0">
         {navGroups.map((group, gi) => (
           <SidebarGroup key={group.label} className={cn(gi > 0 && "border-t border-sidebar-border pt-2")}>
             <SidebarGroupLabel className="sidebar-nav-group-label px-4">{group.label}</SidebarGroupLabel>

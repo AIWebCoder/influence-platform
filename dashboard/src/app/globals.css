@@ -92,6 +92,8 @@
     --sidebar-accent-foreground: 240 5.9% 10%;
     --sidebar-border: 220 13% 91%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+    --app-scrollbar-thumb: rgba(0, 0, 0, 0.12);
+    --app-scrollbar-thumb-hover: rgba(0, 0, 0, 0.22);
   }
 
   .dark {
@@ -127,6 +129,8 @@
     --sidebar-accent-foreground: 240 4.8% 95.9%;
     --sidebar-border: 240 3.7% 15.9%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+    --app-scrollbar-thumb: rgba(255, 255, 255, 0.12);
+    --app-scrollbar-thumb-hover: rgba(255, 255, 255, 0.25);
   }
 }
 
@@ -136,6 +140,38 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+
+  /* Cursor-style scrollbars — all scroll containers (hidden at rest, visible on hover) */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--app-scrollbar-thumb) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 10px;
+  }
+
+  *:not(:hover)::-webkit-scrollbar-thumb {
+    background: transparent;
+  }
+
+  *:hover::-webkit-scrollbar-thumb {
+    background: var(--app-scrollbar-thumb);
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--app-scrollbar-thumb-hover);
   }
 
   /* WebKit autofill: match themed field */
@@ -171,15 +207,6 @@ input.ip-input-field:disabled {
 }
 
 @layer components {
-  .sidebar-nav-scroll {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-
-  .sidebar-nav-scroll::-webkit-scrollbar {
-    display: none;
-  }
-
   .sidebar-nav-group-label {
     font-size: 10px;
     font-weight: 500;
