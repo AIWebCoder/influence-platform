@@ -221,6 +221,42 @@ router.post('/:id/proxy/rotate', async (req, res) => {
   }
 });
 
+/** Remove proxy assignment from account without assigning a replacement. */
+router.post('/:id/proxy/release', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
+  try {
+    const accountId = req.params.id;
+    const pool = getPool();
+    const exists = await pool.query('SELECT id FROM accounts WHERE id = $1', [accountId]);
+    if (exists.rows.length === 0) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+    const ProxyManager = require('../proxy/ProxyManager');
+    await ProxyManager.releaseProxyFromAccount(accountId);
+    const withProxy = await pool.query(
+      `SELECT a.id, a.username, a.status, a.health_score, a.platform, a.ig_user_id,
+              (a.ig_access_token IS NOT NULL AND btrim(a.ig_access_token) <> '') AS ig_token_configured,
+              (
+                COALESCE(NULLIF(TRIM(a.ig_user_id), ''), '') <> ''
+                AND a.ig_access_token IS NOT NULL
+                AND btrim(a.ig_access_token) <> ''
+              ) AS ig_publish_ready,
+              CASE WHEN p.id IS NOT NULL THEN CONCAT(p.host, ':', p.port::text) ELSE NULL END AS proxy_url
+       FROM accounts a
+       LEFT JOIN proxies p ON p.id = a.proxy_id
+       WHERE a.id = $1`,
+      [accountId]
+    );
+    return res.json({
+      success: true,
+      account_id: accountId,
+      account: withProxy.rows[0],
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to release proxy', details: err.message });
+  }
+});
+
 /** Assign a dedicated proxy to an existing account (auto-pick or explicit proxy_id). */
 router.post('/:id/proxy/assign', async (req, res) => {
   if (forbidViewerWrite(req.accessScope, res)) return;

@@ -99,6 +99,13 @@ class PublishingWorker {
       [targetId]
     );
 
+    const intentRow = await pool.query(
+      `SELECT publication_intent_id::text AS intent_id
+       FROM publication_targets WHERE id = $1::uuid LIMIT 1`,
+      [targetId]
+    );
+    const intentId = intentRow.rows[0]?.intent_id || null;
+
     if (existing.rows.length) {
       await pool.query(
         `UPDATE publications SET
@@ -147,6 +154,63 @@ class PublishingWorker {
           failureType,
         ]
       );
+    }
+
+    if (intentId) {
+      await this.tryAggregateIntent(pool, intentId, { target_id: targetId, source: 'sync_publication_row' });
+    }
+  }
+
+  /**
+   * Fix intents stuck at queued while all targets are terminal (failed/uncertain/published).
+   */
+  async recoverOrphanQueuedPublicationIntents() {
+    const pool = getPool();
+    const r = await pool.query(
+      `UPDATE publication_intents pi
+       SET status = CASE
+             WHEN (
+               SELECT COUNT(*)::int FROM publication_targets pt
+               WHERE pt.publication_intent_id = pi.id AND pt.status = 'published'
+             ) = (
+               SELECT COUNT(*)::int FROM publication_targets pt
+               WHERE pt.publication_intent_id = pi.id
+             ) THEN 'published'
+             WHEN (
+               SELECT COUNT(*)::int FROM publication_targets pt
+               WHERE pt.publication_intent_id = pi.id AND pt.status IN ('failed', 'uncertain')
+             ) = (
+               SELECT COUNT(*)::int FROM publication_targets pt
+               WHERE pt.publication_intent_id = pi.id
+             ) THEN 'failed'
+             WHEN EXISTS (
+               SELECT 1 FROM publication_targets pt
+               WHERE pt.publication_intent_id = pi.id AND pt.status = 'published'
+             ) AND EXISTS (
+               SELECT 1 FROM publication_targets pt
+               WHERE pt.publication_intent_id = pi.id AND pt.status IN ('failed', 'uncertain')
+             ) THEN 'partial_failed'
+             ELSE pi.status
+           END,
+           updated_at = NOW()
+       WHERE pi.status = 'queued'
+         AND EXISTS (
+           SELECT 1 FROM publication_targets pt WHERE pt.publication_intent_id = pi.id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM publication_targets pt
+           WHERE pt.publication_intent_id = pi.id
+             AND pt.status IN ('pending', 'publishing')
+         )
+       RETURNING id::text, status`
+    );
+    if (r.rowCount > 0) {
+      this.publishLog('info', {
+        event: 'publish_intent_orphan_queued_repaired',
+        count: r.rowCount,
+        sample: r.rows.slice(0, 5),
+        status: 'recovery',
+      });
     }
   }
 
@@ -872,6 +936,7 @@ class PublishingWorker {
         await this.recoverAllPublishProcessingQueues(consumer);
         await this.recoverPublishProcessingQueue(consumer, processingKey);
         await this.recoverStalePublishingTargets();
+        await this.recoverOrphanQueuedPublicationIntents();
       } catch (recErr) {
         this.publishLog('error', {
           event: 'publish_processing_recovery_failed',
@@ -1207,6 +1272,7 @@ class PublishingWorker {
             hashtags: payload.hashtags,
             accountId: payload.account_id,
             igUserId: payload.ig_user_id,
+            contentType: payload.content_type,
           }),
           publishAdapterTimeoutPromise(PUBLISH_ADAPTER_TIMEOUT_MS),
         ]);

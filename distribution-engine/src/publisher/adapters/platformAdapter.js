@@ -40,7 +40,7 @@ async function resolveHttpClient(accountId) {
   }
 }
 
-async function createContainer({ igUserId, videoUrl, caption, accessToken, httpClient }) {
+async function createReelContainer({ igUserId, videoUrl, caption, accessToken, httpClient }) {
   const client = httpClient || axios;
   const url = `${GRAPH_BASE}/${encodeURIComponent(igUserId)}/media`;
   const params = new URLSearchParams();
@@ -55,9 +55,40 @@ async function createContainer({ igUserId, videoUrl, caption, accessToken, httpC
   });
   const containerId = response?.data?.id;
   if (!containerId) {
-    throw new Error(`Instagram createContainer failed: missing container id (${JSON.stringify(response?.data || {})})`);
+    throw new Error(`Instagram createReelContainer failed: missing container id (${JSON.stringify(response?.data || {})})`);
   }
   return containerId;
+}
+
+async function createImageContainer({ igUserId, imageUrl, caption, accessToken, httpClient }) {
+  const client = httpClient || axios;
+  const url = `${GRAPH_BASE}/${encodeURIComponent(igUserId)}/media`;
+  const params = new URLSearchParams();
+  params.set('image_url', String(imageUrl));
+  params.set('caption', caption);
+  params.set('access_token', accessToken);
+
+  const response = await client.post(url, params.toString(), {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    timeout: 30_000,
+  });
+  const containerId = response?.data?.id;
+  if (!containerId) {
+    throw new Error(`Instagram createImageContainer failed: missing container id (${JSON.stringify(response?.data || {})})`);
+  }
+  return containerId;
+}
+
+/** @deprecated use createReelContainer */
+async function createContainer(args) {
+  return createReelContainer(args);
+}
+
+function isPhotoPublish({ contentType, asset }) {
+  const ct = String(contentType || '').trim().toLowerCase();
+  if (ct === 'post') return true;
+  const mime = String(asset?.mime_type || '').trim().toLowerCase();
+  return mime.startsWith('image/');
 }
 
 async function waitForContainer({ containerId, accessToken, httpClient }) {
@@ -113,16 +144,17 @@ async function publishContainer({ igUserId, creationId, accessToken, httpClient 
   return postId;
 }
 
-async function publish({ platform, asset, caption, hashtags, accountId, igUserId }) {
+async function publish({ platform, asset, caption, hashtags, accountId, igUserId, contentType }) {
   if (String(platform || '').toLowerCase() !== 'instagram') {
     return { success: false, error: `Unsupported platform: ${platform}` };
   }
   if (!accountId) return { success: false, error: 'Missing accountId' };
   if (!igUserId) return { success: false, error: 'Missing igUserId' };
 
-  const videoUrl = String(asset?.public_url || '').trim();
-  if (!videoUrl) return { success: false, error: 'Missing asset.public_url for Instagram publish' };
+  const mediaUrl = String(asset?.public_url || '').trim();
+  if (!mediaUrl) return { success: false, error: 'Missing asset.public_url for Instagram publish' };
 
+  const photoPublish = isPhotoPublish({ contentType, asset });
   let currentStage = 'fetch_token';
   let containerId = null;
   const started = Date.now();
@@ -133,7 +165,9 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
     persona_id: persona?.id || null,
     ig_user_id: igUserId,
     persona_proxy_enabled: ProxyHttpClient.USE_PERSONA_PROXY_FOR_GRAPH,
-    video_url_preview: videoUrl.length > 220 ? `${videoUrl.slice(0, 220)}…` : videoUrl,
+    content_type: contentType || null,
+    publish_kind: photoPublish ? 'photo' : 'reel',
+    media_url_preview: mediaUrl.length > 220 ? `${mediaUrl.slice(0, 220)}…` : mediaUrl,
   });
 
   try {
@@ -141,13 +175,23 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
     const accessToken = await getValidToken(accountId);
     currentStage = 'create_container';
     const fullCaption = normalizeCaption(caption, hashtags);
-    containerId = await createContainer({
-      igUserId,
-      videoUrl,
-      caption: fullCaption,
-      accessToken,
-      httpClient,
-    });
+    if (photoPublish) {
+      containerId = await createImageContainer({
+        igUserId,
+        imageUrl: mediaUrl,
+        caption: fullCaption,
+        accessToken,
+        httpClient,
+      });
+    } else {
+      containerId = await createReelContainer({
+        igUserId,
+        videoUrl: mediaUrl,
+        caption: fullCaption,
+        accessToken,
+        httpClient,
+      });
+    }
     currentStage = 'wait_container';
     const containerReady = await waitForContainer({ containerId, accessToken, httpClient });
     currentStage = 'publish_container';
@@ -207,4 +251,4 @@ async function publish({ platform, asset, caption, hashtags, accountId, igUserId
   }
 }
 
-module.exports = { publish };
+module.exports = { publish, isPhotoPublish };
