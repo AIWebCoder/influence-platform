@@ -38,6 +38,13 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { DateTimePicker } from "@/components/ui/date-time-picker";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type CalendarItem = {
   id: string;
@@ -188,6 +195,27 @@ export default function CalendarPage() {
   const [editItem, setEditItem] = useState<CalendarItem | null>(null);
   const [editWhen, setEditWhen] = useState<Date | undefined>(undefined);
   const [saving, setSaving] = useState(false);
+  const [nicheFilter, setNicheFilter] = useState<string>("all");
+  const [nicheOptions, setNicheOptions] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows = await api.content.getNiches();
+        if (cancelled) return;
+        const names = (rows as Array<{ name?: string }>)
+          .map((r) => r.name?.trim())
+          .filter((n): n is string => Boolean(n));
+        setNicheOptions(Array.from(new Set(names)).sort());
+      } catch {
+        if (!cancelled) setNicheOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const weekDays = useMemo(
     () => Array.from({ length: 7 }, (_, i) => addDays(weekAnchor, i)),
@@ -233,14 +261,18 @@ export default function CalendarPage() {
     try {
       const start = format(loadRange.start, "yyyy-MM-dd");
       const end = format(loadRange.end, "yyyy-MM-dd");
-      const data = await api.content.getEditorialCalendar({ start_date: start, end_date: end });
+      const data = await api.content.getEditorialCalendar({
+        start_date: start,
+        end_date: end,
+        ...(nicheFilter !== "all" ? { niche: nicheFilter } : {}),
+      });
       setItems(data);
     } catch (e: unknown) {
       setError(formatContentApiError(e, cal.unavailable));
     } finally {
       setLoading(false);
     }
-  }, [loadRange.start, loadRange.end, cal.unavailable]);
+  }, [loadRange.start, loadRange.end, nicheFilter, cal.unavailable]);
 
   useEffect(() => {
     load();
@@ -347,16 +379,36 @@ export default function CalendarPage() {
     <div className="ops-page-shell">
       <DashboardPageHeader title={cal.title} subtitle={cal.subtitle} actions={periodNav} />
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <p>{cal.hint}</p>
-        <p className="tabular-nums">{cal.timezoneNote}</p>
-        {!loading && !error ? (
-          <p className="tabular-nums">
-            {t(summaryKey, {
-              scheduled: scheduledInPeriod,
-              unscheduled: unscheduled.length,
-            })}
-          </p>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground min-w-0 flex-1">
+          <p>{cal.hint}</p>
+          <p className="tabular-nums">{cal.timezoneNote}</p>
+          {!loading && !error ? (
+            <p className="tabular-nums">
+              {t(summaryKey, {
+                scheduled: scheduledInPeriod,
+                unscheduled: unscheduled.length,
+              })}
+            </p>
+          ) : null}
+        </div>
+        {nicheOptions.length > 0 ? (
+          <div className="w-full sm:w-[200px]">
+            <Label className="text-xs text-muted-foreground">{cal.filterNiche}</Label>
+            <Select value={nicheFilter} onValueChange={setNicheFilter}>
+              <SelectTrigger className="mt-1 h-9">
+                <SelectValue placeholder={cal.filterAllNiches} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{cal.filterAllNiches}</SelectItem>
+                {nicheOptions.map((name) => (
+                  <SelectItem key={name} value={name}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         ) : null}
       </div>
 
