@@ -2,16 +2,33 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Activity, Loader2, Pause, Play, Plus, RefreshCw } from "lucide-react";
+import {
+  Activity,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  Megaphone,
+  PauseCircle,
+  Plus,
+  RefreshCw,
+  Sparkles,
+} from "lucide-react";
+import toast from "react-hot-toast";
 
-import { api, type CampaignRecord } from "@/lib/api";
+import { api, formatContentApiError, type CampaignRecord } from "@/lib/api";
 import { useLocale } from "@/components/i18n/LocaleProvider";
+import {
+  createCampaignsColumns,
+  type CampaignRow,
+} from "@/components/campaigns/campaigns-columns";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
+import { DataTable } from "@/components/ui/data-table";
 import {
   Dialog,
   DialogContent,
@@ -21,29 +38,63 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type IgAccount = { id: string; username: string; platform?: string | null };
 
+function StatCard({
+  title,
+  value,
+  icon: Icon,
+  sub,
+}: {
+  title: string;
+  value: number | string;
+  icon: React.ElementType;
+  sub?: string;
+}) {
+  return (
+    <Card>
+      <CardContent className="pt-6">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">{title}</p>
+            <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
+            {sub ? <p className="mt-1 text-xs text-muted-foreground">{sub}</p> : null}
+          </div>
+          <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function jobCount(campaign: CampaignRecord): number {
+  const ids = campaign.settings?.generation_job_ids;
+  return Array.isArray(ids) ? ids.length : 0;
+}
+
 export default function CampaignsPage() {
-  const { text } = useLocale();
-  const t = text.campaigns;
+  const { text, t } = useLocale();
+  const c = text.campaigns;
+
   const [campaigns, setCampaigns] = useState<CampaignRecord[]>([]);
   const [accounts, setAccounts] = useState<IgAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [launchingId, setLaunchingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CampaignRow | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const [name, setName] = useState("");
+  const [strategyType, setStrategyType] = useState<"content" | "growth" | "engagement">("content");
   const [niche, setNiche] = useState("fitness");
   const [topic, setTopic] = useState("");
   const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
@@ -52,6 +103,13 @@ export default function CampaignsPage() {
     () => accounts.filter((a) => (a.platform || "instagram").toLowerCase() === "instagram"),
     [accounts],
   );
+
+  const stats = useMemo(() => {
+    const active = campaigns.filter((x) => x.status.toLowerCase() === "active").length;
+    const paused = campaigns.filter((x) => x.status.toLowerCase() === "paused").length;
+    const withJobs = campaigns.filter((x) => jobCount(x) > 0).length;
+    return { total: campaigns.length, active, paused, withJobs };
+  }, [campaigns]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -64,11 +122,11 @@ export default function CampaignsPage() {
       setCampaigns(camps);
       setAccounts(accs);
     } catch {
-      setError(t.loadError);
+      setError(c.loadError);
     } finally {
       setLoading(false);
     }
-  }, [t.loadError]);
+  }, [c.loadError]);
 
   useEffect(() => {
     load();
@@ -80,6 +138,14 @@ export default function CampaignsPage() {
     );
   };
 
+  const resetForm = () => {
+    setName("");
+    setTopic("");
+    setStrategyType("content");
+    setNiche("fitness");
+    setSelectedAccounts([]);
+  };
+
   const handleCreate = async () => {
     if (!name.trim() || selectedAccounts.length === 0 || !topic.trim()) return;
     setSubmitting(true);
@@ -87,7 +153,7 @@ export default function CampaignsPage() {
     try {
       await api.distribution.createCampaign({
         name: name.trim(),
-        type: "content",
+        type: strategyType,
         target_niche: niche.trim(),
         target_account_id: selectedAccounts.length === 1 ? selectedAccounts[0] : null,
         settings: {
@@ -96,20 +162,20 @@ export default function CampaignsPage() {
           generation_job_ids: [],
         },
       });
-      setSuccess(t.launchSuccess);
+      toast.success(c.launchSuccess);
       setDialogOpen(false);
-      setName("");
-      setTopic("");
-      setSelectedAccounts([]);
+      resetForm();
       await load();
-    } catch {
-      setError(t.launchError);
+    } catch (e: unknown) {
+      const msg = formatContentApiError(e, c.launchError);
+      setError(msg);
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleLaunchJobs = async (campaign: CampaignRecord) => {
+  const handleLaunchJobs = useCallback(async (campaign: CampaignRecord) => {
     const settings = campaign.settings || {};
     const accountIds: string[] =
       Array.isArray(settings.account_ids) && settings.account_ids.length > 0
@@ -119,7 +185,9 @@ export default function CampaignsPage() {
           : [];
     const campaignTopic = String(settings.topic || campaign.target_niche || niche);
     if (accountIds.length === 0) {
-      setError("No Instagram accounts linked to this campaign.");
+      const msg = c.noIgAccounts;
+      setError(msg);
+      toast.error(msg);
       return;
     }
 
@@ -144,213 +212,271 @@ export default function CampaignsPage() {
         generation_job_ids: [...(settings.generation_job_ids || []), ...jobIds],
         last_launched_at: new Date().toISOString(),
       });
-      setSuccess(`${t.launchSuccess} (${jobIds.length} jobs)`);
+      toast.success(`${c.launchSuccess} (${jobIds.length} jobs)`);
       await load();
-    } catch {
-      setError(t.launchError);
+    } catch (e: unknown) {
+      const msg = formatContentApiError(e, c.launchError);
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLaunchingId(null);
     }
-  };
+  }, [c.launchSuccess, c.launchError, c.noIgAccounts, niche, load]);
 
-  const handleStatus = async (campaign: CampaignRecord, status: string) => {
+  const handleToggleStatus = useCallback(async (campaign: CampaignRecord) => {
+    const next = campaign.status.toLowerCase() === "active" ? "paused" : "active";
     try {
-      await api.distribution.updateCampaignStatus(campaign.id, status);
-      setSuccess(status === "paused" ? t.paused : t.resumed);
+      await api.distribution.updateCampaignStatus(campaign.id, next);
+      toast.success(next === "paused" ? c.paused : c.resumed);
       await load();
-    } catch {
-      setError(t.statusUpdateError);
+    } catch (e: unknown) {
+      const msg = formatContentApiError(e, c.statusUpdateError);
+      setError(msg);
+      toast.error(msg);
+    }
+  }, [c.paused, c.resumed, c.statusUpdateError, load]);
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    setDeleteLoading(true);
+    try {
+      await api.distribution.deleteCampaign(deleteTarget.id);
+      toast.success(c.deleteSuccess);
+      setDeleteTarget(null);
+      await load();
+    } catch (e: unknown) {
+      const msg = formatContentApiError(e, c.deleteError);
+      toast.error(msg);
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
+  const columnLabels = useMemo(
+    () => ({
+      campaignName: c.campaignName,
+      strategyType: c.strategyType,
+      targeting: c.targeting,
+      status: c.statusLabel,
+      jobs: c.jobs,
+      accounts: c.accounts,
+      updated: c.updated,
+      actions: c.actions,
+      generate: c.generate,
+      pause: c.pause,
+      resume: c.resume,
+      studio: c.studio,
+      delete: c.delete,
+      content: c.content,
+      growth: c.growth,
+      engagement: c.engagement,
+      noTopic: c.noTopic,
+    }),
+    [c],
+  );
+
+  const columns = useMemo(
+    () =>
+      createCampaignsColumns(
+        {
+          onGenerate: handleLaunchJobs,
+          onToggleStatus: handleToggleStatus,
+          onDelete: setDeleteTarget,
+          launchingId,
+        },
+        columnLabels,
+      ),
+    [columnLabels, launchingId, handleLaunchJobs, handleToggleStatus],
+  );
+
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-primary">{t.engineBadge}</p>
-          <h1 className="text-2xl font-semibold tracking-tight">{t.title}</h1>
-          <p className="text-sm text-muted-foreground">{t.subtitle}</p>
-          <p className="mt-1 text-xs text-muted-foreground">V1: Instagram only · strict 1:1 proxy per account</p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="space-y-1">
+          <p className="text-xs font-medium uppercase tracking-wide text-primary">{c.engineBadge}</p>
+          <h1 className="text-2xl font-semibold tracking-tight">{c.title}</h1>
+          <p className="max-w-2xl text-sm text-muted-foreground">{c.subtitle}</p>
+          <p className="text-xs text-muted-foreground">{c.instagramOnly}</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+        <div className="flex shrink-0 gap-2">
+          <Button variant="outline" size="sm" onClick={load} disabled={loading} aria-label={c.refresh}>
             <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
           </Button>
           <Button size="sm" onClick={() => setDialogOpen(true)}>
-            <Plus className="mr-1 size-4" />
-            {t.launch}
+            <Plus className="mr-1.5 size-4" />
+            {c.createCampaign}
           </Button>
         </div>
       </div>
 
       {error ? (
         <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>{c.errorTitle}</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
-      {success ? (
-        <Alert>
-          <AlertDescription>{success}</AlertDescription>
-        </Alert>
-      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard title={c.statTotal} value={stats.total} icon={Megaphone} />
+        <StatCard title={c.statActive} value={stats.active} icon={CheckCircle2} />
+        <StatCard title={c.statPaused} value={stats.paused} icon={PauseCircle} />
+        <StatCard title={c.statWithJobs} value={stats.withJobs} icon={Sparkles} />
+      </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Activity className="size-5" />
-            {t.title}
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Activity className="size-5 text-muted-foreground" />
+            {c.listTitle}
           </CardTitle>
-          <CardDescription>{t.notice}</CardDescription>
+          <CardDescription>{c.notice}</CardDescription>
         </CardHeader>
         <CardContent>
-          {loading ? (
-            <div className="flex justify-center py-12">
-              <Loader2 className="size-8 animate-spin text-muted-foreground" />
+          {loading && campaigns.length === 0 ? (
+            <div className="space-y-3">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
             </div>
           ) : campaigns.length === 0 ? (
-            <div className="rounded-lg border border-dashed p-8 text-center">
-              <p className="font-medium">{t.zeroFlows}</p>
-              <p className="mt-1 text-sm text-muted-foreground">{t.zeroFlowsSubtitle}</p>
-              <Button className="mt-4" onClick={() => setDialogOpen(true)}>
-                {t.launchEngine}
+            <div className="rounded-lg border border-dashed px-6 py-12 text-center">
+              <Megaphone className="mx-auto mb-3 h-10 w-10 text-muted-foreground/60" />
+              <p className="font-medium">{c.zeroFlows}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{c.zeroFlowsSubtitle}</p>
+              <Button className="mt-5" onClick={() => setDialogOpen(true)}>
+                <Plus className="mr-1.5 size-4" />
+                {c.launchEngine}
               </Button>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t.campaignName}</TableHead>
-                  <TableHead>{t.strategyType}</TableHead>
-                  <TableHead>{t.targeting}</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {campaigns.map((c) => {
-                  const jobIds = (c.settings?.generation_job_ids as string[] | undefined) || [];
-                  return (
-                    <TableRow key={c.id}>
-                      <TableCell className="font-medium">{c.name}</TableCell>
-                      <TableCell>
-                        <Badge variant="secondary">{c.type}</Badge>
-                      </TableCell>
-                      <TableCell>
-                        {c.target_niche || "—"}
-                        {jobIds.length > 0 ? (
-                          <span className="ml-2 text-xs text-muted-foreground">
-                            ({jobIds.length} jobs)
-                          </span>
-                        ) : null}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={c.status === "active" ? "default" : "outline"}>{c.status}</Badge>
-                      </TableCell>
-                      <TableCell className="space-x-2 text-right">
-                        <Button
-                          size="sm"
-                          variant="default"
-                          disabled={launchingId === c.id || c.status === "paused"}
-                          onClick={() => handleLaunchJobs(c)}
-                        >
-                          {launchingId === c.id ? (
-                            <Loader2 className="size-4 animate-spin" />
-                          ) : (
-                            <>
-                              <Play className="mr-1 size-3" />
-                              Generate
-                            </>
-                          )}
-                        </Button>
-                        {c.status === "active" ? (
-                          <Button size="sm" variant="outline" onClick={() => handleStatus(c, "paused")}>
-                            <Pause className="mr-1 size-3" />
-                            {t.pause}
-                          </Button>
-                        ) : (
-                          <Button size="sm" variant="outline" onClick={() => handleStatus(c, "active")}>
-                            {t.resume}
-                          </Button>
-                        )}
-                        {jobIds[0] ? (
-                          <Button size="sm" variant="ghost" asChild>
-                            <Link href={`/generation-studio?job=${jobIds[jobIds.length - 1]}`}>Studio</Link>
-                          </Button>
-                        ) : null}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+            <DataTable
+              columns={columns}
+              data={campaigns}
+              filterColumnId="name"
+              filterPlaceholder={c.searchPlaceholder}
+              emptyMessage={c.emptyList}
+              paginationLabels={text.dataTable}
+            />
           )}
         </CardContent>
       </Card>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          setDialogOpen(open);
+          if (!open) resetForm();
+        }}
+      >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>{t.modalTitle}</DialogTitle>
-            <DialogDescription>{t.modalDescription}</DialogDescription>
+            <DialogTitle>{c.modalTitle}</DialogTitle>
+            <DialogDescription>{c.modalDescription}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>{t.campaignName}</Label>
+              <Label htmlFor="campaign-name">{c.campaignName}</Label>
               <Input
+                id="campaign-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder={t.campaignNamePlaceholder}
+                placeholder={c.campaignNamePlaceholder}
               />
             </div>
-            <div className="space-y-2">
-              <Label>{t.targetNiche}</Label>
-              <Input value={niche} onChange={(e) => setNiche(e.target.value)} placeholder={t.targetNichePlaceholder} />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>{c.strategyType}</Label>
+                <Select
+                  value={strategyType}
+                  onValueChange={(v) => setStrategyType(v as "content" | "growth" | "engagement")}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="content">{c.content}</SelectItem>
+                    <SelectItem value="growth">{c.growth}</SelectItem>
+                    <SelectItem value="engagement">{c.engagement}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="campaign-niche">{c.targetNiche}</Label>
+                <Input
+                  id="campaign-niche"
+                  value={niche}
+                  onChange={(e) => setNiche(e.target.value)}
+                  placeholder={c.targetNichePlaceholder}
+                />
+              </div>
             </div>
             <div className="space-y-2">
-              <Label>{t.topic}</Label>
+              <Label htmlFor="campaign-topic">{c.topic}</Label>
               <Input
+                id="campaign-topic"
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
-                placeholder={t.topicPlaceholder}
+                placeholder={c.topicPlaceholder}
               />
             </div>
             <div className="space-y-2">
-              <Label>{t.targetAccount} (Instagram)</Label>
-              <div className="max-h-40 space-y-2 overflow-y-auto rounded-md border p-2">
+              <Label>{c.targetAccount} (Instagram)</Label>
+              <div className="max-h-44 space-y-2 overflow-y-auto rounded-md border bg-muted/20 p-3">
                 {igAccounts.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    {t.noIgAccounts}{" "}
-                    <Link href="/accounts" className="text-primary underline">
-                      {t.addIgAccount}
+                    {c.noIgAccounts}{" "}
+                    <Link href="/accounts" className="font-medium text-primary underline-offset-2 hover:underline">
+                      {c.addIgAccount}
                     </Link>
                     .
                   </p>
                 ) : (
                   igAccounts.map((acc) => (
-                    <label key={acc.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                    <label
+                      key={acc.id}
+                      className="flex cursor-pointer items-center gap-2.5 rounded-md px-1 py-1 text-sm hover:bg-muted/50"
+                    >
                       <input
                         type="checkbox"
+                        className="size-4 rounded border-input"
                         checked={selectedAccounts.includes(acc.id)}
                         onChange={() => toggleAccount(acc.id)}
                       />
-                      @{acc.username}
+                      <span className="font-medium">@{acc.username}</span>
                     </label>
                   ))
                 )}
               </div>
             </div>
-            <p className="text-xs text-muted-foreground">{t.notice}</p>
+            <p className="text-xs leading-relaxed text-muted-foreground">{c.notice}</p>
           </div>
-          <DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
-              {t.cancel}
+              {c.cancel}
             </Button>
-            <Button onClick={handleCreate} disabled={submitting || selectedAccounts.length === 0}>
-              {submitting ? <Loader2 className="size-4 animate-spin" /> : t.confirmLaunch}
+            <Button
+              onClick={handleCreate}
+              disabled={submitting || selectedAccounts.length === 0 || !name.trim() || !topic.trim()}
+            >
+              {submitting ? <Loader2 className="size-4 animate-spin" /> : c.confirmLaunch}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={c.deleteTitle}
+        description={t("campaigns.deleteDescription", { name: deleteTarget?.name ?? "" })}
+        deleteLabel={c.delete}
+        cancelLabel={c.cancel}
+        onConfirm={handleDeleteConfirm}
+        loading={deleteLoading}
+      />
     </div>
   );
 }
