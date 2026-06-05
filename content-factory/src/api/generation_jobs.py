@@ -1150,29 +1150,36 @@ async def stream_job_output_media(job_id: str, db: AsyncSession = Depends(get_db
     if not media_url:
         raise HTTPException(status_code=404, detail="No output media for this job")
     timeout = httpx.Timeout(300.0, connect=30.0)
+    client = httpx.AsyncClient(timeout=timeout, follow_redirects=True)
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            async with client.stream("GET", media_url) as upstream:
-                if upstream.status_code >= 400:
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"Upstream media URL returned HTTP {upstream.status_code}",
-                    )
-                content_type = upstream.headers.get("content-type") or "application/octet-stream"
-                content_length = upstream.headers.get("content-length")
-
-                async def body() -> Any:
-                    async for chunk in upstream.aiter_bytes():
-                        yield chunk
-
-                headers: dict[str, str] = {"Cache-Control": "private, max-age=3600"}
-                if content_length:
-                    headers["Content-Length"] = content_length
-                return StreamingResponse(body(), media_type=content_type, headers=headers)
-    except HTTPException:
-        raise
+        upstream = await client.send(client.build_request("GET", media_url), stream=True)
     except httpx.HTTPError as e:
+        await client.aclose()
         raise HTTPException(status_code=502, detail=f"Failed to fetch output media: {e}") from e
+
+    if upstream.status_code >= 400:
+        await upstream.aclose()
+        await client.aclose()
+        raise HTTPException(
+            status_code=502,
+            detail=f"Upstream media URL returned HTTP {upstream.status_code}",
+        )
+
+    content_type = upstream.headers.get("content-type") or "application/octet-stream"
+    content_length = upstream.headers.get("content-length")
+    headers: dict[str, str] = {"Cache-Control": "private, max-age=3600"}
+    if content_length:
+        headers["Content-Length"] = content_length
+
+    async def iter_bytes():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(iter_bytes(), media_type=content_type, headers=headers)
 
 
 @router.get("/{job_id}/assets", response_model=list[GeneratedAssetOut])
