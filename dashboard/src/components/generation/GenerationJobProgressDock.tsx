@@ -191,6 +191,7 @@ export function GenerationJobProgressDock() {
       phaseStarting: gsLive.phaseStarting,
       phaseSceneGen: gsLive.phaseSceneGen,
       phaseImages: gsLive.phaseImages,
+      phasePhoto: gsLive.phasePhoto,
       phaseVideo: gsLive.phaseVideo,
       phaseVideoMotion: gsLive.phaseVideoMotion,
       phaseVideoBolt: gsLive.phaseVideoBolt,
