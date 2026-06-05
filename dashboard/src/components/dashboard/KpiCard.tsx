@@ -19,12 +19,12 @@ export function KpiCard({
 }) {
   return (
     <Card>
-      <CardContent className="pt-6">
+      <CardContent className="pt-5">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">{title}</p>
-            <p className="text-2xl font-semibold mt-1">{value}</p>
-            <p className="text-xs text-muted-foreground mt-1">{sub}</p>
+            <p className="label text-muted-foreground">{title}</p>
+            <p className="mt-1.5 text-[1.625rem] font-semibold tabular-nums tracking-tight">{value}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
           </div>
           <div className="flex flex-col items-end gap-2">
             <Icon className="h-5 w-5 text-muted-foreground" />

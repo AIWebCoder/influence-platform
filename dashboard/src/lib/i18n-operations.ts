@@ -2,9 +2,9 @@
 export const operationsI18n = {
   fr: {
     readyQueue: {
-      title: "File d'attente",
+      title: "File de dispatch",
       subtitle:
-        "Suivez vos jobs depuis la création du brouillon jusqu'à la publication. Les vidéos prêtes peuvent être publiées sur Instagram.",
+        "Suivez les jobs de la création du brouillon jusqu'au dispatch. Les vidéos prêtes peuvent être publiées sur Instagram.",
       sectionInProgress: "En cours",
       sectionInProgressHint: "Brouillon, lancement ou génération — ouvrez le Studio pour le détail.",
       sectionReady: "Prêts à publier",
@@ -159,9 +159,9 @@ export const operationsI18n = {
   },
   en: {
     readyQueue: {
-      title: "Waiting list",
+      title: "Dispatch Queue",
       subtitle:
-        "Track jobs from draft through publishing. Ready videos can be posted to Instagram.",
+        "Track jobs from draft through dispatch. Ready videos can be posted to Instagram.",
       sectionInProgress: "In progress",
       sectionInProgressHint: "Draft, launch, or generation — open Studio for full detail.",
       sectionReady: "Ready to publish",
