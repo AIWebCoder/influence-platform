@@ -299,11 +299,10 @@ export function GenerationStudioPublishPanel({
     () => assets.find((a) => a.id === selectedAssetId) ?? null,
     [assets, selectedAssetId]
   );
-  const selectedPhotoPreviewUrl = useMemo(() => {
-    if (!selectedAsset || selectedAsset.asset_type === "video") return null;
-    if (preferPhotoAsset) return jobOutputMediaProxyUrl(jobId);
-    return selectedAsset.public_url;
-  }, [selectedAsset, preferPhotoAsset, jobId]);
+  const selectedMediaPreviewUrl = useMemo(() => {
+    if (!selectedAsset) return null;
+    return jobOutputMediaProxyUrl(jobId);
+  }, [selectedAsset, jobId]);
 
   const accountSummary = useMemo(() => {
     if (selectedAccounts.length === 0) return acc.selectTargets;
@@ -735,8 +734,8 @@ export function GenerationStudioPublishPanel({
               {selectedAsset ? (
                 selectedAsset.asset_type === "video" || selectedAsset.mime_type.startsWith("video/") ? (
                   <video
-                    key={selectedAsset.public_url}
-                    src={selectedAsset.public_url}
+                    key={selectedMediaPreviewUrl ?? selectedAsset.public_url}
+                    src={selectedMediaPreviewUrl ?? selectedAsset.public_url}
                     className="aspect-[9/16] max-h-[min(70vh,520px)] w-full object-contain"
                     controls
                     playsInline
@@ -744,7 +743,7 @@ export function GenerationStudioPublishPanel({
                 ) : (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={selectedPhotoPreviewUrl ?? selectedAsset.public_url}
+                    src={selectedMediaPreviewUrl ?? selectedAsset.public_url}
                     alt=""
                     className="aspect-video w-full object-contain"
                     {...KIE_IMAGE_PROPS}
@@ -773,11 +772,16 @@ export function GenerationStudioPublishPanel({
                       )}
                     >
                       {isVideo ? (
-                        <video src={asset.public_url} className="h-full w-full object-cover" muted playsInline />
+                        <video
+                          src={jobOutputMediaProxyUrl(jobId)}
+                          className="h-full w-full object-cover"
+                          muted
+                          playsInline
+                        />
                       ) : (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
-                          src={preferPhotoAsset ? jobOutputMediaProxyUrl(jobId) : asset.public_url}
+                          src={jobOutputMediaProxyUrl(jobId)}
                           alt=""
                           className="h-full w-full object-cover"
                           {...KIE_IMAGE_PROPS}
