@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from google.api_core.exceptions import GoogleAPIError, RetryError
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1108,6 +1110,55 @@ async def _build_publish_intent_response(db: AsyncSession, intent_id: str) -> Pu
         for r in target_rows.fetchall()
     ]
     return PublishIntentCreateResponse(intent_id=str(intent[0]), status=str(intent[1]), targets=targets)
+
+
+def _resolve_job_output_media_url(job: GenerationJob) -> str | None:
+    """Best public URL for browser preview (photo output_url or first scene image/video)."""
+    direct = str(job.output_url or "").strip()
+    if direct and not direct.upper().startswith("ERROR"):
+        return direct
+    scenes = sorted(job.scenes or [], key=lambda x: x.scene_index)
+    for sc in scenes:
+        for candidate in (sc.start_image_url, sc.end_image_url, sc.video_url):
+            u = str(candidate or "").strip()
+            if u and not u.upper().startswith("ERROR"):
+                return u
+    return None
+
+
+@router.get("/{job_id}/output-media")
+async def stream_job_output_media(job_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Proxy job output bytes through Content Factory so the dashboard can display
+    Kie CDN URLs that block browser hotlinking (Referer checks).
+    """
+    try:
+        jid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+    svc = GenerationJobService(db)
+    job = await svc.get_job(jid, with_children=True)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    media_url = _resolve_job_output_media_url(job)
+    if not media_url:
+        raise HTTPException(status_code=404, detail="No output media for this job")
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            upstream = await client.get(media_url)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch output media: {e}") from e
+    if upstream.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Upstream media URL returned HTTP {upstream.status_code}",
+        )
+    content_type = upstream.headers.get("content-type") or "application/octet-stream"
+    return Response(
+        content=upstream.content,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 @router.get("/{job_id}/assets", response_model=list[GeneratedAssetOut])
