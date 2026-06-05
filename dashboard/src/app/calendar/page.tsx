@@ -26,7 +26,6 @@ import { useLocale } from "@/components/i18n/LocaleProvider";
 import { DashboardPageHeader } from "@/components/dashboard/DashboardPageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Dialog,
@@ -45,6 +44,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  buildCalendarPreviewItems,
+  calendarPreviewEnabledByEnv,
+  isCalendarPreviewItem,
+} from "@/lib/calendar-preview-data";
+import {
+  buildChipMetaParts,
+  buildDayLabels,
+  chipBorderClass,
+  computePeriodOpsMetrics,
+  statusTier,
+  sumDispatchTargets,
+} from "@/lib/calendar-ops";
 
 type CalendarItem = {
   id: string;
@@ -68,11 +87,29 @@ type EditorialCalendarCopy = {
   statusPublished: string;
   statusFailed: string;
   emptyDay: string;
+  emptyDayTodayNext: string;
   moreItems: string;
-  accounts: string;
+  chipTargets: string;
+  statusLegend: string;
+  kpiScheduledIntents: string;
+  kpiDispatchTargets: string;
+  kpiAwaitingSlot: string;
+  kpiPeakDay: string;
+  kpiNextDispatch: string;
+  kpiNextDispatchNone: string;
+  kpiThroughputSub: string;
+  dayDrawerSummary: string;
 };
 
+/** Typical ops load: show every dispatch inline up to this count; drawer only above. */
+const WEEK_DAY_SOFT_LIMIT = 5;
 const MONTH_COMPACT_LIMIT = 2;
+const WEEK_DAY_MIN_HEIGHT = "min-h-[168px]";
+const MONTH_DAY_HEIGHT = "h-[140px]";
+const CALENDAR_GRID_GAP = "gap-3.5";
+const DAY_HEADER_HEIGHT = "h-10";
+const DAY_INSET_X = "px-3.5";
+const DAY_CONTENT_PAD = "px-3.5 pb-3.5 pt-2.5";
 
 function statusLabel(status: string, cal: EditorialCalendarCopy): string {
   switch (status.toLowerCase()) {
@@ -91,17 +128,29 @@ function statusLabel(status: string, cal: EditorialCalendarCopy): string {
   }
 }
 
-function statusVariant(status: string): "default" | "secondary" | "outline" | "destructive" {
-  switch (status.toLowerCase()) {
-    case "published":
-      return "secondary";
-    case "queued":
-      return "default";
-    case "failed":
-      return "destructive";
-    default:
-      return "outline";
-  }
+function StatusText({
+  status,
+  cal,
+  className,
+}: {
+  status: string;
+  cal: EditorialCalendarCopy;
+  className?: string;
+}) {
+  const tier = statusTier(status);
+  const normalized = status.toLowerCase();
+  return (
+    <span
+      className={cn(
+        tier === "action" && normalized === "failed" && "text-destructive",
+        tier === "action" && normalized !== "failed" && "text-foreground",
+        tier !== "action" && "text-muted-foreground",
+        className,
+      )}
+    >
+      {statusLabel(status, cal)}
+    </span>
+  );
 }
 
 function dayKey(day: Date) {
@@ -127,56 +176,369 @@ function buildByDay(items: CalendarItem[], dayKeys: string[]) {
   return map;
 }
 
+function weekDayDisplaySlice(dayItems: CalendarItem[]) {
+  if (dayItems.length <= WEEK_DAY_SOFT_LIMIT) {
+    return { visible: dayItems, overflow: 0 };
+  }
+  return {
+    visible: dayItems.slice(0, WEEK_DAY_SOFT_LIMIT),
+    overflow: dayItems.length - WEEK_DAY_SOFT_LIMIT,
+  };
+}
+
+function DayDispatchCountBadge({
+  intentCount,
+  label,
+}: {
+  intentCount: number;
+  targetCount: number;
+  label: string;
+}) {
+  if (intentCount <= 0) return null;
+  return (
+    <span
+      className="inline-flex h-5 min-w-5 items-center justify-center rounded-md border border-border/80 bg-muted/30 px-1.5 text-[10px] font-semibold tabular-nums text-muted-foreground"
+      aria-label={label}
+      title={label}
+    >
+      {intentCount}
+    </span>
+  );
+}
+
+function DispatchOpsKpiStrip({
+  cal,
+  metrics,
+  throughputSub,
+  peakDayValue,
+  nextDispatchLine,
+  nextDispatchSub,
+}: {
+  cal: EditorialCalendarCopy;
+  metrics: ReturnType<typeof computePeriodOpsMetrics>;
+  throughputSub: string;
+  peakDayValue: string;
+  nextDispatchLine: string;
+  nextDispatchSub?: string;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-3.5 md:grid-cols-5 md:items-stretch">
+      <OpsKpiCell label={cal.kpiScheduledIntents} value={String(metrics.intentCount)} sub={throughputSub} />
+      <OpsKpiCell label={cal.kpiDispatchTargets} value={String(metrics.targetCount)} />
+      <OpsKpiCell
+        label={cal.kpiAwaitingSlot}
+        value={String(metrics.awaitingSlot)}
+        emphasize={metrics.awaitingSlot > 0}
+      />
+      <OpsKpiCell label={cal.kpiPeakDay} value={peakDayValue} />
+      <OpsKpiCell
+        label={cal.kpiNextDispatch}
+        value={nextDispatchLine}
+        sub={nextDispatchSub}
+        compactValue
+      />
+    </div>
+  );
+}
+
+function OpsKpiCell({
+  label,
+  value,
+  sub,
+  emphasize,
+  compactValue,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  emphasize?: boolean;
+  compactValue?: boolean;
+}) {
+  return (
+    <div className="flex h-full min-h-[88px] flex-col rounded-lg border border-border/80 bg-card px-4 py-4">
+      <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p
+        className={cn(
+          "mt-1.5 font-semibold tabular-nums tracking-tight",
+          compactValue ? "text-sm leading-snug" : "text-xl",
+          emphasize && "text-foreground",
+        )}
+      >
+        {value}
+      </p>
+      {sub ? (
+        <p className="mt-auto pt-1.5 text-[10px] leading-snug text-muted-foreground tabular-nums">{sub}</p>
+      ) : (
+        <span className="mt-auto" aria-hidden />
+      )}
+    </div>
+  );
+}
+
+function WeekDayHeader({
+  weekday,
+  dayNumber,
+  intentCount,
+  targetCount,
+  countLabel,
+  isToday,
+}: {
+  weekday: string;
+  dayNumber: string;
+  intentCount: number;
+  targetCount: number;
+  countLabel: string;
+  isToday: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex shrink-0 items-center justify-between border-b border-border/40",
+        DAY_HEADER_HEIGHT,
+        DAY_INSET_X,
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-foreground/90">
+          {weekday}
+        </span>
+        <DayDispatchCountBadge
+          intentCount={intentCount}
+          targetCount={targetCount}
+          label={countLabel}
+        />
+      </div>
+      <span
+        className={cn(
+          "text-sm font-semibold tabular-nums leading-none",
+          isToday ? "text-primary" : "text-muted-foreground",
+        )}
+      >
+        {dayNumber}
+      </span>
+    </div>
+  );
+}
+
+function MonthDayHeader({
+  dayNumber,
+  intentCount,
+  targetCount,
+  countLabel,
+  isToday,
+  showOpenWeek,
+  openWeekLabel,
+  onOpenWeek,
+}: {
+  dayNumber: string;
+  intentCount: number;
+  targetCount: number;
+  countLabel: string;
+  isToday: boolean;
+  showOpenWeek: boolean;
+  openWeekLabel: string;
+  onOpenWeek: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "grid shrink-0 grid-cols-[1fr_auto] items-center border-b border-border/40",
+        DAY_HEADER_HEIGHT,
+        DAY_INSET_X,
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span
+          className={cn(
+            "text-xs font-semibold tabular-nums leading-none",
+            isToday ? "text-primary" : "text-muted-foreground",
+          )}
+        >
+          {dayNumber}
+        </span>
+        <DayDispatchCountBadge
+          intentCount={intentCount}
+          targetCount={targetCount}
+          label={countLabel}
+        />
+      </div>
+      <div className="flex h-7 w-[4.5rem] items-center justify-end">
+        {showOpenWeek ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-[10px]"
+            onClick={onOpenWeek}
+          >
+            {openWeekLabel}
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function EmptyDaySlot({
+  cal,
+  isToday,
+  nextWhen,
+  compact,
+}: {
+  cal: EditorialCalendarCopy;
+  isToday: boolean;
+  nextWhen?: string;
+  compact?: boolean;
+}) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center px-2 py-4 text-center">
+      <p
+        className={cn(
+          "text-muted-foreground/50",
+          compact ? "text-[10px]" : "text-[11px]",
+        )}
+      >
+        {cal.emptyDay}
+      </p>
+      {isToday && nextWhen ? (
+        <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground/70">{nextWhen}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function DayColumnFooter({
+  overflow,
+  moreLabel,
+  onShowMore,
+}: {
+  overflow: number;
+  moreLabel: string;
+  onShowMore?: () => void;
+}) {
+  if (overflow <= 0 || !onShowMore) return null;
+
+  return (
+    <div className="mt-3 shrink-0 border-t border-border/30 pt-2.5">
+      <button
+        type="button"
+        onClick={onShowMore}
+        className="w-full text-left text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        {moreLabel}
+      </button>
+    </div>
+  );
+}
+
 function DispatchIntentChip({
   item,
   cal,
-  compact,
+  variant = "week",
   onSelect,
 }: {
   item: CalendarItem;
   cal: EditorialCalendarCopy;
-  compact?: boolean;
+  variant?: "week" | "compact" | "drawer";
   onSelect: (item: CalendarItem) => void;
 }) {
+  const { t } = useLocale();
+  const timeLabel = item.scheduled_at ? format(new Date(item.scheduled_at), "HH:mm") : "—";
+  const caption = item.caption || item.niche || item.id.slice(0, 8);
+  const targetsLabel =
+    typeof item.target_count === "number" && item.target_count > 0
+      ? t("editorialCalendar.chipTargets", { count: item.target_count })
+      : null;
+  const metaLine = buildChipMetaParts(item, targetsLabel);
+
+  if (variant === "compact") {
+    return (
+      <button
+        type="button"
+        onClick={() => onSelect(item)}
+        className={cn(
+          "w-full rounded-md border text-left transition-colors hover:bg-muted/60",
+          chipBorderClass(item.status),
+          "px-2 py-2",
+        )}
+      >
+        <p className="text-[10px] font-semibold tabular-nums">{timeLabel}</p>
+        <p className="mt-0.5 truncate text-[10px] text-muted-foreground">{caption}</p>
+      </button>
+    );
+  }
+
   return (
     <button
       type="button"
       onClick={() => onSelect(item)}
       className={cn(
-        "w-full rounded-md border border-border/80 text-left transition-colors hover:bg-muted/60",
-        compact ? "px-1.5 py-1 text-[10px]" : "p-2 text-xs",
+        "w-full rounded-md border text-left transition-colors hover:bg-muted/60",
+        chipBorderClass(item.status),
+        variant === "drawer" ? "p-3.5" : "p-2.5",
       )}
     >
-      <div className={cn("flex flex-wrap gap-1", compact ? "mb-0.5" : "mb-1")}>
-        <Badge variant={statusVariant(item.status)} className="text-[10px]">
-          {statusLabel(item.status, cal)}
-        </Badge>
-        {!compact && item.content_type ? (
-          <Badge variant="outline" className="text-[10px]">
-            {item.content_type}
-          </Badge>
-        ) : null}
-      </div>
-      {!compact ? (
-        <p className="line-clamp-2 leading-snug">
-          {item.caption || item.niche || item.id.slice(0, 8)}
-        </p>
-      ) : (
-        <p className="truncate tabular-nums text-muted-foreground">
-          {item.scheduled_at ? format(new Date(item.scheduled_at), "HH:mm") : "—"}
-        </p>
-      )}
-      {!compact && item.scheduled_at ? (
-        <p className="mt-1 text-[10px] text-muted-foreground tabular-nums">
-          {format(new Date(item.scheduled_at), "HH:mm")}
-        </p>
+      <p className="text-sm font-semibold tabular-nums tracking-tight">{timeLabel}</p>
+      <p className="mt-1 line-clamp-2 text-xs leading-snug text-foreground/85">{caption}</p>
+      {metaLine ? (
+        <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground">{metaLine}</p>
       ) : null}
-      {!compact && typeof item.target_count === "number" && item.target_count > 0 ? (
-        <p className="mt-0.5 text-[10px] text-muted-foreground tabular-nums">
-          {cal.accounts}: {item.target_count}
-        </p>
-      ) : null}
+      <p className="mt-1.5 text-[10px]">
+        <StatusText status={item.status} cal={cal} />
+      </p>
     </button>
+  );
+}
+
+function DayDetailDrawer({
+  open,
+  day,
+  items,
+  cal,
+  dateLocale,
+  onClose,
+  onSelectItem,
+  summaryLabel,
+}: {
+  open: boolean;
+  day: Date | null;
+  items: CalendarItem[];
+  cal: EditorialCalendarCopy;
+  dateLocale: typeof enUS;
+  onClose: () => void;
+  onSelectItem: (item: CalendarItem) => void;
+  summaryLabel: string;
+}) {
+  if (!day) return null;
+
+  return (
+    <Sheet open={open} onOpenChange={(next) => !next && onClose()}>
+      <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-md">
+        <SheetHeader className="space-y-1 border-b border-border/40 px-5 py-4 text-left">
+          <SheetTitle className="text-base font-semibold leading-snug">
+            {format(day, "EEEE d MMMM", { locale: dateLocale })}
+          </SheetTitle>
+          <SheetDescription className="text-xs tabular-nums">{summaryLabel}</SheetDescription>
+        </SheetHeader>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {items.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{cal.emptyDay}</p>
+          ) : (
+            <div className="space-y-3">
+              {items.map((item) => (
+                <DispatchIntentChip
+                  key={item.id}
+                  item={item}
+                  cal={cal}
+                  variant="drawer"
+                  onSelect={onSelectItem}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -197,6 +559,8 @@ export default function CalendarPage() {
   const [saving, setSaving] = useState(false);
   const [nicheFilter, setNicheFilter] = useState<string>("all");
   const [nicheOptions, setNicheOptions] = useState<string[]>([]);
+  const [previewEnabled, setPreviewEnabled] = useState(calendarPreviewEnabledByEnv);
+  const [dayDrawerDay, setDayDrawerDay] = useState<Date | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -250,10 +614,63 @@ export default function CalendarPage() {
     [viewMode, weekDays, monthGridDays],
   );
 
-  const scheduledInPeriod = useMemo(
-    () => items.filter((i) => i.scheduled_at).length,
-    [items],
+  const previewItems = useMemo(
+    () =>
+      buildCalendarPreviewItems(
+        viewMode === "week" ? weekAnchor : monthAnchor,
+        viewMode,
+        nicheFilter,
+      ),
+    [viewMode, weekAnchor, monthAnchor, nicheFilter],
   );
+
+  const displayItems = previewEnabled ? previewItems : items;
+
+  const opsDayKeys = useMemo(
+    () =>
+      viewMode === "week"
+        ? weekDays.map(dayKey)
+        : monthGridDays
+            .filter((d) => isSameMonth(d, monthAnchor))
+            .map(dayKey),
+    [viewMode, weekDays, monthGridDays, monthAnchor],
+  );
+
+  const opsDayLabels = useMemo(
+    () =>
+      buildDayLabels(
+        viewMode === "week" ? weekDays : monthGridDays.filter((d) => isSameMonth(d, monthAnchor)),
+        dateLocale,
+      ),
+    [viewMode, weekDays, monthGridDays, monthAnchor, dateLocale],
+  );
+
+  const opsMetrics = useMemo(
+    () => computePeriodOpsMetrics(displayItems, opsDayKeys, opsDayLabels),
+    [displayItems, opsDayKeys, opsDayLabels],
+  );
+
+  const throughputSub = t("editorialCalendar.kpiThroughputSub", {
+    intents: opsMetrics.intentCount,
+    targets: opsMetrics.targetCount,
+  });
+
+  const peakDayValue = opsMetrics.peakDay
+    ? t("editorialCalendar.kpiPeakDayValue", {
+        day: opsMetrics.peakDay.label,
+        intents: opsMetrics.peakDay.intentCount,
+      })
+    : "—";
+
+  const nextDispatchLine = opsMetrics.nextDispatch
+    ? opsMetrics.nextDispatch.timeLabel
+    : cal.kpiNextDispatchNone;
+
+  const todayNextWhen = opsMetrics.nextDispatch
+    ? t("editorialCalendar.emptyDayTodayNext", {
+        when: format(opsMetrics.nextDispatch.at, "EEE HH:mm", { locale: dateLocale }),
+      })
+    : undefined;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -279,16 +696,28 @@ export default function CalendarPage() {
   }, [load]);
 
   const byDay = useMemo(
-    () => buildByDay(items, visibleDayKeys),
-    [items, visibleDayKeys],
+    () => buildByDay(displayItems, visibleDayKeys),
+    [displayItems, visibleDayKeys],
   );
 
   const unscheduled = useMemo(
-    () => items.filter((i) => !i.scheduled_at),
-    [items],
+    () => displayItems.filter((i) => !i.scheduled_at),
+    [displayItems],
   );
 
+  const showEmptyHint =
+    !loading && !error && !previewEnabled && items.length === 0;
+
   const openSchedule = (item: CalendarItem) => {
+    if (isCalendarPreviewItem(item.id)) {
+      if (item.status === "queued" || item.status === "published") {
+        toast.error(cal.previewQueuedBlocked);
+        return;
+      }
+      setEditItem(item);
+      setEditWhen(item.scheduled_at ? new Date(item.scheduled_at) : new Date());
+      return;
+    }
     if (item.status === "queued" || item.status === "published") {
       toast.error(cal.cannotReschedule);
       return;
@@ -302,8 +731,28 @@ export default function CalendarPage() {
     setViewMode("week");
   };
 
+  const openDayDrawer = (day: Date) => {
+    setDayDrawerDay(day);
+  };
+
+  const dayDrawerItems = useMemo(() => {
+    if (!dayDrawerDay) return [];
+    return byDay[dayKey(dayDrawerDay)] || [];
+  }, [dayDrawerDay, byDay]);
+
+  const dayDrawerSummary = dayDrawerDay
+    ? t("editorialCalendar.dayDrawerSummary", {
+        intents: dayDrawerItems.length,
+        targets: sumDispatchTargets(dayDrawerItems),
+      })
+    : "";
+
   const handleSaveSchedule = async () => {
     if (!editItem || !editWhen) return;
+    if (isCalendarPreviewItem(editItem.id)) {
+      toast.error(cal.previewScheduleBlocked);
+      return;
+    }
     setSaving(true);
     try {
       await api.content.patchPublishIntentSchedule(editItem.id, editWhen.toISOString());
@@ -366,31 +815,29 @@ export default function CalendarPage() {
       <Button variant="outline" size="icon" onClick={goNext}>
         <ChevronRight className="h-4 w-4" />
       </Button>
-      <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+      <Button variant="outline" size="sm" onClick={load} disabled={loading || previewEnabled}>
         <RefreshCw className={cn("h-4 w-4 sm:mr-1.5", loading && "animate-spin")} />
         <span className="hidden sm:inline">{cal.refresh}</span>
       </Button>
+      <Button
+        variant={previewEnabled ? "secondary" : "outline"}
+        size="sm"
+        onClick={() => setPreviewEnabled((on) => !on)}
+      >
+        {previewEnabled ? cal.previewDisable : cal.previewEnable}
+      </Button>
     </div>
   );
-
-  const summaryKey = viewMode === "week" ? "editorialCalendar.weekSummary" : "editorialCalendar.monthSummary";
 
   return (
     <div className="ops-page-shell">
       <DashboardPageHeader title={cal.title} subtitle={cal.subtitle} actions={periodNav} />
 
       <div className="flex flex-wrap items-end gap-3">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground min-w-0 flex-1">
-          <p>{cal.hint}</p>
-          <p className="tabular-nums">{cal.timezoneNote}</p>
-          {!loading && !error ? (
-            <p className="tabular-nums">
-              {t(summaryKey, {
-                scheduled: scheduledInPeriod,
-                unscheduled: unscheduled.length,
-              })}
-            </p>
-          ) : null}
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <p className="text-xs text-muted-foreground">{cal.hint}</p>
+          <p className="text-[10px] text-muted-foreground tabular-nums">{cal.timezoneNote}</p>
+          <p className="text-[10px] text-muted-foreground">{cal.statusLegend}</p>
         </div>
         {nicheOptions.length > 0 ? (
           <div className="w-full sm:w-[200px]">
@@ -412,9 +859,37 @@ export default function CalendarPage() {
         ) : null}
       </div>
 
+      {!loading && !error ? (
+        <DispatchOpsKpiStrip
+          cal={cal}
+          metrics={opsMetrics}
+          throughputSub={throughputSub}
+          peakDayValue={peakDayValue}
+          nextDispatchLine={nextDispatchLine}
+          nextDispatchSub={opsMetrics.nextDispatch?.caption}
+        />
+      ) : null}
+
       {error ? (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {previewEnabled ? (
+        <Alert>
+          <AlertDescription>{cal.previewBanner}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {showEmptyHint ? (
+        <Alert>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>{cal.previewEmptyHint}</span>
+            <Button type="button" size="sm" variant="secondary" onClick={() => setPreviewEnabled(true)}>
+              {cal.previewEnable}
+            </Button>
+          </AlertDescription>
         </Alert>
       ) : null}
 
@@ -424,46 +899,65 @@ export default function CalendarPage() {
         </div>
       ) : viewMode === "week" ? (
         <>
-          <div className="grid gap-3 md:grid-cols-7">
-            {weekDays.map((day) => {
-              const key = dayKey(day);
-              const dayItems = byDay[key] || [];
-              const isToday = key === dayKey(new Date());
-              return (
-                <Card
-                  key={key}
-                  className={cn("min-h-[168px]", isToday && "ring-1 ring-primary/30")}
-                >
-                  <CardHeader className="space-y-0 pb-2 pt-4">
-                    <CardTitle className="flex items-baseline justify-between text-sm font-semibold">
-                      <span>{format(day, "EEE", { locale: dateLocale })}</span>
-                      <span
-                        className={cn(
-                          "tabular-nums",
-                          isToday ? "text-primary" : "text-muted-foreground",
-                        )}
-                      >
-                        {format(day, "d")}
-                      </span>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-2 pb-4">
-                    {dayItems.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">{cal.emptyDay}</p>
-                    ) : (
-                      dayItems.map((item) => (
-                        <DispatchIntentChip
-                          key={item.id}
-                          item={item}
-                          cal={cal}
-                          onSelect={openSchedule}
-                        />
-                      ))
+          <div className="overflow-x-auto pb-1 md:overflow-visible">
+            <div className={cn("grid min-w-[960px] grid-cols-7 items-stretch md:min-w-0", CALENDAR_GRID_GAP)}>
+              {weekDays.map((day) => {
+                const key = dayKey(day);
+                const dayItems = byDay[key] || [];
+                const { visible: visibleItems, overflow } = weekDayDisplaySlice(dayItems);
+                const isToday = key === dayKey(new Date());
+                const dayTargets = sumDispatchTargets(dayItems);
+                const countLabel = t("editorialCalendar.dayDispatchTooltip", {
+                  intents: dayItems.length,
+                  targets: dayTargets,
+                });
+                return (
+                  <Card
+                    key={key}
+                    className={cn(
+                      "flex h-full flex-col",
+                      WEEK_DAY_MIN_HEIGHT,
+                      dayItems.length === 0 && "border-dashed border-border/50",
+                      isToday && "ring-1 ring-primary/30",
                     )}
-                  </CardContent>
-                </Card>
-              );
-            })}
+                  >
+                    <WeekDayHeader
+                      weekday={format(day, "EEE", { locale: dateLocale })}
+                      dayNumber={format(day, "d")}
+                      intentCount={dayItems.length}
+                      targetCount={dayTargets}
+                      countLabel={countLabel}
+                      isToday={isToday}
+                    />
+                    <CardContent className={cn("flex flex-1 flex-col p-0", DAY_CONTENT_PAD)}>
+                      {dayItems.length === 0 ? (
+                        <EmptyDaySlot
+                          cal={cal}
+                          isToday={isToday}
+                          nextWhen={isToday ? todayNextWhen : undefined}
+                        />
+                      ) : (
+                        <div className="space-y-2">
+                          {visibleItems.map((item) => (
+                            <DispatchIntentChip
+                              key={item.id}
+                              item={item}
+                              cal={cal}
+                              onSelect={openSchedule}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      <DayColumnFooter
+                        overflow={overflow}
+                        moreLabel={t("editorialCalendar.moreItems", { count: overflow })}
+                        onShowMore={() => openDayDrawer(day)}
+                      />
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
           </div>
           {unscheduled.length > 0 ? (
             <UnscheduledPanel
@@ -475,11 +969,14 @@ export default function CalendarPage() {
         </>
       ) : (
         <>
-          <div className="hidden grid-cols-7 gap-2 md:grid">
+          <div className={cn("mb-3 hidden grid-cols-7 md:grid", CALENDAR_GRID_GAP)}>
             {Array.from({ length: 7 }, (_, i) => (
               <p
                 key={i}
-                className="px-1 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+                className={cn(
+                  "text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground",
+                  DAY_INSET_X,
+                )}
               >
                 {format(addDays(startOfWeek(new Date(), { weekStartsOn: 1 }), i), "EEE", {
                   locale: dateLocale,
@@ -487,67 +984,81 @@ export default function CalendarPage() {
               </p>
             ))}
           </div>
-          <div className="grid grid-cols-7 gap-2">
+          <div className={cn("grid grid-cols-7", CALENDAR_GRID_GAP)}>
             {monthGridDays.map((day) => {
               const key = dayKey(day);
               const dayItems = byDay[key] || [];
               const inMonth = isSameMonth(day, monthAnchor);
               const isToday = key === dayKey(new Date());
               const overflow = dayItems.length - MONTH_COMPACT_LIMIT;
+              const dayTargets = sumDispatchTargets(dayItems);
+              const countLabel = t("editorialCalendar.dayDispatchTooltip", {
+                intents: dayItems.length,
+                targets: dayTargets,
+              });
               return (
                 <Card
                   key={key}
                   className={cn(
-                    "min-h-[108px]",
+                    "flex flex-col overflow-hidden",
+                    MONTH_DAY_HEIGHT,
                     !inMonth && "opacity-45",
+                    dayItems.length === 0 && inMonth && "border-dashed border-border/60",
                     isToday && "ring-1 ring-primary/30",
                   )}
                 >
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 p-2 pb-1">
-                    <span
-                      className={cn(
-                        "text-xs font-semibold tabular-nums",
-                        isToday ? "text-primary" : "text-muted-foreground",
-                      )}
-                    >
-                      {format(day, "d")}
-                    </span>
-                    {dayItems.length > 0 ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 px-1.5 text-[10px]"
-                        onClick={() => openWeekForDay(day)}
-                      >
-                        {cal.openWeek}
-                      </Button>
-                    ) : null}
-                  </CardHeader>
-                  <CardContent className="space-y-1 p-2 pt-0">
+                  {inMonth ? (
+                    <MonthDayHeader
+                      dayNumber={format(day, "d")}
+                      intentCount={dayItems.length}
+                      targetCount={dayTargets}
+                      countLabel={countLabel}
+                      isToday={isToday}
+                      showOpenWeek={dayItems.length > 0}
+                      openWeekLabel={cal.openWeek}
+                      onOpenWeek={() => openWeekForDay(day)}
+                    />
+                  ) : (
+                    <div className={cn("shrink-0 border-b border-transparent", DAY_HEADER_HEIGHT, DAY_INSET_X)} />
+                  )}
+                  <CardContent
+                    className={cn(
+                      "flex min-h-0 flex-1 flex-col p-0",
+                      inMonth ? "px-3 pb-3 pt-2" : "p-0",
+                    )}
+                  >
                     {dayItems.length === 0 ? (
-                      <p className="text-[10px] text-muted-foreground">{cal.emptyDay}</p>
+                      inMonth ? (
+                        <EmptyDaySlot
+                          cal={cal}
+                          isToday={isToday}
+                          nextWhen={isToday ? todayNextWhen : undefined}
+                          compact
+                        />
+                      ) : null
                     ) : (
-                      <>
+                      <div className="flex min-h-0 flex-1 flex-col space-y-1.5">
                         {dayItems.slice(0, MONTH_COMPACT_LIMIT).map((item) => (
                           <DispatchIntentChip
                             key={item.id}
                             item={item}
                             cal={cal}
-                            compact
+                            variant="compact"
                             onSelect={openSchedule}
                           />
                         ))}
                         {overflow > 0 ? (
                           <button
                             type="button"
-                            className="w-full text-left text-[10px] text-muted-foreground hover:text-foreground"
-                            onClick={() => openWeekForDay(day)}
+                            className="mt-auto w-full pt-1 text-left text-[10px] text-muted-foreground hover:text-foreground"
+                            onClick={() => openDayDrawer(day)}
                           >
                             {t("editorialCalendar.moreItems", { count: overflow })}
                           </button>
-                        ) : null}
-                      </>
+                        ) : (
+                          <span className="mt-auto" aria-hidden />
+                        )}
+                      </div>
                     )}
                   </CardContent>
                 </Card>
@@ -564,16 +1075,29 @@ export default function CalendarPage() {
         </>
       )}
 
+      <DayDetailDrawer
+        open={Boolean(dayDrawerDay)}
+        day={dayDrawerDay}
+        items={dayDrawerItems}
+        cal={cal}
+        dateLocale={dateLocale}
+        onClose={() => setDayDrawerDay(null)}
+        onSelectItem={(item) => {
+          setDayDrawerDay(null);
+          openSchedule(item);
+        }}
+        summaryLabel={dayDrawerSummary}
+      />
+
       <ScheduleDialog
         cal={cal}
         editItem={editItem}
         editWhen={editWhen}
         saving={saving}
+        previewMode={Boolean(editItem && isCalendarPreviewItem(editItem.id))}
         onClose={() => setEditItem(null)}
         onChangeWhen={setEditWhen}
         onSave={handleSaveSchedule}
-        statusLabel={statusLabel}
-        statusVariant={statusVariant}
       />
     </div>
   );
@@ -612,21 +1136,19 @@ function ScheduleDialog({
   editItem,
   editWhen,
   saving,
+  previewMode,
   onClose,
   onChangeWhen,
   onSave,
-  statusLabel,
-  statusVariant,
 }: {
   cal: Record<string, string>;
   editItem: CalendarItem | null;
   editWhen: Date | undefined;
   saving: boolean;
+  previewMode?: boolean;
   onClose: () => void;
   onChangeWhen: (d: Date | undefined) => void;
   onSave: () => void;
-  statusLabel: (status: string, cal: EditorialCalendarCopy) => string;
-  statusVariant: (status: string) => "default" | "secondary" | "outline" | "destructive";
 }) {
   return (
     <Dialog open={Boolean(editItem)} onOpenChange={(open) => !open && onClose()}>
@@ -650,14 +1172,15 @@ function ScheduleDialog({
           {editItem ? (
             <p className="text-xs text-muted-foreground">
               {cal.status}:{" "}
-              <Badge variant={statusVariant(editItem.status)}>
-                {statusLabel(editItem.status, cal as EditorialCalendarCopy)}
-              </Badge>
+              <StatusText status={editItem.status} cal={cal as EditorialCalendarCopy} />
             </p>
+          ) : null}
+          {previewMode ? (
+            <p className="text-xs text-muted-foreground">{cal.previewScheduleBlocked}</p>
           ) : null}
         </div>
         <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
-          {editItem?.generation_job_id ? (
+          {editItem?.generation_job_id && !previewMode ? (
             <Button type="button" variant="outline" asChild>
               <Link
                 href={`/generation-studio?job=${encodeURIComponent(editItem.generation_job_id)}`}
@@ -673,7 +1196,7 @@ function ScheduleDialog({
             <Button type="button" variant="outline" onClick={onClose}>
               {cal.cancel}
             </Button>
-            <Button type="button" onClick={onSave} disabled={saving || !editWhen}>
+            <Button type="button" onClick={onSave} disabled={saving || !editWhen || previewMode}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               {cal.save}
             </Button>
