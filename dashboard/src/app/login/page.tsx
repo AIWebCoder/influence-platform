@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
@@ -42,11 +43,18 @@ export default function LoginPage() {
         className="w-full max-w-[420px] rounded-2xl border border-zinc-200 bg-white p-8 shadow-xl shadow-zinc-200/60"
       >
         <div className="mb-7 text-center">
-          <div className="mx-auto mb-3 inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-600">
-            Influence Platform
+          <div className="relative mx-auto mb-4 h-11 w-full max-w-[220px]">
+            <Image
+              src="/branding/logo-dark-lg.png"
+              alt="Helm"
+              fill
+              className="object-contain object-center"
+              sizes="220px"
+              priority
+              unoptimized
+            />
           </div>
-          <h2 className="text-[26px] font-bold tracking-tight text-zinc-900">Influence.</h2>
-          <h3 className="mt-1 text-[20px] font-semibold text-zinc-900">{text.login.welcomeBack}</h3>
+          <h2 className="text-[20px] font-semibold text-zinc-900">{text.login.welcomeBack}</h2>
           <p className="mt-1 text-sm text-zinc-600">{text.login.signInWorkspace}</p>
         </div>
 
