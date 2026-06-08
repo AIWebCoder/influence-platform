@@ -816,34 +816,36 @@ def _caption_from_payload(payload: Any) -> Optional[str]:
     return topic or None
 
 
-def _display_account_label(username: str) -> str:
-    trimmed = (username or "").strip()
-    if not trimmed:
-        return ""
-    if "@" in trimmed:
-        return trimmed.split("@", 1)[0].lower()
-    return trimmed.lstrip("@").lower()
+def _truncate_queue_title(text: str, max_len: int = 80) -> str:
+    cleaned = " ".join((text or "").split())
+    if len(cleaned) <= max_len:
+        return cleaned
+    return f"{cleaned[: max_len - 1].rstrip()}…"
 
 
 def _queue_display_title(
     *,
     queue_index: Optional[int],
-    target_usernames: list[str],
     caption: Optional[str],
     topic: Optional[str],
+    niche: Optional[str],
+    content_type: Optional[str],
     job_id: str,
 ) -> str:
-    account_label = ""
-    for name in target_usernames:
-        account_label = _display_account_label(name)
-        if account_label:
-            break
-    if account_label and queue_index:
-        return f"{account_label} video {queue_index}"
     if caption:
-        return caption
+        return _truncate_queue_title(caption)
     if topic:
-        return topic
+        return _truncate_queue_title(topic)
+    niche_s = (niche or "").strip()
+    content_type_s = (content_type or "").strip()
+    if niche_s and content_type_s:
+        return f"{niche_s} · {content_type_s.upper()}"
+    if niche_s:
+        return niche_s
+    if content_type_s:
+        return content_type_s.upper()
+    if queue_index:
+        return f"Draft #{queue_index}"
     return job_id[:8]
 
 
@@ -973,9 +975,10 @@ async def _serialize_job_list_items(
                 publish_intent_status=(str(extra.get("publish_intent_status") or "").strip() or None),
                 queue_display_title=_queue_display_title(
                     queue_index=queue_index,
-                    target_usernames=target_usernames,
                     caption=caption,
                     topic=topic,
+                    niche=(str(payload.get("niche") or "").strip() or None),
+                    content_type=(str(payload.get("content_type") or "").strip() or None),
                     job_id=jid,
                 ),
                 created_at=job.created_at.isoformat() if job.created_at else None,

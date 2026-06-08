@@ -20,6 +20,7 @@ import toast from "react-hot-toast";
 
 import { api, formatContentApiError } from "@/lib/api";
 import { canAbandonGenerationJob } from "@/lib/generation-job-actions";
+import { removeTrackedGenerationJobId } from "@/lib/generation-job-tracking";
 import { resolveJobProgressPresentation } from "@/lib/generation-job-progress";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -169,6 +170,56 @@ function jobAccountLabel(job: PipelineJob, accountUsernameById: Map<string, stri
     if (label) return label;
   }
   return null;
+}
+
+function truncateQueueTitle(text: string, max = 80): string {
+  const trimmed = text.trim().replace(/\s+/g, " ");
+  if (trimmed.length <= max) return trimmed;
+  return `${trimmed.slice(0, max - 1).trim()}…`;
+}
+
+function queueJobTitle(job: PipelineJob): string {
+  const caption = job.caption?.trim();
+  if (caption) return truncateQueueTitle(caption);
+  const fromApi = job.queue_display_title?.trim();
+  if (fromApi) return truncateQueueTitle(fromApi);
+  const topic = job.topic?.trim();
+  if (topic) return truncateQueueTitle(topic);
+  return job.id.slice(0, 8);
+}
+
+function QueueJobMetaBadges({
+  job,
+  accountLabel,
+}: {
+  job: PipelineJob;
+  accountLabel: string | null;
+}) {
+  const topic = job.topic?.trim();
+  return (
+    <>
+      {accountLabel ? (
+        <Badge variant="outline" className="font-normal">
+          @{accountLabel}
+        </Badge>
+      ) : null}
+      {job.niche ? (
+        <Badge variant="outline" className="font-normal capitalize">
+          {job.niche}
+        </Badge>
+      ) : null}
+      {job.content_type ? (
+        <Badge variant="outline" className="font-normal uppercase">
+          {job.content_type}
+        </Badge>
+      ) : null}
+      {topic ? (
+        <Badge variant="outline" className="max-w-[220px] truncate font-normal" title={topic}>
+          {topic}
+        </Badge>
+      ) : null}
+    </>
+  );
 }
 
 export default function PipelineWaitingListPage() {
@@ -446,6 +497,7 @@ export default function PipelineWaitingListPage() {
     setBusyId(job.id);
     try {
       await api.generationJobs.delete(job.id);
+      removeTrackedGenerationJobId(job.id);
       toast.success(q.deleted);
       setAbandonTarget(null);
       const nextPage = items.length === 1 && page > 0 ? page - 1 : page;
@@ -573,11 +625,7 @@ export default function PipelineWaitingListPage() {
             ) : (
               <div className="grid gap-3">
                 {activeJobs.map((job) => {
-                  const label =
-                    job.queue_display_title ||
-                    job.caption ||
-                    job.topic ||
-                    job.id.slice(0, 8);
+                  const label = queueJobTitle(job);
                   const accountLabel = jobAccountLabel(job, accountUsernameById);
                   const showProgress = ["running", "pending", "cancelling"].includes(job.status);
                   const progressView = showProgress
@@ -600,16 +648,7 @@ export default function PipelineWaitingListPage() {
                             <Badge variant={statusBadgeVariant(job.status)}>
                               {queueStatusLabel(job.status, q)}
                             </Badge>
-                            {accountLabel ? (
-                              <Badge variant="outline" className="font-normal">
-                                @{accountLabel}
-                              </Badge>
-                            ) : null}
-                            {job.niche ? (
-                              <Badge variant="outline" className="font-normal capitalize">
-                                {job.niche}
-                              </Badge>
-                            ) : null}
+                            <QueueJobMetaBadges job={job} accountLabel={accountLabel} />
                             <span className="text-xs text-muted-foreground">
                               {formatWhen(job.updated_at, locale)}
                             </span>
@@ -702,11 +741,7 @@ export default function PipelineWaitingListPage() {
                     {items.map((job) => {
             const busy = busyId === job.id;
             const preview = job.preview_url || job.output_url;
-            const label =
-              job.queue_display_title ||
-              job.caption ||
-              job.topic ||
-              job.id.slice(0, 8);
+            const label = queueJobTitle(job);
             const accountLabel = jobAccountLabel(job, accountUsernameById);
 
             return (
@@ -742,31 +777,11 @@ export default function PipelineWaitingListPage() {
                           <CardTitle className="text-lg font-semibold leading-snug">{label}</CardTitle>
 
                           <div className="flex flex-wrap items-center gap-2">
-                            {accountLabel ? (
-                              <Badge variant="outline" className="font-normal">
-                                @{accountLabel}
-                              </Badge>
-                            ) : null}
-                            {job.niche ? (
-                              <Badge variant="outline" className="font-normal capitalize">
-                                {job.niche}
-                              </Badge>
-                            ) : null}
-                            {job.content_type ? (
-                              <Badge variant="outline" className="font-normal uppercase">
-                                {job.content_type}
-                              </Badge>
-                            ) : null}
+                            <QueueJobMetaBadges job={job} accountLabel={accountLabel} />
                             <span className="text-xs text-muted-foreground">
                               {formatWhen(job.updated_at, locale)}
                             </span>
                           </div>
-
-                          {(job.caption || job.topic) && label !== (job.caption || job.topic) ? (
-                            <p className="line-clamp-2 text-sm text-muted-foreground">
-                              {job.caption || job.topic}
-                            </p>
-                          ) : null}
                         </div>
 
                         <div className="flex shrink-0 flex-col items-end gap-2">
