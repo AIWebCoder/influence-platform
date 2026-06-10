@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
 import { humanizeGenerationMessage } from '@/lib/generation-errors';
+import { normalizeEngagementReplyText } from '@/lib/engagement-reply';
 
 /** Hostnames only resolvable inside Docker — the browser must never use these. */
 function isDockerInternalApiUrl(url: string): boolean {
@@ -609,7 +610,48 @@ export const api = {
         created_at?: string | null;
       }>;
     },
-    listEngagementPosts: async (params: { account_id: string; limit?: number; include_graph?: boolean }) => {
+    listEngagementConversations: async (params: { account_id: string; limit?: number }) => {
+      const response = await distributionClient.get('/engagement/conversations', { params });
+      return response.data as {
+        conversations: Array<{
+          id: string;
+          participant_id?: string | null;
+          participant_username?: string | null;
+          preview?: string | null;
+          updated_time?: string | null;
+        }>;
+        dry_run?: boolean;
+        graph_error?: string | null;
+        hint?: string;
+      };
+    },
+    listEngagementDmMessages: async (
+      conversationId: string,
+      params: { account_id: string; limit?: number },
+    ) => {
+      const response = await distributionClient.get(
+        `/engagement/conversations/${encodeURIComponent(conversationId)}/messages`,
+        { params },
+      );
+      return response.data as {
+        messages: Array<{
+          id: string;
+          text: string;
+          from_id?: string | null;
+          from_username?: string | null;
+          is_from_account?: boolean;
+          created_time?: string | null;
+        }>;
+        dry_run?: boolean;
+        graph_error?: string | null;
+        hint?: string;
+      };
+    },
+    listEngagementPosts: async (params: {
+      account_id: string;
+      limit?: number;
+      include_graph?: boolean;
+    }) => {
       const response = await distributionClient.get('/engagement/posts', { params });
       return response.data as {
         posts: Array<{
@@ -694,6 +736,30 @@ export const api = {
     dispatchEngagementIntent: async (intentId: string) => {
       const response = await distributionClient.post(`/engagement/intents/${intentId}/dispatch`);
       return response.data as { intent_id: string; status: string; action_type?: string; note?: string };
+    },
+    generateEngagementReply: async (data: {
+      comment_text: string;
+      comment_username?: string;
+      post_caption?: string;
+      locale?: string;
+      tone?: string;
+    }) => {
+      const response = await contentClientLongTimeout.post("/engagement/reply/generate", data);
+      const raw = (response.data as { reply?: string }).reply || "";
+      return { reply: normalizeEngagementReplyText(raw) };
+    },
+    getEngagementCapabilities: async (accountId: string) => {
+      const response = await distributionClient.get("/engagement/capabilities", {
+        params: { account_id: accountId },
+      });
+      return response.data as {
+        comment_like: { available: boolean; mode: string; message: string };
+        comment_reply: { available: boolean; mode: string };
+      };
+    },
+    deleteEngagementIntent: async (intentId: string) => {
+      const response = await distributionClient.delete(`/engagement/intents/${intentId}`);
+      return response.data as { intent_id: string; deleted: boolean };
     },
     generateContent: async (data: { niche: string, type?: string, target_accounts: string[], scheduled_at?: string }) => {
       const payload = {

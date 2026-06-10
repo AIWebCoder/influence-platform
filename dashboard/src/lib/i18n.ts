@@ -75,7 +75,7 @@ export const translations = {
     login: {
       welcomeBack: "Bon retour",
       signInWorkspace: "Connectez-vous à votre espace de travail",
-      username: "Nom d'utilisateur",
+      username: "Adresse e-mail",
       password: "Mot de passe",
       signIn: "Se connecter",
       invalidCredentials: "Identifiants incorrects ou API hors ligne",
@@ -944,7 +944,7 @@ export const translations = {
     login: {
       welcomeBack: "Welcome back",
       signInWorkspace: "Sign in to your workspace",
-      username: "Username",
+      username: "Email",
       password: "Password",
       signIn: "Sign in",
       invalidCredentials: "Invalid credentials or API offline",
