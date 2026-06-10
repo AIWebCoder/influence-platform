@@ -5,6 +5,18 @@ function isEngagementDryRun() {
   return true;
 }
 
+/** Local-only comment likes when Graph API / emulator are unavailable (not a real Instagram like). */
+function isCommentLikeSimulate() {
+  const v = (
+    process.env.ENGAGEMENT_COMMENT_LIKE_SIMULATE
+    ?? process.env.ENGAGEMENT_ALLOW_COMMENT_LIKE_STUB
+    ?? ''
+  )
+    .trim()
+    .toLowerCase();
+  return v === 'true' || v === '1' || v === 'yes';
+}
+
 function engagementModeLabel() {
   return isEngagementDryRun() ? 'DRY_RUN' : 'REAL';
 }
@@ -14,4 +26,9 @@ function dryRunEngagementResult(actionType, targetId) {
   return `dry_run_${actionType}_${slug}`;
 }
 
-module.exports = { isEngagementDryRun, engagementModeLabel, dryRunEngagementResult };
+module.exports = {
+  isEngagementDryRun,
+  isCommentLikeSimulate,
+  engagementModeLabel,
+  dryRunEngagementResult,
+};

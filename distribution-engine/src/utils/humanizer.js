@@ -5,6 +5,14 @@
 
 class Humanizer {
   /**
+   * Wait for a random duration between min and max milliseconds.
+   */
+  static randomDelay(min = 1000, max = 3000) {
+    const ms = Math.floor(Math.random() * (max - min + 1)) + min;
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
    * Get random delay to mimic human thinking/action time
    * @param {string} actionType - Type of action being performed
    * @returns {number} Delay in milliseconds
