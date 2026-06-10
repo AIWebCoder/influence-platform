@@ -661,14 +661,34 @@ class PublishingWorker {
       });
       return url;
     }
-    // Fallback: use the existing Playwright publish path so reel-type packets
-    // no longer fail permanently on the legacy queue pipeline.
-    logStructured('warn', {
-      event: 'reel_publish_fallback_to_instagram_bot',
+
+    const pool = getPool();
+    const accountRow = await pool.query(
+      `SELECT ig_user_id::text FROM accounts WHERE id = $1::uuid LIMIT 1`,
+      [accountId]
+    );
+    const igUserId = accountRow.rows[0]?.ig_user_id;
+    if (!igUserId) {
+      throw new Error(`Missing ig_user_id for account ${accountId}`);
+    }
+
+    const platformAdapter = require('./adapters/platformAdapter');
+    const result = await platformAdapter.publish({
+      platform: 'instagram',
+      asset: {
+        public_url: packet.visual_url,
+        mime_type: packet.visual_type === 'video' ? 'video/mp4' : packet.mime_type,
+      },
+      caption: packet.caption,
+      hashtags: packet.hashtags,
       accountId,
-      packetId: packet.id,
+      igUserId,
+      contentType: 'reel',
     });
-    return await InstagramBot.publishContent(accountId, packet);
+    if (!result?.success) {
+      throw new Error(result?.error || 'Reel publish failed');
+    }
+    return result.external_post_url || `https://www.instagram.com/p/${result.external_post_id}/`;
   }
 
   publishLog(level, payload) {

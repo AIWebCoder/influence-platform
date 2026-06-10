@@ -38,13 +38,13 @@ describe('platformAdapter.isPhotoPublish', () => {
 });
 
 describe('platformAdapter.resolvePublishKind', () => {
-  it('uses feed video for post + mp4', () => {
+  it('uses reel for post + mp4 (VIDEO media_type is deprecated on Graph API)', () => {
     expect(
       resolvePublishKind({
         contentType: 'post',
         asset: { mime_type: 'video/mp4', public_url: 'https://cdn.example/a.mp4' },
       }),
-    ).toBe('feed_video');
+    ).toBe('reel');
   });
 
   it('uses reel for reel + mp4', () => {
