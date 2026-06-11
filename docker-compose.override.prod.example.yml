@@ -8,15 +8,16 @@ services:
       - -c
       - |
         set -e
-        if [ "$${FORCE_DASHBOARD_REBUILD:-0}" = "1" ] || [ ! -f /app/.next/BUILD_ID ]; then
-          echo "==> Dashboard production build (FORCE=$${FORCE_DASHBOARD_REBUILD:-0})..."
-          npm run build
+        if [ ! -f /app/.next/BUILD_ID ]; then
+          echo "ERROR: missing /app/.next/BUILD_ID — run ./scripts/rebuild-dashboard-prod.sh"
+          exit 1
         fi
-        echo "==> Starting next start (BUILD_ID=$$(cat /app/.next/BUILD_ID 2>/dev/null || echo missing))"
+        echo "==> Starting next start (BUILD_ID=$$(cat /app/.next/BUILD_ID))"
         exec npm run start
     environment:
       DASHBOARD_RUN_MODE: start
-      FORCE_DASHBOARD_REBUILD: ${FORCE_DASHBOARD_REBUILD:-0}
+    healthcheck:
+      start_period: 120s
     volumes:
       - ./dashboard:/app
       - /app/node_modules
