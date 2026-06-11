@@ -16,6 +16,7 @@ services:
         exec npm run start
     environment:
       DASHBOARD_RUN_MODE: start
+      NODE_ENV: production
     healthcheck:
       start_period: 120s
     volumes:

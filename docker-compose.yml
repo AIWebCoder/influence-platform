@@ -284,12 +284,18 @@ services:
       - -c
       - |
         if [ "$${DASHBOARD_RUN_MODE:-dev}" = "start" ]; then
+          export NODE_ENV=production
           if [ ! -f /app/.next/BUILD_ID ]; then
             echo "Dashboard: npm ci + build (missing .next/BUILD_ID)..."
             npm ci && npm run build
           fi
           exec npm run start
         else
+          export NODE_ENV=development
+          if [ -f /app/.next/BUILD_ID ]; then
+            echo "Dashboard: clearing production .next before next dev..."
+            rm -rf /app/.next/*
+          fi
           exec npm run dev
         fi
     ports:
@@ -325,8 +331,8 @@ services:
       - ./dashboard:/app
       # Keep deps + Next build cache inside Linux container (avoids Windows path in RSC manifest)
       - /app/node_modules
-      # Named volume so servers can reset stale UI: docker volume rm influence-platform_dashboard_next
-      - dashboard_next:/app/.next
+      # Local dev: anonymous .next. Production server: use docker-compose.override.yml (dashboard_next volume).
+      - /app/.next
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000 || exit 1"]
       interval: 30s
