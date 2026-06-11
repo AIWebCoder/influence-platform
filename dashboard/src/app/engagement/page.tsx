@@ -13,12 +13,10 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 
-import { EngagementActionPanel } from "@/components/engagement/EngagementActionPanel";
-import { EngagementCommentsPanel } from "@/components/engagement/EngagementCommentsPanel";
+import { EngagementCommentsView } from "@/components/engagement/EngagementCommentsView";
 import { EngagementDmSection } from "@/components/engagement/EngagementDmSection";
 import { EngagementKpiStrip } from "@/components/engagement/EngagementKpiStrip";
-import { EngagementPostPanel } from "@/components/engagement/EngagementPostPanel";
-import { EngagementWorkflowBar } from "@/components/engagement/EngagementWorkflowBar";
+import { OpsPageShell } from "@/components/platform";
 import { createEngagementHistoryColumns } from "@/components/engagement/engagement-history-columns";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { DashboardPageHeader } from "@/components/dashboard/DashboardPageHeader";
@@ -410,22 +408,6 @@ export default function EngagementPage() {
   const commentsStepDone = commentsLoaded && comments.length > 0;
   const actionStepActive = Boolean(selectedCommentId);
 
-  const workflowSteps = [
-    { id: "post", label: eng.workflowPost, done: postStepDone, active: !postStepDone },
-    {
-      id: "comments",
-      label: eng.workflowComments,
-      done: commentsStepDone,
-      active: postStepDone && !commentsStepDone,
-    },
-    {
-      id: "action",
-      label: eng.workflowAction,
-      done: false,
-      active: actionStepActive,
-    },
-  ];
-
   const kpiItems = [
     { title: eng.kpiPosts, value: posts.length, icon: MessageSquare, accent: "blue" as const },
     { title: eng.kpiComments, value: commentCount, icon: MessageCircle, accent: "violet" as const },
@@ -434,7 +416,7 @@ export default function EngagementPage() {
   ];
 
   return (
-    <div className="flex-1 w-full min-w-0 space-y-6 p-8 pt-6">
+    <OpsPageShell>
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <DashboardPageHeader title={eng.title} subtitle={eng.subtitle} />
         <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
@@ -500,93 +482,75 @@ export default function EngagementPage() {
       </Tabs>
 
       {engagementView === "comments" ? (
-        <>
-      <EngagementWorkflowBar steps={workflowSteps} />
-
-      <div className="grid min-h-[min(72vh,780px)] w-full gap-4 xl:grid-cols-12">
-        <Card className="flex min-h-[280px] flex-col overflow-hidden shadow-sm xl:col-span-3">
-          <EngagementPostPanel
-            labels={{
-              title: eng.stepPost,
-              account: eng.account,
-              refreshPosts: eng.refreshPosts,
-              loadingPosts: eng.loadingPosts,
-              noPosts: eng.noPosts,
-              commentsCountSuffix: eng.commentsCountSuffix,
-              publishedSuffix: eng.publishedSuffix,
-              viewOnInstagram: eng.viewOnInstagram,
-            }}
-            locale={locale}
-            posts={posts}
-            mediaId={mediaId}
-            loadingPosts={loadingPosts}
-            onSelectPost={setMediaId}
-            onRefreshPosts={() => void loadPosts()}
-          />
-        </Card>
-
-        <Card className="flex min-h-[360px] flex-col overflow-hidden shadow-sm xl:col-span-6">
-          <EngagementCommentsPanel
-            labels={{
-              title: eng.stepComments,
-              loadComments: eng.loadComments,
-              filterComments: eng.filterComments,
-              loadingComments: eng.loadingComments,
-              noComments: eng.noComments,
-              account: eng.account,
-              tokenScopeAlert: t("engagement.tokenScopeAlert", { count: commentCount }),
-            }}
-            locale={locale}
-            comments={comments}
-            filteredComments={filteredComments}
-            commentFilter={commentFilter}
-            onCommentFilterChange={setCommentFilter}
-            selectedCommentId={selectedCommentId}
-            onSelectComment={setSelectedCommentId}
-            loadingComments={loadingComments}
-            commentsLoaded={commentsLoaded}
-            commentCount={commentCount}
-            commentsHint={commentsHint}
-            tokenScopeAlert={t("engagement.tokenScopeAlert", { count: commentCount })}
-            mediaId={mediaId}
-            onLoadComments={() => void loadComments()}
-          />
-        </Card>
-
-        <Card className="flex min-h-[320px] flex-col overflow-hidden shadow-sm xl:col-span-3">
-          <EngagementActionPanel
-            labels={{
-              title: eng.composerTitle,
-              subtitle: eng.stepAction,
-              actionType: eng.actionType,
-              likeComment: eng.likeComment,
-              replyAction: eng.replyAction,
-              targetComment: eng.targetComment,
-              noCommentSelected: eng.noCommentSelected,
-              replyMessage: eng.replyMessage,
-              replyPlaceholder: eng.replyPlaceholder,
-              sendAction: eng.sendAction,
-              generateReply: eng.generateReply,
-              generateReplyLoading: eng.generateReplyLoading,
-              likeDeviceNote: eng.likeDeviceNote,
-              likeUnavailable: eng.likeUnavailable,
-            }}
-            actionType={actionType}
-            onActionTypeChange={setActionType}
-            selectedComment={selectedComment}
-            messageText={messageText}
-            onMessageTextChange={setMessageText}
-            submitting={submitting}
-            generatingReply={generatingReply}
-            onGenerateReply={() => void generateReply()}
-            onSubmit={() => void submit()}
-            canSubmit={Boolean(selectedCommentId) && (actionType !== "comment_like" || likeAvailable)}
-            likeAvailable={likeAvailable}
-            likeUnavailableMessage={likeUnavailableMessage || undefined}
-          />
-        </Card>
-      </div>
-        </>
+        <EngagementCommentsView
+          labels={{
+            workflowPost: eng.workflowPost,
+            workflowComments: eng.workflowComments,
+            workflowAction: eng.workflowAction,
+            stepPost: eng.stepPost,
+            stepComments: eng.stepComments,
+            stepAction: eng.stepAction,
+            composerTitle: eng.composerTitle,
+            account: eng.account,
+            refreshPosts: eng.refreshPosts,
+            loadingPosts: eng.loadingPosts,
+            noPosts: eng.noPosts,
+            commentsCountSuffix: eng.commentsCountSuffix,
+            publishedSuffix: eng.publishedSuffix,
+            viewOnInstagram: eng.viewOnInstagram,
+            loadComments: eng.loadComments,
+            filterComments: eng.filterComments,
+            loadingComments: eng.loadingComments,
+            noComments: eng.noComments,
+            tokenScopeAlert: t("engagement.tokenScopeAlert", { count: commentCount }),
+            actionType: eng.actionType,
+            likeComment: eng.likeComment,
+            replyAction: eng.replyAction,
+            targetComment: eng.targetComment,
+            noCommentSelected: eng.noCommentSelected,
+            replyMessage: eng.replyMessage,
+            replyPlaceholder: eng.replyPlaceholder,
+            sendAction: eng.sendAction,
+            generateReply: eng.generateReply,
+            generateReplyLoading: eng.generateReplyLoading,
+            likeDeviceNote: eng.likeDeviceNote,
+            likeUnavailable: eng.likeUnavailable,
+          }}
+          locale={locale}
+          posts={posts}
+          mediaId={mediaId}
+          loadingPosts={loadingPosts}
+          onSelectPost={setMediaId}
+          onRefreshPosts={() => void loadPosts()}
+          comments={comments}
+          filteredComments={filteredComments}
+          commentFilter={commentFilter}
+          onCommentFilterChange={setCommentFilter}
+          selectedCommentId={selectedCommentId}
+          onSelectComment={setSelectedCommentId}
+          loadingComments={loadingComments}
+          commentsLoaded={commentsLoaded}
+          commentCount={commentCount}
+          commentsHint={commentsHint}
+          mediaIdForLoad={mediaId}
+          onLoadComments={() => void loadComments()}
+          actionType={actionType}
+          onActionTypeChange={setActionType}
+          selectedComment={selectedComment}
+          messageText={messageText}
+          onMessageTextChange={setMessageText}
+          submitting={submitting}
+          generatingReply={generatingReply}
+          onGenerateReply={() => void generateReply()}
+          onSubmit={() => void submit()}
+          canSubmit={Boolean(selectedCommentId) && (actionType !== "comment_like" || likeAvailable)}
+          likeAvailable={likeAvailable}
+          likeUnavailableMessage={likeUnavailableMessage || undefined}
+          postStepDone={postStepDone}
+          commentsStepDone={commentsStepDone}
+          actionStepActive={actionStepActive}
+          stepperAriaLabel={eng.title}
+        />
       ) : (
         <EngagementDmSection
           accountId={accountId}
@@ -658,6 +622,6 @@ export default function EngagementPage() {
         onConfirm={() => void confirmDeleteIntent()}
         loading={deletingId !== null && deletingId === deleteTarget?.intent_id}
       />
-    </div>
+    </OpsPageShell>
   );
 }

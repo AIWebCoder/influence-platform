@@ -4,10 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Inbox, Loader2, MessageCircle, RefreshCw, Send, Sparkles } from "lucide-react";
 import toast from "react-hot-toast";
 
+import { WorkspaceColumn, WorkspaceLayout, WorkspacePanel } from "@/components/platform";
 import { api } from "@/lib/api";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -200,16 +200,33 @@ export function EngagementDmSection({
     }
   };
 
+  const threadTitle = selectedConversation
+    ? `@${selectedConversation.participant_username || "?"}`
+    : labels.dmThreadEmpty;
+
   return (
-    <div className="grid min-h-[min(72vh,780px)] w-full gap-4 xl:grid-cols-12">
-      <Card className="flex min-h-[320px] flex-col overflow-hidden shadow-sm xl:col-span-3">
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <h2 className="text-sm font-semibold">{labels.dmTitle}</h2>
-          <Button variant="ghost" size="sm" className="h-8" onClick={() => void loadConversations()} disabled={loadingConversations}>
-            {loadingConversations ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          </Button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+    <WorkspaceLayout
+      left={
+        <WorkspacePanel
+          className="h-full min-h-[320px]"
+          title={labels.dmTitle}
+          headerActions={
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8"
+              onClick={() => void loadConversations()}
+              disabled={loadingConversations}
+            >
+              {loadingConversations ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+            </Button>
+          }
+          bodyClassName="p-2"
+        >
           {loadingConversations ? (
             <div className="space-y-2 p-2">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -237,7 +254,9 @@ export function EngagementDmSection({
                         {conv.preview || labels.dmSelect}
                       </p>
                       {conv.updated_time ? (
-                        <p className="mt-1 text-[10px] text-muted-foreground">{formatWhen(conv.updated_time, locale)}</p>
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          {formatWhen(conv.updated_time, locale)}
+                        </p>
                       ) : null}
                     </button>
                   </li>
@@ -245,121 +264,127 @@ export function EngagementDmSection({
               })}
             </ul>
           )}
-        </div>
-      </Card>
-
-      <Card className="flex min-h-[360px] flex-col overflow-hidden shadow-sm xl:col-span-6">
-        <div className="border-b px-4 py-3">
-          <h2 className="text-sm font-semibold">
-            {selectedConversation
-              ? `@${selectedConversation.participant_username || "?"}`
-              : labels.dmThreadEmpty}
-          </h2>
-        </div>
-        {graphError ? (
-          <Alert variant="destructive" className="m-3">
-            <AlertDescription className="text-xs break-all">{graphError}</AlertDescription>
-          </Alert>
-        ) : null}
-        {dmHint ? (
-          <Alert className="m-3 border-amber-200/80 bg-amber-50/50 dark:border-amber-900/50 dark:bg-amber-950/20">
-            <AlertDescription className="text-xs">{dmHint}</AlertDescription>
-          </Alert>
-        ) : null}
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
-          {loadingMessages ? (
-            <div className="space-y-2">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-12 w-3/4" />
-              ))}
+        </WorkspacePanel>
+      }
+      center={
+        <WorkspaceColumn className="h-full min-h-[360px]">
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="shrink-0 border-b px-4 py-3">
+              <h2 className="text-sm font-semibold">{threadTitle}</h2>
             </div>
-          ) : !selectedConversationId ? (
-            <EmptyState icon={MessageCircle} title={labels.dmSelect} />
-          ) : messages.length === 0 ? (
-            <EmptyState icon={MessageCircle} title={labels.dmThreadEmpty} />
-          ) : (
-            messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={cn(
-                  "max-w-[85%] rounded-lg px-3 py-2 text-sm",
-                  msg.is_from_account
-                    ? "ml-auto bg-primary text-primary-foreground"
-                    : "bg-muted/60 text-foreground",
-                )}
-              >
-                {!msg.is_from_account && msg.from_username ? (
-                  <p className="mb-1 text-[10px] font-medium opacity-80">@{msg.from_username}</p>
-                ) : null}
-                <p className="whitespace-pre-wrap break-words">{msg.text}</p>
-                {msg.created_time ? (
-                  <p className="mt-1 text-[10px] opacity-70">{formatWhen(msg.created_time, locale)}</p>
-                ) : null}
+            {graphError ? (
+              <Alert variant="destructive" className="m-3">
+                <AlertDescription className="break-all text-xs">{graphError}</AlertDescription>
+              </Alert>
+            ) : null}
+            {dmHint ? (
+              <Alert className="m-3 border-amber-200/80 bg-amber-50/50 dark:border-amber-900/50 dark:bg-amber-950/20">
+                <AlertDescription className="text-xs">{dmHint}</AlertDescription>
+              </Alert>
+            ) : null}
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+              {loadingMessages ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <Skeleton key={i} className="h-12 w-3/4" />
+                  ))}
+                </div>
+              ) : !selectedConversationId ? (
+                <EmptyState icon={MessageCircle} title={labels.dmSelect} />
+              ) : messages.length === 0 ? (
+                <EmptyState icon={MessageCircle} title={labels.dmThreadEmpty} />
+              ) : (
+                messages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={cn(
+                      "max-w-[85%] rounded-lg px-3 py-2 text-sm",
+                      msg.is_from_account
+                        ? "ml-auto bg-primary text-primary-foreground"
+                        : "bg-muted/60 text-foreground",
+                    )}
+                  >
+                    {!msg.is_from_account && msg.from_username ? (
+                      <p className="mb-1 text-[10px] font-medium opacity-80">@{msg.from_username}</p>
+                    ) : null}
+                    <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                    {msg.created_time ? (
+                      <p className="mt-1 text-[10px] opacity-70">{formatWhen(msg.created_time, locale)}</p>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </WorkspaceColumn>
+      }
+      right={
+        <WorkspaceColumn className="h-full min-h-[320px]">
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="shrink-0 border-b px-4 py-3">
+              <h2 className="text-sm font-semibold">{labels.dmSend}</h2>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+              <p className="text-[11px] leading-relaxed text-muted-foreground">{labels.dmTokenHint}</p>
+              {lastIncoming ? (
+                <div className="rounded-lg border bg-muted/20 p-3">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    {labels.dmSelect}
+                  </p>
+                  <p className="mt-1 line-clamp-3 text-sm">{lastIncoming.text}</p>
+                </div>
+              ) : null}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="dm-reply">{labels.dmMessage}</Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1.5 text-xs"
+                    onClick={() => void generateReply()}
+                    disabled={generatingReply || !lastIncoming}
+                  >
+                    {generatingReply ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-3.5 w-3.5" />
+                    )}
+                    {generatingReply ? labels.generateReplyLoading : labels.generateReply}
+                  </Button>
+                </div>
+                <textarea
+                  id="dm-reply"
+                  value={messageText}
+                  onChange={(e) => setMessageText(e.target.value)}
+                  placeholder={labels.dmPlaceholder}
+                  rows={6}
+                  className={cn(
+                    "min-h-[140px] w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm",
+                    "ring-offset-background placeholder:text-muted-foreground",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                  )}
+                />
               </div>
-            ))
-          )}
-        </div>
-      </Card>
-
-      <Card className="flex min-h-[320px] flex-col overflow-hidden shadow-sm xl:col-span-3">
-        <div className="border-b px-4 py-3">
-          <h2 className="text-sm font-semibold">{labels.dmSend}</h2>
-        </div>
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
-          <p className="text-[11px] leading-relaxed text-muted-foreground">{labels.dmTokenHint}</p>
-          {lastIncoming ? (
-            <div className="rounded-lg border bg-muted/20 p-3">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                {labels.dmSelect}
-              </p>
-              <p className="mt-1 line-clamp-3 text-sm">{lastIncoming.text}</p>
             </div>
-          ) : null}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <Label htmlFor="dm-reply">{labels.dmMessage}</Label>
+            <div className="shrink-0 border-t p-4">
               <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1.5 text-xs"
-                onClick={() => void generateReply()}
-                disabled={generatingReply || !lastIncoming}
+                onClick={() => void submit()}
+                disabled={submitting || !selectedConversation?.participant_id || !messageText.trim()}
+                className="w-full"
+                size="lg"
               >
-                {generatingReply ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {submitting ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
-                  <Sparkles className="h-3.5 w-3.5" />
+                  <Send className="mr-2 h-4 w-4" />
                 )}
-                {generatingReply ? labels.generateReplyLoading : labels.generateReply}
+                {labels.dmSend}
               </Button>
             </div>
-            <textarea
-              id="dm-reply"
-              value={messageText}
-              onChange={(e) => setMessageText(e.target.value)}
-              placeholder={labels.dmPlaceholder}
-              rows={6}
-              className={cn(
-                "min-h-[140px] w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm",
-                "ring-offset-background placeholder:text-muted-foreground",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-              )}
-            />
           </div>
-        </div>
-        <div className="shrink-0 border-t p-4">
-          <Button
-            onClick={() => void submit()}
-            disabled={submitting || !selectedConversation?.participant_id || !messageText.trim()}
-            className="w-full"
-            size="lg"
-          >
-            {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-            {labels.dmSend}
-          </Button>
-        </div>
-      </Card>
-    </div>
+        </WorkspaceColumn>
+      }
+    />
   );
 }
