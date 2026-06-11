@@ -1,7 +1,8 @@
 const axios = require('axios');
 const { getValidToken } = require('../services/tokenService');
 const ProxyHttpClient = require('../persona/proxyHttpClient');
-const { isEngagementDryRun, dryRunEngagementResult } = require('./engagementMode');
+const { isEngagementDryRun, isCommentLikeSimulate, dryRunEngagementResult } = require('./engagementMode');
+const { likeCommentViaDevice, isDeviceLikeEnabled } = require('./deviceEngagementClient');
 
 const GRAPH_BASE = 'https://graph.instagram.com/v25.0';
 
@@ -95,7 +96,13 @@ async function sendDirectMessage({ accountId, igUserId, recipientId, message }) 
  * Records a simulated success in dry-run; in real mode returns a clear limitation error
  * unless ENGAGEMENT_ALLOW_COMMENT_LIKE_STUB=true (logs only, for internal testing).
  */
-async function likeComment({ accountId, commentId }) {
+async function likeComment({
+  accountId,
+  commentId,
+  parentTargetId = null,
+  targetUsername = null,
+  commentTextHint = null,
+}) {
   if (isEngagementDryRun()) {
     return {
       success: true,
@@ -104,29 +111,44 @@ async function likeComment({ accountId, commentId }) {
       note: 'comment_like simulated (Graph API does not support liking comments)',
     };
   }
-  const allowStub = (process.env.ENGAGEMENT_ALLOW_COMMENT_LIKE_STUB || '').trim().toLowerCase() === 'true';
-  if (allowStub) {
+
+  if (isDeviceLikeEnabled()) {
+    const deviceResult = await likeCommentViaDevice({
+      accountId,
+      commentId,
+      parentTargetId,
+      targetUsername,
+      commentTextHint,
+    });
+    if (deviceResult.success) {
+      return deviceResult;
+    }
+    return deviceResult;
+  }
+
+  if (isCommentLikeSimulate()) {
     console.log(
       JSON.stringify({
         level: 'warn',
         service: 'distribution-engine',
         component: 'instagramEngagementAdapter',
-        event: 'comment_like_stub',
+        event: 'comment_like_simulated',
         account_id: accountId,
         comment_id: commentId,
       })
     );
     return {
       success: true,
-      external_result_id: `stub_like_${String(commentId).slice(0, 32)}`,
-      stage: 'comment_like_stub',
-      note: 'ENGAGEMENT_ALLOW_COMMENT_LIKE_STUB=true — no real Instagram API call',
+      external_result_id: `local_like_${String(commentId).slice(0, 32)}`,
+      stage: 'comment_like_simulated',
+      note:
+        'Recorded in platform history only — Instagram Graph API cannot like comments (no emulator used).',
     };
   }
   return {
     success: false,
     error:
-      'comment_like is not supported via Instagram Graph API. Use ENGAGEMENT_DRY_RUN=true for simulation or device automation.',
+      'comment_like is not supported via Instagram Graph API. Set ENGAGEMENT_COMMENT_LIKE_SIMULATE=true for local tracking, ENGAGEMENT_COMMENT_LIKE_VIA_DEVICE=true with an emulator for real likes, or ENGAGEMENT_DRY_RUN=true for full simulation.',
     stage: 'comment_like_unsupported',
     safe_to_retry: false,
   };
@@ -158,7 +180,13 @@ async function executeEngagement(payload) {
       });
     }
     if (actionType === 'comment_like') {
-      return await likeComment({ accountId, commentId: targetId });
+      return await likeComment({
+        accountId,
+        commentId: targetId,
+        parentTargetId: payload.parent_target_id || null,
+        targetUsername: payload.target_username || null,
+        commentTextHint: payload.message_text || null,
+      });
     }
     return { success: false, error: `Unsupported action_type: ${actionType}` };
   } catch (err) {

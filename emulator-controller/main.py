@@ -874,6 +874,57 @@ class EmulatorOrchestrator:
                 started=started,
             )
 
+        async def engagement_like_comment(request: web.Request) -> web.Response:
+            serial = request.match_info.get("serial", "")
+            started = monotonic()
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+            post_url = str(body.get("post_url") or "").strip()
+            comment_username = str(body.get("comment_username") or "").strip() or None
+            comment_text = str(body.get("comment_text") or "").strip() or None
+            if not post_url:
+                return web.json_response(
+                    {
+                        "status": "error",
+                        "execution_time_ms": int((monotonic() - started) * 1000),
+                        "error": "post_url is required",
+                    },
+                    status=400,
+                )
+
+            async def runner():
+                bot = InstagramBot(
+                    appium_server_url=self.settings.appium_server_url,
+                    device_serial=serial,
+                    app_package=self.settings.android_app_package,
+                    app_activity=self.settings.android_app_activity,
+                    min_human_delay=self.settings.min_human_delay_seconds,
+                    max_human_delay=self.settings.max_human_delay_seconds,
+                )
+                await bot.connect()
+                try:
+                    return await bot.like_comment_on_post(
+                        post_url,
+                        comment_username=comment_username,
+                        comment_text=comment_text,
+                    )
+                finally:
+                    await bot.close()
+
+            return await self._execute_input_action(
+                serial=serial,
+                action_type="engagement_like_comment",
+                data={
+                    "post_url": post_url,
+                    "comment_username": comment_username,
+                    "comment_text": (comment_text or "")[:80],
+                },
+                runner=runner,
+                started=started,
+            )
+
         app = web.Application()
         app.router.add_get("/screenshots", list_screenshots)
         app.router.add_get("/emulators", list_emulators)
@@ -885,6 +936,7 @@ class EmulatorOrchestrator:
         app.router.add_post("/emulators/{serial}/input/swipe", input_swipe)
         app.router.add_post("/emulators/{serial}/input/key", input_key)
         app.router.add_post("/emulators/{serial}/apps/instagram", launch_instagram_app)
+        app.router.add_post("/emulators/{serial}/engagement/like-comment", engagement_like_comment)
         app.router.add_post("/emulators/{serial}/actions/restart", restart_emulator)
         app.router.add_post("/emulators/{serial}/actions/stop", stop_emulator)
         app.router.add_static("/screenshots/file/", self.settings.screenshot_dir, show_index=False)

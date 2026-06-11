@@ -58,7 +58,13 @@ app.get('/engagement/ping', (_req, res) => {
     ok: true,
     module: 'engagement',
     implementation: 'native',
-    routes: ['GET /engagement/posts', 'GET /engagement/posts/:mediaId/comments', 'GET /engagement/intents'],
+    routes: [
+      'GET /engagement/posts',
+      'GET /engagement/posts/:mediaId/comments',
+      'GET /engagement/conversations',
+      'GET /engagement/conversations/:id/messages',
+      'GET /engagement/intents',
+    ],
   });
 });
 
@@ -91,8 +97,10 @@ app.use('/dashboard', dashboardRouter);
 
 const engagementRouter = require('./managers/engagementRouter');
 const engagementPostsRoutes = require('./managers/engagementPostsRoutes');
+const engagementDmRoutes = require('./managers/engagementDmRoutes');
 app.use('/engagement', engagementRouter);
 app.use('/engagement', engagementPostsRoutes);
+app.use('/engagement', engagementDmRoutes);
 
 app.get('/', (req, res) => {
   res.json({

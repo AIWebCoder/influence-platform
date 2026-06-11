@@ -1,4 +1,5 @@
 const express = require('express');
+const axios = require('axios');
 const { getPool } = require('../core/database');
 const { getRedis } = require('../core/redis');
 const { assertAccountAccess, buildAccountScope, forbidViewerWrite } = require('../core/accessScope');
@@ -41,6 +42,72 @@ function mapIntentRow(r) {
 
 router.get('/ping', (_req, res) => {
   res.json({ ok: true, service: 'distribution-engine', module: 'engagement' });
+});
+
+router.get('/capabilities', async (req, res) => {
+  const accountId = String(req.query.account_id || '').trim();
+  if (!accountId) {
+    return res.status(400).json({ error: 'account_id is required' });
+  }
+  const pool = getPool();
+  try {
+    await assertAccountAccess(pool, req.accessScope, accountId);
+  } catch (err) {
+    const status = err.statusCode || 403;
+    return res.status(status).json({ error: err.message || 'Access denied' });
+  }
+
+  const { isEngagementDryRun, isCommentLikeSimulate } = require('../engagement/engagementMode');
+  const { isDeviceLikeEnabled, resolveEmulatorSerial } = require('../engagement/deviceEngagementClient');
+  const dryRun = isEngagementDryRun();
+  const likeSimulate = isCommentLikeSimulate();
+  const deviceEnabled = isDeviceLikeEnabled();
+  let deviceBound = false;
+  if (deviceEnabled) {
+    try {
+      deviceBound = Boolean(await resolveEmulatorSerial(accountId));
+    } catch (_err) {
+      deviceBound = false;
+    }
+  }
+
+  let likeMode = 'unsupported';
+  let likeMessage =
+    'Instagram Graph API cannot like comments. Enable ENGAGEMENT_COMMENT_LIKE_VIA_DEVICE=true and bind an emulator to the account persona.';
+  if (dryRun) {
+    likeMode = 'dry_run';
+    likeMessage = 'Simulated like (engagement dry-run mode).';
+  } else if (deviceEnabled && deviceBound) {
+    likeMode = 'device';
+    likeMessage = 'Likes run through the bound Android emulator.';
+  } else if (deviceEnabled && !deviceBound) {
+    likeMode = 'device_required';
+    likeMessage =
+      'Device automation is enabled but no emulator is bound to this account. Bind one under Personas.';
+  } else if (likeSimulate) {
+    likeMode = 'local_simulate';
+    likeMessage =
+      'Like enregistré dans la plateforme uniquement. Instagram ne permet pas les likes de commentaires via l\'API officielle (sans émulateur).';
+  }
+
+  return res.json({
+    comment_like: {
+      available: dryRun || likeSimulate || (deviceEnabled && deviceBound),
+      mode: likeMode,
+      message: likeMessage,
+    },
+    comment_reply: {
+      available: true,
+      mode: dryRun ? 'dry_run' : 'graph_api',
+    },
+    dm_send: {
+      available: true,
+      mode: dryRun ? 'dry_run' : 'graph_api',
+      message: dryRun
+        ? 'DM simulé (dry-run).'
+        : 'Réponses DM via Instagram Messaging API (scope instagram_business_manage_messages requis).',
+    },
+  });
 });
 
 router.get('/posts', async (req, res) => {
@@ -415,6 +482,97 @@ router.post('/intents/:intentId/dispatch', async (req, res) => {
     res.status(500).json({ error: err.message || 'Dispatch failed' });
   } finally {
     client.release();
+  }
+});
+
+router.delete('/intents/:intentId', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
+  const pool = getPool();
+  const intentId = String(req.params.intentId || '').trim();
+  if (!intentId) {
+    return res.status(400).json({ error: 'Invalid intent id' });
+  }
+
+  try {
+    const row = await pool.query(
+      `
+      SELECT ei.id, ei.status, ei.account_id
+      FROM engagement_intents ei
+      WHERE ei.id = $1::uuid
+      LIMIT 1
+      `,
+      [intentId]
+    );
+    if (row.rowCount === 0) {
+      return res.status(404).json({ error: 'Engagement intent not found' });
+    }
+    const intent = row.rows[0];
+    await assertAccountAccess(pool, req.accessScope, String(intent.account_id));
+
+    const status = String(intent.status || '').toLowerCase();
+    if (status === 'queued' || status === 'processing') {
+      return res.status(409).json({
+        error: 'Cannot delete an engagement intent while it is queued or processing',
+        status,
+      });
+    }
+
+    await pool.query(`DELETE FROM engagement_intents WHERE id = $1::uuid`, [intentId]);
+    return res.json({ intent_id: intentId, deleted: true });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    if (status === 403 || status === 400) {
+      return res.status(status).json({ error: err.message || 'Access denied' });
+    }
+    if (isMissingEngagementTable(err)) {
+      return res.status(503).json({
+        error: 'engagement_intents table missing',
+        hint: 'Run: docker compose exec content-factory alembic upgrade head',
+      });
+    }
+    console.error('[engagementRouter] delete failed:', err.message);
+    return res.status(500).json({ error: 'Failed to delete engagement intent' });
+  }
+});
+
+function contentFactoryBaseUrl() {
+  return (
+    (process.env.CONTENT_FACTORY_URL || '').trim() ||
+    (process.env.CONTENT_FACTORY_INTERNAL_URL || '').trim() ||
+    'http://content-factory:8000'
+  ).replace(/\/$/, '');
+}
+
+router.post('/reply/generate', async (req, res) => {
+  if (forbidViewerWrite(req.accessScope, res)) return;
+  const base = contentFactoryBaseUrl();
+  const headers = { 'Content-Type': 'application/json' };
+  if (req.headers.authorization) {
+    headers.Authorization = req.headers.authorization;
+  }
+  const traceId = req.headers['x-trace-id'] || req.headers['x-request-id'];
+  if (traceId) {
+    headers['x-trace-id'] = String(traceId);
+  }
+  try {
+    const payload =
+      req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)
+        ? JSON.stringify(req.body)
+        : typeof req.body === 'string'
+          ? req.body
+          : '{}';
+    const response = await axios.post(`${base}/engagement/reply/generate`, payload, {
+      headers,
+      timeout: 120_000,
+      validateStatus: () => true,
+    });
+    return res.status(response.status).json(response.data);
+  } catch (err) {
+    console.error('[engagementRouter] reply/generate proxy failed:', err.message);
+    return res.status(502).json({
+      error: 'Failed to reach Content Factory for reply generation',
+      detail: err.message,
+    });
   }
 });
 

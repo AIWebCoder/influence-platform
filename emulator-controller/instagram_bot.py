@@ -238,6 +238,53 @@ class InstagramBot:
             await self._screenshot_failure("comment_on_post")
             raise self._map_exception(exc) from exc
 
+    async def like_comment_on_post(
+        self,
+        post_url: str,
+        *,
+        comment_username: str | None = None,
+        comment_text: str | None = None,
+    ) -> dict[str, Any]:
+        """Like a specific comment on a post via the Instagram Android app."""
+        try:
+            self._ensure_driver()
+            await self._open_url(post_url)
+            await self._human_delay(1.0, 2.5)
+            await self._random_scroll()
+
+            await self._tap_any(
+                [
+                    (AppiumBy.ACCESSIBILITY_ID, "Comment"),
+                    (AppiumBy.ID, "com.instagram.android:id/row_feed_button_comment"),
+                    (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().descriptionContains("Comment")'),
+                ],
+                "comment icon",
+            )
+            await self._human_delay(0.8, 2.0)
+
+            username = (comment_username or "").strip().lstrip("@")
+            snippet = (comment_text or "").strip()
+            if username:
+                found = await self._scroll_to_comment(username=username, snippet=snippet)
+                if not found:
+                    raise ActionFailedException(f"Comment from @{username} not found in thread")
+
+            liked = await self._try_tap_comment_like(username=username, snippet=snippet)
+            if not liked:
+                raise ActionFailedException("Comment like button not found")
+
+            await self._human_delay(1.0, 2.5)
+            await self._detect_common_blocks()
+            return {
+                "success": True,
+                "action": "comment_like",
+                "post_url": post_url,
+                "comment_username": username or None,
+            }
+        except Exception as exc:
+            await self._screenshot_failure("like_comment_on_post")
+            raise self._map_exception(exc) from exc
+
     async def check_notifications(self) -> list[dict[str, str]]:
         try:
             self._ensure_driver()
@@ -401,3 +448,70 @@ class InstagramBot:
         lo = self.min_human_delay if low is None else low
         hi = self.max_human_delay if high is None else high
         await asyncio.sleep(random.uniform(lo, hi))
+
+    async def _scroll_to_comment(self, *, username: str, snippet: str, attempts: int = 6) -> bool:
+        self._ensure_driver()
+        needle_user = username.lower()
+        needle_text = snippet[:40].lower() if snippet else ""
+
+        for _ in range(attempts):
+            elements = await asyncio.to_thread(
+                self.driver.find_elements,  # type: ignore[union-attr]
+                AppiumBy.CLASS_NAME,
+                "android.widget.TextView",
+            )
+            joined = []
+            for el in elements:
+                text = (el.text or "").strip()
+                if text:
+                    joined.append(text.lower())
+            blob = " ".join(joined)
+            user_hit = needle_user and (needle_user in blob or f"@{needle_user}" in blob)
+            text_hit = not needle_text or needle_text in blob
+            if user_hit and text_hit:
+                return True
+
+            size = await asyncio.to_thread(lambda: self.driver.get_window_size())  # type: ignore[union-attr]
+            x = int(size["width"] * 0.5)
+            start_y = int(size["height"] * 0.75)
+            end_y = int(size["height"] * 0.35)
+            await asyncio.to_thread(
+                self.driver.execute_script,  # type: ignore[union-attr]
+                "mobile: swipeGesture",
+                {
+                    "left": x - 10,
+                    "top": end_y,
+                    "width": 20,
+                    "height": start_y - end_y,
+                    "direction": "up",
+                    "percent": 0.55,
+                },
+            )
+            await self._human_delay(0.4, 1.0)
+        return False
+
+    async def _try_tap_comment_like(self, *, username: str, snippet: str) -> bool:
+        self._ensure_driver()
+        selectors: list[tuple[str, str]] = [
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().descriptionContains("Like")'),
+            (AppiumBy.ACCESSIBILITY_ID, "Like"),
+        ]
+        if username:
+            selectors.insert(
+                0,
+                (
+                    AppiumBy.XPATH,
+                    f'//android.widget.TextView[contains(@text,"@{username}")]/ancestor::*[1]//*[contains(@content-desc,"Like")]',
+                ),
+            )
+        if snippet:
+            safe = snippet.replace('"', "").replace("'", "")[:32]
+            if safe:
+                selectors.insert(
+                    0,
+                    (
+                        AppiumBy.XPATH,
+                        f'//android.widget.TextView[contains(@text,"{safe}")]/ancestor::*[1]//*[contains(@content-desc,"Like")]',
+                    ),
+                )
+        return await self._try_tap_any(selectors)

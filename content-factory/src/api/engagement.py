@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 from typing import Any, List, Optional
 from uuid import UUID
 
@@ -11,8 +12,23 @@ from src.core.database import get_db
 from src.core.access_scope import AccessScope, assert_account_access, get_access_scope
 from src.api.deps_scope import require_write_access
 from src.services.engagement_dispatcher import ACTION_TYPES, TARGET_TYPES, dispatch_engagement_intent
+from src.services.engagement_reply_service import generate_engagement_reply
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class EngagementReplyGenerateRequest(BaseModel):
+    comment_text: str = Field(..., min_length=1, max_length=2000)
+    comment_username: Optional[str] = None
+    post_caption: Optional[str] = None
+    locale: str = Field(default="fr", description="fr | en")
+    tone: Optional[str] = None
+
+
+class EngagementReplyGenerateResponse(BaseModel):
+    reply: str
 
 
 class EngagementIntentCreate(BaseModel):
@@ -246,6 +262,30 @@ async def create_engagement_intent(
     )
 
 
+@router.post("/reply/generate", response_model=EngagementReplyGenerateResponse)
+async def generate_reply(
+    body: EngagementReplyGenerateRequest,
+    scope: AccessScope = Depends(require_write_access),
+):
+    _ = scope
+    try:
+        reply = await generate_engagement_reply(
+            comment_text=body.comment_text,
+            comment_username=body.comment_username,
+            post_caption=body.post_caption,
+            locale=body.locale,
+            tone=body.tone,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("engagement_reply_generate_failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return EngagementReplyGenerateResponse(reply=reply)
+
+
 @router.post("/intents/{intent_id}/dispatch", response_model=EngagementDispatchResponse)
 async def dispatch_intent(
     intent_id: str,
@@ -275,3 +315,47 @@ async def dispatch_intent(
         action_type=result.get("action_type"),
         note=result.get("note"),
     )
+
+
+class EngagementDeleteResponse(BaseModel):
+    intent_id: str
+    deleted: bool = True
+
+
+@router.delete("/intents/{intent_id}", response_model=EngagementDeleteResponse)
+async def delete_engagement_intent(
+    intent_id: str,
+    db: AsyncSession = Depends(get_db),
+    scope: AccessScope = Depends(require_write_access),
+):
+    try:
+        UUID(intent_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid intent id")
+
+    row = await db.execute(
+        text(
+            """
+            SELECT account_id::text, status
+            FROM engagement_intents
+            WHERE id = :id
+            LIMIT 1
+            """
+        ),
+        {"id": intent_id},
+    )
+    intent_row = row.first()
+    if not intent_row:
+        raise HTTPException(status_code=404, detail="Engagement intent not found")
+    await assert_account_access(db, scope, intent_row[0])
+
+    status = str(intent_row[1] or "").lower()
+    if status in ("queued", "processing"):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete an engagement intent while it is queued or processing",
+        )
+
+    await db.execute(text("DELETE FROM engagement_intents WHERE id = :id"), {"id": intent_id})
+    await db.commit()
+    return EngagementDeleteResponse(intent_id=intent_id)

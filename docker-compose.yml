@@ -90,7 +90,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3-flash-preview}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       TEXT_PROVIDER_PRIMARY: ${TEXT_PROVIDER_PRIMARY:-gemini}
       DYNAMIC_MODE_STRICT: ${DYNAMIC_MODE_STRICT:-true}
       GENERATION_ALLOW_SYNTHETIC_PREVIEW_FALLBACK: ${GENERATION_ALLOW_SYNTHETIC_PREVIEW_FALLBACK:-false}
@@ -173,6 +173,10 @@ services:
       CAMPAIGN_CYCLE_HOURS: ${CAMPAIGN_CYCLE_HOURS:-6}
       CHROMIUM_PATH: /usr/bin/chromium-browser
       PUBLISH_DRY_RUN: ${PUBLISH_DRY_RUN:-false}
+      ENGAGEMENT_DRY_RUN: ${ENGAGEMENT_DRY_RUN:-false}
+      ENGAGEMENT_COMMENT_LIKE_VIA_DEVICE: ${ENGAGEMENT_COMMENT_LIKE_VIA_DEVICE:-false}
+      ENGAGEMENT_COMMENT_LIKE_SIMULATE: ${ENGAGEMENT_COMMENT_LIKE_SIMULATE:-false}
+      EMULATOR_CONTROLLER_URL: ${EMULATOR_CONTROLLER_URL:-http://emulator-controller:9102}
       PUBLISH_SKIP_RACE_RECHECK: ${PUBLISH_SKIP_RACE_RECHECK:-false}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       PROXY_STRICT_ONE_TO_ONE: ${PROXY_STRICT_ONE_TO_ONE:-true}
@@ -319,7 +323,7 @@ services:
       - /app/node_modules
       - /app/.next
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
