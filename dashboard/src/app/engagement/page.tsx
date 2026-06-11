@@ -434,7 +434,7 @@ export default function EngagementPage() {
   ];
 
   return (
-    <div className="ops-page-shell flex w-full min-w-0 flex-col gap-5">
+    <div className="flex-1 w-full min-w-0 space-y-6 p-8 pt-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <DashboardPageHeader title={eng.title} subtitle={eng.subtitle} />
         <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
