@@ -405,7 +405,7 @@ export default function EngagementPage() {
   );
 
   const postStepDone = Boolean(accountId && mediaId);
-  const commentsStepDone = commentsLoaded && comments.length > 0;
+  const commentsStepDone = Boolean(selectedCommentId);
   const actionStepActive = Boolean(selectedCommentId);
 
   const kpiItems = [
