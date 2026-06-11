@@ -21,9 +21,9 @@ VOLUME_NAME="${PROJECT}_dashboard_next"
 echo "==> Removing .next volume: ${VOLUME_NAME} (ignore error if missing)"
 docker volume rm "${VOLUME_NAME}" 2>/dev/null || true
 
-echo "==> Production build (blocks 2–6 min — site will be down until step 3 finishes)"
+echo "==> Installing deps + production build (blocks 2–6 min — site will be down until finished)"
 echo "    Do NOT run another docker compose command in another terminal."
-docker compose run --rm --no-deps dashboard npm run build
+docker compose run --rm --no-deps dashboard sh -c "npm ci && npm run build"
 
 echo "==> Starting dashboard (next start only)"
 docker compose up -d dashboard
