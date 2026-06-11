@@ -13,6 +13,7 @@ docs/
 │   ├── monitoring-setup.md
 │   └── v1-observability-alert-thresholds.md
 ├── audits/                            Reviews, readiness, deep dives
+│   ├── campaigns-module-audit.md
 │   ├── generation-studio-full-audit.md
 │   ├── instagram-launch-frontend-audit-2026-04-30.md
 │   ├── production-readiness-audit-2026-04-30.md
@@ -22,6 +23,7 @@ docs/
 │   └── user-guide.md
 ├── planning/                          Roadmaps, sprints, rollout
 │   ├── antigravity-tasks.md
+│   ├── campaigns-implementation-plan.md
 │   ├── dynamic-rollout-gates.md
 │   ├── implementation-phases.md
 │   ├── next-phase-dev.md

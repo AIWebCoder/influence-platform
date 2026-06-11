@@ -194,6 +194,12 @@ export type CampaignRecord = {
   updated_at?: string;
 };
 
+export type CampaignDetail = CampaignRecord & {
+  account_ids?: string[];
+  accounts?: Array<{ id: string; username: string; platform?: string | null }>;
+  job_ids?: string[];
+};
+
 export type CreateCampaignPayload = {
   name: string;
   type: 'content' | 'growth' | 'engagement';
@@ -462,6 +468,10 @@ export const api = {
     getCampaigns: async () => {
       const response = await distributionClient.get('/campaigns');
       return response.data as CampaignRecord[];
+    },
+    getCampaign: async (id: string) => {
+      const response = await distributionClient.get(`/campaigns/${id}`);
+      return response.data as CampaignDetail;
     },
     createCampaign: async (payload: CreateCampaignPayload) => {
       const response = await distributionClient.post('/campaigns', payload);

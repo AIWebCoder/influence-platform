@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -90,6 +90,7 @@ export default function CampaignsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [launchingId, setLaunchingId] = useState<string | null>(null);
+  const launchInFlightRef = useRef(false);
   const [deleteTarget, setDeleteTarget] = useState<CampaignRow | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
@@ -162,12 +163,12 @@ export default function CampaignsPage() {
           generation_job_ids: [],
         },
       });
-      toast.success(c.launchSuccess);
+      toast.success(c.createSuccess);
       setDialogOpen(false);
       resetForm();
       await load();
     } catch (e: unknown) {
-      const msg = formatContentApiError(e, c.launchError);
+      const msg = formatContentApiError(e, c.createError);
       setError(msg);
       toast.error(msg);
     } finally {
@@ -176,6 +177,8 @@ export default function CampaignsPage() {
   };
 
   const handleLaunchJobs = useCallback(async (campaign: CampaignRecord) => {
+    if (launchInFlightRef.current) return;
+    launchInFlightRef.current = true;
     const settings = campaign.settings || {};
     const accountIds: string[] =
       Array.isArray(settings.account_ids) && settings.account_ids.length > 0
@@ -188,6 +191,7 @@ export default function CampaignsPage() {
       const msg = c.noIgAccounts;
       setError(msg);
       toast.error(msg);
+      launchInFlightRef.current = false;
       return;
     }
 
@@ -219,6 +223,7 @@ export default function CampaignsPage() {
       setError(msg);
       toast.error(msg);
     } finally {
+      launchInFlightRef.current = false;
       setLaunchingId(null);
     }
   }, [c.launchSuccess, c.launchError, c.noIgAccounts, niche, load]);
@@ -271,6 +276,11 @@ export default function CampaignsPage() {
       growth: c.growth,
       engagement: c.engagement,
       noTopic: c.noTopic,
+      statusActive: c.statusActive,
+      statusPaused: c.statusPaused,
+      statusCompleted: c.statusCompleted,
+      automationManual: c.automationManual,
+      automationAutomated: c.automationAutomated,
     }),
     [c],
   );
@@ -449,7 +459,7 @@ export default function CampaignsPage() {
                 )}
               </div>
             </div>
-            <p className="text-xs leading-relaxed text-muted-foreground">{c.notice}</p>
+            <p className="text-xs leading-relaxed text-muted-foreground">{c.noticeCreate}</p>
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
@@ -459,7 +469,7 @@ export default function CampaignsPage() {
               onClick={handleCreate}
               disabled={submitting || selectedAccounts.length === 0 || !name.trim() || !topic.trim()}
             >
-              {submitting ? <Loader2 className="size-4 animate-spin" /> : c.confirmLaunch}
+              {submitting ? <Loader2 className="size-4 animate-spin" /> : c.confirmCreate}
             </Button>
           </DialogFooter>
         </DialogContent>
