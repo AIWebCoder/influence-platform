@@ -284,6 +284,10 @@ services:
       - -c
       - |
         if [ "$${DASHBOARD_RUN_MODE:-dev}" = "start" ]; then
+          if [ ! -f /app/.next/BUILD_ID ]; then
+            echo "Dashboard: running npm run build (missing .next/BUILD_ID)..."
+            npm run build
+          fi
           exec npm run start
         else
           exec npm run dev
@@ -321,7 +325,8 @@ services:
       - ./dashboard:/app
       # Keep deps + Next build cache inside Linux container (avoids Windows path in RSC manifest)
       - /app/node_modules
-      - /app/.next
+      # Named volume so servers can reset stale UI: docker volume rm influence-platform_dashboard_next
+      - dashboard_next:/app/.next
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000 || exit 1"]
       interval: 30s
@@ -373,6 +378,7 @@ volumes:
   redis_data:
   prometheus_data:
   grafana_data:
+  dashboard_next:
 
 networks:
   default:

@@ -1,4 +1,5 @@
 # Production server override (scm-101). Save as docker-compose.override.yml
+# Then: ./scripts/rebuild-dashboard-prod.sh after each dashboard git pull
 
 services:
   dashboard:
@@ -6,11 +7,13 @@ services:
       - sh
       - -c
       - |
+        set -e
         if [ "$${FORCE_DASHBOARD_REBUILD:-0}" = "1" ] || [ ! -f /app/.next/BUILD_ID ]; then
-          echo "Production build (FORCE=$${FORCE_DASHBOARD_REBUILD:-0})..."
+          echo "==> Dashboard production build (FORCE=$${FORCE_DASHBOARD_REBUILD:-0})..."
           npm run build
         fi
-        exec npx next start -H 0.0.0.0 -p 3000
+        echo "==> Starting next start (BUILD_ID=$$(cat /app/.next/BUILD_ID 2>/dev/null || echo missing))"
+        exec npm run start
     environment:
       DASHBOARD_RUN_MODE: start
       FORCE_DASHBOARD_REBUILD: ${FORCE_DASHBOARD_REBUILD:-0}
