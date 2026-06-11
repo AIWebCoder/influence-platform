@@ -61,6 +61,10 @@ interface DataTableProps<TData, TValue> {
   filterPlaceholder?: string;
   emptyMessage?: string;
   paginationLabels?: DataTablePaginationLabels;
+  /** When false, rows are not client-paginated (use for API-backed pages). */
+  enablePagination?: boolean;
+  onRowClick?: (row: TData) => void;
+  getRowClassName?: (row: TData) => string | undefined;
 }
 
 export function DataTable<TData, TValue>({
@@ -70,6 +74,9 @@ export function DataTable<TData, TValue>({
   filterPlaceholder = "Filter…",
   emptyMessage = "No results.",
   paginationLabels,
+  enablePagination = true,
+  onRowClick,
+  getRowClassName,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -84,7 +91,7 @@ export function DataTable<TData, TValue>({
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+    ...(enablePagination ? { getPaginationRowModel: getPaginationRowModel() } : {}),
     getSortedRowModel: getSortedRowModel(),
     initialState: { pagination: { pageSize: 10 } },
   });
@@ -116,9 +123,19 @@ export function DataTable<TData, TValue>({
           <TableBody>
             {table.getRowModel().rows?.length ? (
               table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
+                <TableRow
+                  key={row.id}
+                  data-state={row.getIsSelected() && "selected"}
+                  className={cn(onRowClick && "cursor-pointer", getRowClassName?.(row.original))}
+                  onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                >
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
+                    <TableCell
+                      key={cell.id}
+                      onClick={
+                        cell.column.id === "actions" ? (e) => e.stopPropagation() : undefined
+                      }
+                    >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </TableCell>
                   ))}
@@ -134,7 +151,9 @@ export function DataTable<TData, TValue>({
           </TableBody>
         </Table>
       </div>
-      <DataTablePagination table={table} labels={paginationLabels} />
+      {enablePagination ? (
+        <DataTablePagination table={table} labels={paginationLabels} />
+      ) : null}
     </div>
   );
 }
