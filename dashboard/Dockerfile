@@ -20,6 +20,8 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/next.config.js ./
+COPY --from=builder /app/postcss.config.js ./
+COPY --from=builder /app/tailwind.config.ts ./
 
 RUN printf '%s\n' \
   '#!/bin/sh' \

@@ -285,8 +285,8 @@ services:
       - |
         if [ "$${DASHBOARD_RUN_MODE:-dev}" = "start" ]; then
           if [ ! -f /app/.next/BUILD_ID ]; then
-            echo "Dashboard: running npm run build (missing .next/BUILD_ID)..."
-            npm run build
+            echo "Dashboard: npm ci + build (missing .next/BUILD_ID)..."
+            npm ci && npm run build
           fi
           exec npm run start
         else
