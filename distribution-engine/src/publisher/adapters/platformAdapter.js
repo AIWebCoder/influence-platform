@@ -40,26 +40,9 @@ async function resolveHttpClient(accountId) {
   }
 }
 
-async function createFeedVideoContainer({ igUserId, videoUrl, caption, accessToken, httpClient }) {
-  const client = httpClient || axios;
-  const url = `${GRAPH_BASE}/${encodeURIComponent(igUserId)}/media`;
-  const params = new URLSearchParams();
-  params.set('media_type', 'VIDEO');
-  params.set('video_url', String(videoUrl));
-  params.set('caption', caption);
-  params.set('access_token', accessToken);
-
-  const response = await client.post(url, params.toString(), {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    timeout: 30_000,
-  });
-  const containerId = response?.data?.id;
-  if (!containerId) {
-    throw new Error(
-      `Instagram createFeedVideoContainer failed: missing container id (${JSON.stringify(response?.data || {})})`,
-    );
-  }
-  return containerId;
+/** @deprecated Instagram Graph API no longer accepts media_type=VIDEO — delegates to REELS. */
+async function createFeedVideoContainer(args) {
+  return createReelContainer(args);
 }
 
 async function createReelContainer({ igUserId, videoUrl, caption, accessToken, httpClient }) {
@@ -123,6 +106,8 @@ function isPhotoPublish({ contentType, asset }) {
 
 function resolvePublishKind({ contentType, asset }) {
   if (isPhotoPublish({ contentType, asset })) return 'photo';
+  // Graph API error 2207067: media_type VIDEO is obsolete — all video assets publish as REELS.
+  if (isVideoAsset(asset)) return 'reel';
   const ct = String(contentType || '').trim().toLowerCase();
   if (ct === 'reel') return 'reel';
   return 'feed_video';
