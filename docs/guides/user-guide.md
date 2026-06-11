@@ -283,22 +283,28 @@ You post both and see which one gets more likes! That's A/B testing!
 ### 🚀 PAGE 10: CAMPAIGNS (CAMPAGNES)
 
 **What you'll see:**
-A place to manage big marketing campaigns!
+A table of **content strategies** — reusable plans that group a niche, topic, and Instagram account(s).
 
 **What is a campaign?**
-A campaign is like a big plan - "Post 10 fitness-related things this week!"
+A saved strategy such as: *"Fitness niche, topic ‘morning routine’, accounts @brand_a and @brand_b."*  
+Creating a campaign **does not** start generation automatically.
 
 **What you can do:**
-- 📋 **Create Campaign** - Start a new campaign
-- 🎯 **Set Goals** - Define what you want to achieve
-- 📅 **Schedule** - Plan when to post
-- 📊 **Monitor** - Watch how it's going
+- 📋 **Create campaign** — Save name, strategy type, niche, topic, and accounts
+- ▶️ **Generate** (row menu) — Launch reel generation jobs in Generation Studio for each linked account
+- ⏸️ **Pause / Resume** — Stop or restart background rules (growth strategies only)
+- 🗑️ **Delete** — Remove the campaign record (existing jobs keep running)
+- 🎬 **Open studio** — Jump to the latest generation job for that campaign
+
+**Strategy types:**
+- **Content** — Manual generation only (you click Generate)
+- **Growth** — May adjust posting frequency automatically in the background
+- **Engagement** — Manual for now (use the Engagement page for DMs and comments)
 
 **Campaign statuses:**
-- 🆕 **Draft** - Not started yet
-- ▶️ **Active** - Running right now
-- ⏸️ **Paused** - Temporarily stopped
-- ✅ **Completed** - Finished!
+- ▶️ **Active** — Available for generation and (for growth) background rules
+- ⏸️ **Paused** — Generation and automation paused
+- ✅ **Completed** — Finished (when supported in a future update)
 
 ---
 

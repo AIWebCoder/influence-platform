@@ -43,6 +43,18 @@ function statusVariant(status: string): "default" | "secondary" | "outline" {
   return "outline";
 }
 
+function statusLabel(status: string, labels: CampaignsColumnLabels): string {
+  const s = status.toLowerCase();
+  if (s === "active") return labels.statusActive;
+  if (s === "paused") return labels.statusPaused;
+  if (s === "completed") return labels.statusCompleted;
+  return status;
+}
+
+function isAutomatedType(type: string): boolean {
+  return type.toLowerCase() === "growth";
+}
+
 function typeLabel(type: string, labels: CampaignsColumnLabels): string {
   const key = type.toLowerCase();
   if (key === "content") return labels.content;
@@ -69,6 +81,11 @@ export type CampaignsColumnLabels = {
   growth: string;
   engagement: string;
   noTopic: string;
+  statusActive: string;
+  statusPaused: string;
+  statusCompleted: string;
+  automationManual: string;
+  automationAutomated: string;
 };
 
 export type CampaignsColumnHandlers = {
@@ -88,9 +105,15 @@ export function createCampaignsColumns(
       header: ({ column }) => <DataTableColumnHeader column={column} title={labels.campaignName} />,
       cell: ({ row }) => {
         const topic = String(row.original.settings?.topic || "").trim();
+        const name = row.getValue<string>("name");
         return (
           <div className="min-w-[140px] space-y-0.5">
-            <p className="font-medium leading-snug">{row.getValue<string>("name")}</p>
+            <Link
+              href={`/campaigns/${encodeURIComponent(row.original.id)}`}
+              className="font-medium leading-snug text-foreground hover:text-primary hover:underline"
+            >
+              {name}
+            </Link>
             {topic ? (
               <p className="line-clamp-1 text-xs text-muted-foreground">{topic}</p>
             ) : (
@@ -103,11 +126,23 @@ export function createCampaignsColumns(
     {
       accessorKey: "type",
       header: ({ column }) => <DataTableColumnHeader column={column} title={labels.strategyType} />,
-      cell: ({ row }) => (
-        <Badge variant="secondary" className="font-normal capitalize">
-          {typeLabel(row.getValue<string>("type"), labels)}
-        </Badge>
-      ),
+      cell: ({ row }) => {
+        const type = row.getValue<string>("type");
+        const automated = isAutomatedType(type);
+        return (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="secondary" className="font-normal">
+              {typeLabel(type, labels)}
+            </Badge>
+            <Badge
+              variant={automated ? "default" : "outline"}
+              className="text-[10px] font-normal"
+            >
+              {automated ? labels.automationAutomated : labels.automationManual}
+            </Badge>
+          </div>
+        );
+      },
     },
     {
       accessorKey: "target_niche",
@@ -133,9 +168,7 @@ export function createCampaignsColumns(
       cell: ({ row }) => {
         const status = row.getValue<string>("status");
         return (
-          <Badge variant={statusVariant(status)} className="capitalize">
-            {status}
-          </Badge>
+          <Badge variant={statusVariant(status)}>{statusLabel(status, labels)}</Badge>
         );
       },
     },
